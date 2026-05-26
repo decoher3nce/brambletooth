@@ -1,16 +1,23 @@
-// Main entry point. Creates the world, mode, engine, renderer, and runs
-// the loop. Most of the interesting bits are in their own modules.
+// Main entry point. Owns the scene state machine:
+//   - "select": SelectScreen draws the character picker, engine is dormant.
+//   - "playing": Engine ticks a round; HUD + touch overlay render on top.
+// A round transitions back to "select" when the player taps restart, so
+// the select screen doubles as a post-round lobby with the prior pick
+// still highlighted.
 
 import "./abilities/abilities"; // ensure abilities are registered
 import { World } from "./core/world";
 import { createInput, bindInput } from "./core/input";
 import { Engine } from "./core/engine";
 import { Renderer, createCamera, screenToWorld } from "./render/renderer";
+import type { Camera } from "./render/renderer";
 import { OneVOneMode } from "./modes/oneVOne";
 import { FOREST_ARENA_CONFIG, buildForest } from "./arenas/forest";
 import { SlagyAI, MatchAI } from "./ai/ai";
 import { drawHUD } from "./ui/hud";
 import { TouchControls } from "./ui/touchControls";
+import { SelectScreen } from "./ui/selectScreen";
+import { CHARACTERS } from "./characters/characters";
 import type { AIController } from "./ai/ai";
 
 // --- Setup canvas ---
@@ -30,103 +37,129 @@ function resizeCanvas() {
 }
 window.addEventListener("resize", resizeCanvas);
 resizeCanvas();
-// After setTransform our "logical" canvas size for rendering math is css pixels.
-// Renderer reads canvas.width/.height; override those for our purposes.
-// Simpler: just use a getter on canvas via wrapper. We'll patch the renderer's
-// cw/ch via the un-scaled dimensions below.
 function logicalSize() {
   return { w: window.innerWidth, h: window.innerHeight };
 }
 
-// --- World ---
+// --- Round constants ---
 const TIME_LIMIT_SECONDS = 5 * 60;
 const OBJECTIVES_REQUIRED = 4;
-// Swap which characters spawn here. No select screen yet; change the const,
-// reload. Player role is wired to "survivor" below, so the survivor is you
-// and the hunter is AI.
-const HUNTER_ID = "slagy";
-const SURVIVOR_ID = "magnek";
-const world = new World(FOREST_ARENA_CONFIG, TIME_LIMIT_SECONDS);
-buildForest(world, 12345, 5);
+// Default AI opponent per role. When the player picks a hunter, the AI
+// plays this survivor (and vice versa). Constrained by which characters
+// have AI controllers — extend as new AIs land.
+const DEFAULT_AI_HUNTER = "slagy";
+const DEFAULT_AI_SURVIVOR = "match";
 
-// --- Mode ---
-const mode = new OneVOneMode({
-  hunterCharacterId: HUNTER_ID,
-  survivorCharacterId: SURVIVOR_ID,
-  playerRole: "survivor",
-  objectivesRequired: OBJECTIVES_REQUIRED,
-});
-mode.initialize(world);
-
-// --- Input ---
+// --- Persistent singletons (alive across scene transitions) ---
 const input = createInput();
 bindInput(canvas, input);
 
-// --- AI ---
-const aiControllers = new Map<number, AIController>();
-for (const c of world.allCharacters()) {
-  if (c.isPlayer) continue;
-  if (c.characterId === "slagy") aiControllers.set(c.id, new SlagyAI());
-  else if (c.characterId === "match") aiControllers.set(c.id, new MatchAI());
+const renderer = new Renderer(ctx, canvas);
+renderer.setDimensionSource(() => logicalSize());
+
+// --- Scene state ---
+type Scene = "select" | "playing";
+let scene: Scene = "select";
+
+// PlayState bundles everything that's per-round and gets discarded when
+// the player returns to the select screen. The singletons above persist.
+interface PlayState {
+  world: World;
+  mode: OneVOneMode;
+  engine: Engine;
+  aiControllers: Map<number, AIController>;
+  cam: Camera;
+  chosenCharacterId: string; // for restoring select-screen highlight
 }
+let play: PlayState | null = null;
 
-// --- Engine ---
-const engine = new Engine({ world, mode, input, aiControllers });
+// --- Select screen ---
+const selectScreen = new SelectScreen();
+selectScreen.bind(canvas, logicalSize, {
+  onStart: (chosenId) => startRound(chosenId),
+  isTouchMode: () => input.isTouchMode,
+  isActive: () => scene === "select",
+});
 
-// --- Touch controls ---
-// Always bind: the overlay activates on the first touchstart and stays on.
-// Keyboard/mouse users never see it.
+// --- Touch controls (bound once; gated by scene inside) ---
 const touchControls = new TouchControls();
 touchControls.bind(canvas, logicalSize, {
   input,
-  world,
-  getOutcome: () => engine.outcome,
-  isPaused: () => engine.paused,
+  getWorld: () => play?.world ?? null,
+  getOutcome: () => play?.engine.outcome ?? "ongoing",
+  isPaused: () => play?.engine.paused ?? false,
   togglePause: () => {
-    engine.paused = !engine.paused;
+    if (play) play.engine.paused = !play.engine.paused;
   },
-  restart: () => restartRound(),
+  restart: () => goToSelect(),
+  isPlaying: () => scene === "playing",
 });
 
-// --- Renderer & camera ---
-const renderer = new Renderer(ctx, canvas);
-// We DPR-scale via ctx.setTransform, so renderer should use CSS pixels.
-renderer.setDimensionSource(() => logicalSize());
-
-const player = world.playerCharacter();
-const cam = createCamera(player ? { ...player.pos } : { x: 0, y: 0 });
-
-// --- Pause and restart ---
+// --- Keyboard: Esc pause / R restart (scene-aware) ---
 window.addEventListener("keydown", (ev) => {
+  if (scene !== "playing" || !play) return;
   if (ev.key === "Escape") {
-    engine.paused = !engine.paused;
-  } else if (ev.key.toLowerCase() === "r" && engine.outcome !== "ongoing") {
-    restartRound();
+    play.engine.paused = !play.engine.paused;
+  } else if (ev.key.toLowerCase() === "r" && play.engine.outcome !== "ongoing") {
+    goToSelect();
   }
 });
 
-function restartRound() {
-  // Wipe and rebuild world in place
-  world.entities = [];
-  world.elapsed = 0;
+// Build a fresh round around the player's chosen character. The opposite
+// role gets filled with the default AI opponent. Player role is derived
+// from the chosen character's role.
+function startRound(chosenId: string): void {
+  const def = CHARACTERS[chosenId];
+  if (!def) return;
+
+  let hunterId: string;
+  let survivorId: string;
+  let playerRole: "hunter" | "survivor";
+  if (def.role === "hunter") {
+    hunterId = chosenId;
+    survivorId = DEFAULT_AI_SURVIVOR;
+    playerRole = "hunter";
+  } else {
+    hunterId = DEFAULT_AI_HUNTER;
+    survivorId = chosenId;
+    playerRole = "survivor";
+  }
+
+  const world = new World(FOREST_ARENA_CONFIG, TIME_LIMIT_SECONDS);
   buildForest(world, Math.floor(Math.random() * 1e9), 5);
+
+  const mode = new OneVOneMode({
+    hunterCharacterId: hunterId,
+    survivorCharacterId: survivorId,
+    playerRole,
+    objectivesRequired: OBJECTIVES_REQUIRED,
+  });
   mode.initialize(world);
-  aiControllers.clear();
+
+  const aiControllers = new Map<number, AIController>();
   for (const c of world.allCharacters()) {
     if (c.isPlayer) continue;
     if (c.characterId === "slagy") aiControllers.set(c.id, new SlagyAI());
     else if (c.characterId === "match") aiControllers.set(c.id, new MatchAI());
+    // No MagnekAI yet — Magnek-as-AI would stand still. Guarded by the
+    // DEFAULT_AI_* selection above, but worth noting.
   }
-  // Update engine refs that pointed to old controllers
-  engine.cfg.aiControllers = aiControllers;
-  engine.outcome = "ongoing";
-  engine.paused = false;
-  // Recenter camera
-  const p = world.playerCharacter();
-  if (p) {
-    cam.target.x = p.pos.x;
-    cam.target.y = p.pos.y;
-  }
+
+  const engine = new Engine({ world, mode, input, aiControllers });
+  const player = world.playerCharacter();
+  const cam = createCamera(player ? { ...player.pos } : { x: 0, y: 0 });
+
+  play = { world, mode, engine, aiControllers, cam, chosenCharacterId: chosenId };
+  scene = "playing";
+}
+
+// Tear down the active round and return to the select screen, preserving
+// the player's prior pick as the default highlight.
+function goToSelect(): void {
+  const prior = play?.chosenCharacterId ?? null;
+  play = null;
+  scene = "select";
+  if (prior) selectScreen.setSelected(prior);
 }
 
 // --- Loop ---
@@ -134,39 +167,44 @@ let last = performance.now();
 function frame(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000); // clamp big jumps
   last = now;
-
-  // Project mouse to world before engine tick so abilities aim correctly
-  input.mouseWorld = screenToWorld(
-    input.mouseScreen,
-    cam,
-    renderer.cw,
-    renderer.ch,
-  );
-
-  engine.tick(dt);
-
-  // Camera follows player smoothly
-  const p = world.playerCharacter();
-  if (p) {
-    cam.target.x += (p.pos.x - cam.target.x) * Math.min(1, dt * 6);
-    cam.target.y += (p.pos.y - cam.target.y) * Math.min(1, dt * 6);
-  }
-
-  renderer.clear("#1a2421");
-  renderer.drawArena(world, cam);
-  renderer.drawEntities(world, cam);
   const dims = logicalSize();
-  drawHUD(
-    ctx,
-    canvas,
-    world,
-    engine.outcome,
-    engine.paused,
-    dims,
-    input.isTouchMode,
-  );
-  if (input.isTouchMode) {
-    touchControls.draw(ctx, dims, world, engine.outcome, engine.paused);
+
+  if (scene === "select") {
+    selectScreen.draw(ctx, dims);
+  } else if (scene === "playing" && play) {
+    const p = play;
+    // Project mouse to world before engine tick so abilities aim correctly.
+    input.mouseWorld = screenToWorld(
+      input.mouseScreen,
+      p.cam,
+      renderer.cw,
+      renderer.ch,
+    );
+
+    p.engine.tick(dt);
+
+    // Camera follows player smoothly.
+    const player = p.world.playerCharacter();
+    if (player) {
+      p.cam.target.x += (player.pos.x - p.cam.target.x) * Math.min(1, dt * 6);
+      p.cam.target.y += (player.pos.y - p.cam.target.y) * Math.min(1, dt * 6);
+    }
+
+    renderer.clear("#1a2421");
+    renderer.drawArena(p.world, p.cam);
+    renderer.drawEntities(p.world, p.cam);
+    drawHUD(
+      ctx,
+      canvas,
+      p.world,
+      p.engine.outcome,
+      p.engine.paused,
+      dims,
+      input.isTouchMode,
+    );
+    if (input.isTouchMode) {
+      touchControls.draw(ctx, dims, p.world, p.engine.outcome, p.engine.paused);
+    }
   }
 
   requestAnimationFrame(frame);

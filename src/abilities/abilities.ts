@@ -14,7 +14,8 @@ import type { Vec2 } from "../core/math";
 import { normalize, sub, scale, add, dist } from "../core/math";
 
 // Hard cap on plates per Magnek. Placing a (cap+1)th plate evicts the oldest.
-const MAGNEK_PLATE_CAP = 3;
+// Exported so the character select screen can display it as a stat.
+export const MAGNEK_PLATE_CAP = 3;
 
 export interface AbilityContext {
   world: World;

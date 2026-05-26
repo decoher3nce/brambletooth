@@ -58,11 +58,17 @@ interface CircleHit {
 
 export interface TouchControlsHooks {
   input: InputState;
-  world: World;
+  // World accessor — null when not in a round. Lazy so the hooks survive
+  // across multiple round lifecycles without re-binding listeners.
+  getWorld: () => World | null;
   getOutcome: () => RoundOutcome;
   isPaused: () => boolean;
   togglePause: () => void;
   restart: () => void;
+  // True only when the playing scene is active. Touch handlers latch
+  // isTouchMode unconditionally (so the playing UI knows touch is in
+  // use), but all gameplay-affecting logic gates on this.
+  isPlaying: () => boolean;
 }
 
 export class TouchControls {
@@ -97,11 +103,15 @@ export class TouchControls {
 
     const handleStart = (ev: TouchEvent) => {
       ev.preventDefault();
-      // Latch touch mode on the very first touch event.
+      // Latch touch mode on the very first touch event — even before any
+      // round starts. Lets the select scene know we're on touch.
       hooks.input.isTouchMode = true;
+      if (!hooks.isPlaying()) return;
+      const world = hooks.getWorld();
+      if (!world) return;
 
       const dims = getDims();
-      this.recomputeHitZones(dims, hooks.world);
+      this.recomputeHitZones(dims, world);
 
       for (const t of Array.from(ev.changedTouches)) {
         const p = pointFromTouch(t);
@@ -155,6 +165,7 @@ export class TouchControls {
 
     const handleMove = (ev: TouchEvent) => {
       ev.preventDefault();
+      if (!hooks.isPlaying()) return;
       for (const t of Array.from(ev.changedTouches)) {
         if (this.joystick.active && t.identifier === this.joystick.touchId) {
           this.joystick.current = pointFromTouch(t);
@@ -165,6 +176,7 @@ export class TouchControls {
 
     const handleEnd = (ev: TouchEvent) => {
       ev.preventDefault();
+      if (!hooks.isPlaying()) return;
       for (const t of Array.from(ev.changedTouches)) {
         if (this.joystick.active && t.identifier === this.joystick.touchId) {
           this.joystick.active = false;
