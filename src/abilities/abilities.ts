@@ -2,10 +2,19 @@
 // handler function that mutates the world. The character data references
 // abilities by id. Adding a new ability = adding one entry to this file.
 
-import type { CharacterEntity, ProjectileEntity, TrapEntity } from "../core/entity";
+import type {
+  CharacterEntity,
+  ProjectileEntity,
+  TrapEntity,
+  PlateEntity,
+} from "../core/entity";
+import { isPlate } from "../core/entity";
 import type { World } from "../core/world";
 import type { Vec2 } from "../core/math";
 import { normalize, sub, scale, add, dist } from "../core/math";
+
+// Hard cap on plates per Magnek. Placing a (cap+1)th plate evicts the oldest.
+const MAGNEK_PLATE_CAP = 3;
 
 export interface AbilityContext {
   world: World;
@@ -19,10 +28,21 @@ export interface AbilityDef {
   name: string;
   description: string;
   cooldown: number; // seconds
-  // Key binding hint for HUD. The actual key mapping is per-slot.
-  // 'active' abilities run on key press. We could add 'passive' or 'channeled'
-  // later without changing the engine surface.
+  // Instant abilities run their effect at cast time. Channeled abilities
+  // begin a charge timer on cast and run `onChargeComplete` when the
+  // timer expires. Engine ticks the channel on the caster.
   cast: (ctx: AbilityContext) => void;
+  // If set, casting begins a channel of this duration on the caster.
+  // While charging, the cast() callback runs at cast-start (use it to
+  // play a windup effect, refuse the cast, etc); onChargeComplete runs
+  // when the timer expires.
+  chargeTime?: number; // seconds
+  onChargeComplete?: (ctx: AbilityContext) => void;
+  // Optional gate run at cast-time before any channel begins. Return
+  // false to refuse the cast — engine treats it as if no press happened
+  // (no cooldown applied, no channel started). Used by abilities like
+  // Magnesis that need pre-conditions (e.g., at least one plate placed).
+  canCast?: (ctx: AbilityContext) => boolean;
 }
 
 // Registry — populated by character files at import time.
@@ -160,5 +180,63 @@ registerAbility({
     caster.pos = target;
     // Small i-frame: grant brief "phased" status (1.0s of damage immunity could go here)
     caster.statuses["phased"] = 0.25;
+  },
+});
+
+// ---- Magnek's abilities (placement-based escape survivor) ----
+
+// Helper: list a Magnek's currently placed plates, oldest first.
+function platesOwnedBy(world: World, ownerId: number): PlateEntity[] {
+  const out: PlateEntity[] = [];
+  for (const e of world.entities) {
+    if (isPlate(e) && e.ownerId === ownerId) out.push(e);
+  }
+  out.sort((a, b) => a.placedAt - b.placedAt);
+  return out;
+}
+
+registerAbility({
+  id: "place_plate",
+  name: "Place Plate",
+  description: "Drop an iron plate. Up to 3 plates; placing a 4th evicts the oldest.",
+  cooldown: 2.0,
+  cast: ({ world, caster }) => {
+    const owned = platesOwnedBy(world, caster.id);
+    while (owned.length >= MAGNEK_PLATE_CAP) {
+      const oldest = owned.shift();
+      if (oldest) oldest.dead = true;
+    }
+    world.spawn<PlateEntity>({
+      kind: "plate",
+      pos: { ...caster.pos },
+      radius: 18,
+      ownerId: caster.id,
+      placedAt: world.elapsed,
+      dead: false,
+    });
+  },
+});
+
+registerAbility({
+  id: "magnesis",
+  name: "Magnesis",
+  description: "Channel 1.2s, then yank yourself to a random placed plate.",
+  cooldown: 5.0,
+  chargeTime: 1.2,
+  // Refuse the cast if Magnek has no plates placed. No cd applied,
+  // no channel started — feels like the button "didn't take."
+  canCast: ({ world, caster }) => platesOwnedBy(world, caster.id).length > 0,
+  cast: () => {
+    // No instant effect — the channel windup is the cast. Visual feedback
+    // happens via the renderer reading caster.charging.
+  },
+  onChargeComplete: ({ world, caster }) => {
+    const plates = platesOwnedBy(world, caster.id);
+    if (plates.length === 0) return; // all plates somehow evicted mid-channel
+    const target = plates[Math.floor(Math.random() * plates.length)];
+    caster.pos = { ...target.pos };
+    // Brief i-frame on arrival so a hunter waiting on the destination plate
+    // doesn't insta-shred Magnek the moment he materializes.
+    caster.statuses["phased"] = 0.3;
   },
 });

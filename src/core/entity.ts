@@ -13,7 +13,8 @@ export type EntityKind =
   | "projectile"
   | "trap"
   | "objective"
-  | "prop";
+  | "prop"
+  | "plate";
 
 export interface BaseEntity {
   id: EntityId;
@@ -23,10 +24,21 @@ export interface BaseEntity {
   dead: boolean;
 }
 
+// One in-flight channel per character. When `remaining` ticks to <= 0, the
+// engine calls the ability's onChargeComplete handler (if any) and clears
+// the field. Only one channel at a time per character — recasting cancels
+// the previous one.
+export interface ChannelState {
+  abilityId: string;
+  remaining: number; // seconds until completion
+  total: number; // original chargeTime, kept for UI progress bars
+  aim: Vec2; // aim at cast-start (some channels read this on completion)
+}
+
 export interface CharacterEntity extends BaseEntity {
   kind: "character";
   team: Team;
-  characterId: string; // "slagy" | "match"
+  characterId: string; // "slagy" | "match" | "magnek"
   hp: number;
   maxHp: number;
   speed: number; // units per second
@@ -37,6 +49,8 @@ export interface CharacterEntity extends BaseEntity {
   // Generic timed status effects (e.g. overdrive active, slow active)
   statuses: Record<string, number>;
   isPlayer: boolean;
+  // Active channeled-ability state (undefined when not channeling).
+  charging?: ChannelState;
 }
 
 export interface ProjectileEntity extends BaseEntity {
@@ -73,12 +87,24 @@ export interface PropEntity extends BaseEntity {
   blocking: boolean;
 }
 
+// Iron plate placed by Magnek. Persistent (no ttl), non-blocking, navigable
+// over by anyone. Magnek's Magnesis ability teleports him to a random plate
+// among those owned by him.
+export interface PlateEntity extends BaseEntity {
+  kind: "plate";
+  ownerId: EntityId;
+  // Monotonic placement counter used to evict the oldest when the owner's
+  // plate cap is exceeded (FIFO).
+  placedAt: number;
+}
+
 export type Entity =
   | CharacterEntity
   | ProjectileEntity
   | TrapEntity
   | ObjectiveEntity
-  | PropEntity;
+  | PropEntity
+  | PlateEntity;
 
 // Type guards
 export function isCharacter(e: Entity): e is CharacterEntity {
@@ -95,4 +121,7 @@ export function isObjective(e: Entity): e is ObjectiveEntity {
 }
 export function isProp(e: Entity): e is PropEntity {
   return e.kind === "prop";
+}
+export function isPlate(e: Entity): e is PlateEntity {
+  return e.kind === "plate";
 }

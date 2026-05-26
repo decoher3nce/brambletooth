@@ -7,7 +7,7 @@
 
 import type { World } from "../core/world";
 import type { Entity } from "../core/entity";
-import { isCharacter, isProjectile, isTrap, isObjective, isProp } from "../core/entity";
+import { isCharacter, isProjectile, isTrap, isObjective, isProp, isPlate } from "../core/entity";
 import type { Vec2 } from "../core/math";
 import { CHARACTERS } from "../characters/characters";
 import { ABILITIES } from "../abilities/abilities";
@@ -169,8 +169,46 @@ export class Renderer {
     if (isProp(e)) this.drawProp(e, cam);
     else if (isObjective(e)) this.drawObjective(e, cam);
     else if (isTrap(e)) this.drawTrap(e, cam);
+    else if (isPlate(e)) this.drawPlate(e, cam);
     else if (isProjectile(e)) this.drawProjectile(e, cam);
     else if (isCharacter(e)) this.drawCharacter(e, cam);
+  }
+
+  private drawPlate(
+    e: Extract<Entity, { kind: "plate" }>,
+    cam: Camera,
+  ): void {
+    const s = worldToScreen(e.pos, cam, this.cw, this.ch);
+    const ctx = this.ctx;
+    // Magnetic shimmer: faint pulsing halo.
+    const t = (performance.now() / 500) % (Math.PI * 2);
+    const pulse = 0.5 + 0.5 * Math.sin(t);
+    ctx.fillStyle = `rgba(120, 160, 220, ${0.12 + 0.08 * pulse})`;
+    ctx.beginPath();
+    ctx.ellipse(s.x, s.y, e.radius * 1.6, e.radius * 0.7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Steel disc (flat iso oval).
+    ctx.fillStyle = "#9aa6b4";
+    ctx.beginPath();
+    ctx.ellipse(s.x, s.y, e.radius, e.radius * 0.45, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Darker rim on the shadow side.
+    ctx.strokeStyle = "#3c4858";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(s.x, s.y, e.radius, e.radius * 0.45, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    // Cross-hatch detail to mark it as iron.
+    ctx.strokeStyle = "rgba(60, 72, 88, 0.7)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(s.x - e.radius * 0.5, s.y);
+    ctx.lineTo(s.x + e.radius * 0.5, s.y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(s.x, s.y - e.radius * 0.2);
+    ctx.lineTo(s.x, s.y + e.radius * 0.2);
+    ctx.stroke();
   }
 
   private drawProp(e: Extract<Entity, { kind: "prop" }>, cam: Camera): void {
@@ -368,6 +406,31 @@ export class Renderer {
     ctx.arc(s.x - 5 + fx * 1.4, s.y - h * 0.55 + fy * 1.4, 1.5, 0, Math.PI * 2);
     ctx.arc(s.x + 5 + fx * 1.4, s.y - h * 0.55 + fy * 1.4, 1.5, 0, Math.PI * 2);
     ctx.fill();
+
+    // Channel windup: pulsing ring that shrinks toward completion. Also
+    // draw faint lines to plates owned by the caster while channeling
+    // Magnesis so the player can see the candidate destinations.
+    if (e.charging) {
+      const pct = 1 - e.charging.remaining / e.charging.total;
+      const ringR = e.radius + 10 + (1 - pct) * 18;
+      ctx.strokeStyle = `rgba(180, 220, 255, ${0.5 + 0.4 * pct})`;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y - h * 0.4, ringR, 0, Math.PI * 2);
+      ctx.stroke();
+      // Inner thin progress ring.
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(
+        s.x,
+        s.y - h * 0.4,
+        e.radius + 5,
+        -Math.PI / 2,
+        -Math.PI / 2 + pct * Math.PI * 2,
+      );
+      ctx.stroke();
+    }
 
     // Status effect indicators
     if (e.statuses["overdrive"] > 0) {

@@ -118,8 +118,39 @@ export class Engine {
         if (!ability) continue;
         // Cooldown check
         if ((c.cooldowns[abilityId] ?? 0) > 0) continue;
-        ability.cast({ world, caster: c, aim: intent.aim });
+        // Don't start a new cast while already channeling something.
+        if (c.charging) continue;
+        const ctx = { world, caster: c, aim: intent.aim };
+        // Optional pre-condition gate. If it refuses, no cd, no channel.
+        if (ability.canCast && !ability.canCast(ctx)) continue;
+        ability.cast(ctx);
         c.cooldowns[abilityId] = ability.cooldown;
+        // Channeled abilities: start the channel timer; engine will fire
+        // onChargeComplete when remaining hits 0 (see channel-tick block).
+        if (ability.chargeTime && ability.chargeTime > 0) {
+          c.charging = {
+            abilityId,
+            remaining: ability.chargeTime,
+            total: ability.chargeTime,
+            aim: { ...intent.aim },
+          };
+        }
+      }
+    }
+
+    // 3b) Tick active channels. When a channel completes, fire the
+    // ability's onChargeComplete. If the caster died mid-channel, drop
+    // it silently — death-cleanup runs later in this tick.
+    for (const c of world.allCharacters()) {
+      if (c.dead || !c.charging) continue;
+      c.charging.remaining -= dt;
+      if (c.charging.remaining <= 0) {
+        const { abilityId, aim } = c.charging;
+        c.charging = undefined;
+        const ability = ABILITIES[abilityId];
+        if (ability?.onChargeComplete) {
+          ability.onChargeComplete({ world, caster: c, aim });
+        }
       }
     }
 

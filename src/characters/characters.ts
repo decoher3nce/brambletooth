@@ -39,4 +39,15 @@ export const CHARACTERS: Record<string, CharacterDef> = {
     colorDark: "#b8501a",
     abilities: ["overdrive", "glitch"],
   },
+  magnek: {
+    id: "magnek",
+    name: "Magnek",
+    role: "survivor",
+    maxHp: 100,
+    speed: 145,
+    radius: 17,
+    color: "#5a8fc8",
+    colorDark: "#274c75",
+    abilities: ["place_plate", "magnesis"],
+  },
 };

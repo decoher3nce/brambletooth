@@ -41,13 +41,18 @@ function logicalSize() {
 // --- World ---
 const TIME_LIMIT_SECONDS = 5 * 60;
 const OBJECTIVES_REQUIRED = 4;
+// Swap which characters spawn here. No select screen yet; change the const,
+// reload. Player role is wired to "survivor" below, so the survivor is you
+// and the hunter is AI.
+const HUNTER_ID = "slagy";
+const SURVIVOR_ID = "magnek";
 const world = new World(FOREST_ARENA_CONFIG, TIME_LIMIT_SECONDS);
 buildForest(world, 12345, 5);
 
 // --- Mode ---
 const mode = new OneVOneMode({
-  hunterCharacterId: "slagy",
-  survivorCharacterId: "match",
+  hunterCharacterId: HUNTER_ID,
+  survivorCharacterId: SURVIVOR_ID,
   playerRole: "survivor",
   objectivesRequired: OBJECTIVES_REQUIRED,
 });
