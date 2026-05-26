@@ -17,6 +17,10 @@ export function drawHUD(
   outcome: RoundOutcome,
   paused: boolean,
   dimensions?: { w: number; h: number },
+  // Touch mode hides the keyboard/mouse-specific ability bar and controls
+  // hint (the touch overlay supplies its own). HP + timer + objectives +
+  // pause/outcome banner all still render.
+  isTouchMode: boolean = false,
 ): void {
   const cw = dimensions ? dimensions.w : canvas.width;
   const ch = dimensions ? dimensions.h : canvas.height;
@@ -68,7 +72,9 @@ export function drawHUD(
     ctx.textAlign = "center";
     ctx.fillText(`${Math.ceil(player.hp)} / ${player.maxHp}`, hpX + hpW / 2, hpY + 12);
 
-    // Ability slots
+    // Ability slots (keyboard/mouse). On touch, the touch overlay draws
+    // larger thumb-friendly buttons in the bottom-right, so skip this row.
+    if (!isTouchMode) {
     const slotSize = 56;
     const gap = 8;
     const startX = hpX;
@@ -127,18 +133,21 @@ export function drawHUD(
       ctx.textAlign = "right";
       ctx.fillText(ABILITY_KEYS[i], x + slotSize - 4, y + slotSize - 4);
     }
+    } // end !isTouchMode ability slot block
   }
 
-  // Controls hint (small, top right)
-  ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
-  ctx.fillRect(cw - 200, 10, 190, 80);
-  ctx.fillStyle = "#fff";
-  ctx.font = "11px system-ui, sans-serif";
-  ctx.textAlign = "left";
-  ctx.fillText("WASD — move", cw - 192, 28);
-  ctx.fillText("Mouse — aim", cw - 192, 44);
-  ctx.fillText("Q E R F — abilities", cw - 192, 60);
-  ctx.fillText("Esc — pause", cw - 192, 76);
+  // Controls hint (small, top right) — keyboard/mouse only.
+  if (!isTouchMode) {
+    ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+    ctx.fillRect(cw - 200, 10, 190, 80);
+    ctx.fillStyle = "#fff";
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText("WASD — move", cw - 192, 28);
+    ctx.fillText("Mouse — aim", cw - 192, 44);
+    ctx.fillText("Q E R F — abilities", cw - 192, 60);
+    ctx.fillText("Esc — pause", cw - 192, 76);
+  }
 
   // Pause / outcome overlay
   if (paused || outcome !== "ongoing") {
@@ -148,14 +157,15 @@ export function drawHUD(
     ctx.textAlign = "center";
     ctx.font = "bold 56px system-ui, sans-serif";
     let title = "PAUSED";
-    let subtitle = "Press Esc to resume";
+    let subtitle = isTouchMode ? "Tap to resume" : "Press Esc to resume";
+    const restartHint = isTouchMode ? "Tap to restart." : "Press R to restart.";
     if (outcome === "hunter_win") {
       title = "HUNTER WINS";
-      subtitle = "Slagy got you. Press R to restart.";
+      subtitle = `Slagy got you. ${restartHint}`;
       ctx.fillStyle = "#d04848";
     } else if (outcome === "survivor_win") {
       title = "SURVIVOR WINS";
-      subtitle = "You made it. Press R to restart.";
+      subtitle = `You made it. ${restartHint}`;
       ctx.fillStyle = "#48d0a0";
     } else if (outcome === "draw") {
       title = "DRAW";

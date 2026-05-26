@@ -10,6 +10,7 @@ import { OneVOneMode } from "./modes/oneVOne";
 import { FOREST_ARENA_CONFIG, buildForest } from "./arenas/forest";
 import { SlagyAI, MatchAI } from "./ai/ai";
 import { drawHUD } from "./ui/hud";
+import { TouchControls } from "./ui/touchControls";
 import type { AIController } from "./ai/ai";
 
 // --- Setup canvas ---
@@ -66,6 +67,21 @@ for (const c of world.allCharacters()) {
 
 // --- Engine ---
 const engine = new Engine({ world, mode, input, aiControllers });
+
+// --- Touch controls ---
+// Always bind: the overlay activates on the first touchstart and stays on.
+// Keyboard/mouse users never see it.
+const touchControls = new TouchControls();
+touchControls.bind(canvas, logicalSize, {
+  input,
+  world,
+  getOutcome: () => engine.outcome,
+  isPaused: () => engine.paused,
+  togglePause: () => {
+    engine.paused = !engine.paused;
+  },
+  restart: () => restartRound(),
+});
 
 // --- Renderer & camera ---
 const renderer = new Renderer(ctx, canvas);
@@ -134,7 +150,19 @@ function frame(now: number) {
   renderer.clear("#1a2421");
   renderer.drawArena(world, cam);
   renderer.drawEntities(world, cam);
-  drawHUD(ctx, canvas, world, engine.outcome, engine.paused, logicalSize());
+  const dims = logicalSize();
+  drawHUD(
+    ctx,
+    canvas,
+    world,
+    engine.outcome,
+    engine.paused,
+    dims,
+    input.isTouchMode,
+  );
+  if (input.isTouchMode) {
+    touchControls.draw(ctx, dims, world, engine.outcome, engine.paused);
+  }
 
   requestAnimationFrame(frame);
 }

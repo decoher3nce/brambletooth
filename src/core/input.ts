@@ -9,6 +9,12 @@ export interface InputState {
   mouseDown: boolean;
   // Edge-triggered ability key presses (consumed by engine each tick)
   pressedAbilities: Set<string>;
+  // Touch input: set true on first touchstart and latched for the session.
+  // Engine switches to the touch input path (moveVector + aim-from-move) when on.
+  isTouchMode: boolean;
+  // Analog movement vector from the virtual joystick. Magnitude 0..1.
+  // Zero when no joystick touch is active.
+  moveVector: Vec2;
 }
 
 export function createInput(): InputState {
@@ -18,6 +24,8 @@ export function createInput(): InputState {
     mouseWorld: { x: 0, y: 0 },
     mouseDown: false,
     pressedAbilities: new Set(),
+    isTouchMode: false,
+    moveVector: { x: 0, y: 0 },
   };
 }
 

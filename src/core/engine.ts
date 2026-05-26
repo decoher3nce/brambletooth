@@ -250,22 +250,44 @@ export class Engine {
 
   private playerIntent(c: CharacterEntity): AIIntent {
     const input = this.cfg.input;
-    const moveDir: Vec2 = { x: 0, y: 0 };
-    // WASD relative to isometric: we want pressing W to move "up-left" in
-    // world space so it feels intuitive on the screen. The iso projection
-    // rotates world x/y by 45deg.
-    // Define world axes such that:
-    //   W = -y (north)   S = +y (south)
-    //   A = -x (west)    D = +x (east)
-    // The visual rotation is handled by the renderer; from the player's
-    // POV "up" on screen IS world-up because we picked our iso transform
-    // to make that the case. (See worldToScreen — north y is up.)
-    if (input.keys.has("w")) moveDir.y -= 1;
-    if (input.keys.has("s")) moveDir.y += 1;
-    if (input.keys.has("a")) moveDir.x -= 1;
-    if (input.keys.has("d")) moveDir.x += 1;
+    let moveDir: Vec2 = { x: 0, y: 0 };
+    let aim: Vec2;
 
-    const aim = { ...input.mouseWorld };
+    if (input.isTouchMode) {
+      // Touch path: joystick supplies an analog move vector. There is no
+      // separate aim input in v0.1, so we derive aim from the move
+      // direction. Standing still falls back to current facing.
+      moveDir = { x: input.moveVector.x, y: input.moveVector.y };
+      const m = Math.hypot(moveDir.x, moveDir.y);
+      if (m > 0.05) {
+        aim = {
+          x: c.pos.x + (moveDir.x / m) * 1000,
+          y: c.pos.y + (moveDir.y / m) * 1000,
+        };
+      } else {
+        aim = {
+          x: c.pos.x + Math.cos(c.facing) * 100,
+          y: c.pos.y + Math.sin(c.facing) * 100,
+        };
+      }
+    } else {
+      // Keyboard + mouse path.
+      // WASD relative to isometric: we want pressing W to move "up-left" in
+      // world space so it feels intuitive on the screen. The iso projection
+      // rotates world x/y by 45deg.
+      // Define world axes such that:
+      //   W = -y (north)   S = +y (south)
+      //   A = -x (west)    D = +x (east)
+      // The visual rotation is handled by the renderer; from the player's
+      // POV "up" on screen IS world-up because we picked our iso transform
+      // to make that the case. (See worldToScreen — north y is up.)
+      if (input.keys.has("w")) moveDir.y -= 1;
+      if (input.keys.has("s")) moveDir.y += 1;
+      if (input.keys.has("a")) moveDir.x -= 1;
+      if (input.keys.has("d")) moveDir.x += 1;
+      aim = { ...input.mouseWorld };
+    }
+
     this.lastPlayerIntent = { moveDir, aim };
 
     const fired: string[] = [];
@@ -277,8 +299,10 @@ export class Engine {
         if (aId) fired.push(aId);
       }
     }
-    // Mouse click = first ability (slash / overdrive)
-    if (input.mouseDown && def.abilities[0]) {
+    // Mouse click = first ability (slash / overdrive). Skipped in touch
+    // mode — the touch button for slot 0 already covers it via the
+    // pressedAbilities path.
+    if (!input.isTouchMode && input.mouseDown && def.abilities[0]) {
       // Use cooldown-aware spam: just request; cooldown check rejects.
       fired.push(def.abilities[0]);
     }
