@@ -1,7 +1,14 @@
 // Browser-side networking. Wraps a WebSocket to the authoritative server,
-// tracks the latest server-pushed state (phase, lobby, snapshot, outcome),
-// and exposes typed send helpers. The render loop polls this object each
-// frame — no event wiring needed in main.ts beyond construction.
+// tracks the latest server-pushed state, and exposes typed send helpers.
+//
+// Resilience layer:
+//   - sessionToken persists across page reloads in localStorage. On
+//     reconnect we send it as rejoinToken; if the server still has a
+//     matching ghost (a player who dropped during an active round) it
+//     restores us into the same slot and character.
+//   - on ws close (other than a server "full" rejection) we auto-reconnect
+//     with exponential backoff. Combined with the token, a brief network
+//     blip leaves the round unaffected.
 
 import type { InputState } from "../core/input";
 import type {
@@ -15,17 +22,25 @@ import { DEFAULT_PORT } from "./protocol";
 import type { RoundOutcome } from "../modes/mode";
 
 export type NetPhase =
-  | "connecting" // socket opening / pre-welcome
-  | "lobby" // connected, picking + readying
-  | "playing" // round in progress, snapshots flowing
-  | "ended" // round over, awaiting restart
-  | "full" // server rejected us (2 players already)
-  | "disconnected"; // socket closed/errored
+  | "connecting"
+  | "lobby"
+  | "countdown" // pre-round timer
+  | "playing"
+  | "ended"
+  | "full"
+  | "disconnected";
 
-// Resolve the server URL. Defaults to the same host the client was served
-// from, on the game-server port — so over Tailscale the client served from
-// polymath.tail…:5173 dials ws://polymath.tail…:8787 with zero config.
-// Override with ?server=host:port (or a full ws:// URL) for flexibility.
+const TOKEN_KEY = "brambletooth.sessionToken";
+const RETRY_DELAYS_MS = [400, 800, 1600, 3200, 6400]; // give up after the last
+
+export interface NoticeEntry {
+  id: number;
+  kind: "drop" | "rejoin" | "info";
+  text: string;
+  slot?: PlayerSlot;
+  bornAt: number;
+}
+
 export function resolveServerUrl(): string {
   const params = new URLSearchParams(location.search);
   const override = params.get("server");
@@ -45,72 +60,145 @@ export class NetClient {
   yourEntityId: number | null = null;
   snapshot: SnapshotMessage | null = null;
   outcome: RoundOutcome = "ongoing";
+  countdownRemaining = 0;
+  notices: NoticeEntry[] = [];
 
-  private ws: WebSocket;
+  private url: string;
+  private ws: WebSocket | null = null;
+  private sessionToken: string | null = null;
+  private retryIndex = 0;
+  private noticeSeq = 1;
 
   constructor(url: string) {
-    this.ws = new WebSocket(url);
-    this.ws.onmessage = (ev) => {
+    this.url = url;
+    try {
+      this.sessionToken = localStorage.getItem(TOKEN_KEY);
+    } catch {
+      this.sessionToken = null;
+    }
+    this.connect();
+  }
+
+  private connect(): void {
+    this.phase = "connecting";
+    const ws = new WebSocket(this.url);
+    this.ws = ws;
+    ws.onopen = () => {
+      // Auto-send join. Include rejoinToken if we have one; the server uses
+      // it to detect a returning ghost and restore us into the same slot.
+      const join: ClientMessage = { type: "join" };
+      if (this.sessionToken) join.rejoinToken = this.sessionToken;
+      ws.send(JSON.stringify(join));
+    };
+    ws.onmessage = (ev) => {
       try {
         this.onMessage(JSON.parse(ev.data as string) as ServerMessage);
       } catch {
         /* ignore malformed */
       }
     };
-    this.ws.onclose = () => {
-      if (this.phase !== "full") this.phase = "disconnected";
+    ws.onclose = () => {
+      if (this.phase === "full") return; // server rejected; don't retry
+      this.phase = "disconnected";
+      this.scheduleReconnect();
     };
-    this.ws.onerror = () => {
-      /* onclose follows */
+    ws.onerror = () => {
+      /* onclose handles cleanup */
     };
+  }
+
+  private scheduleReconnect(): void {
+    if (this.retryIndex >= RETRY_DELAYS_MS.length) return;
+    const delay = RETRY_DELAYS_MS[this.retryIndex++];
+    setTimeout(() => this.connect(), delay);
   }
 
   private onMessage(m: ServerMessage): void {
     switch (m.type) {
       case "welcome":
-        this.playerId = m.playerId;
         if (m.slot === null) {
           this.phase = "full";
-        } else {
-          this.slot = m.slot;
-          this.phase = "lobby";
+          break;
+        }
+        this.slot = m.slot;
+        this.playerId = m.playerId;
+        if (m.sessionToken) {
+          this.sessionToken = m.sessionToken;
+          try {
+            localStorage.setItem(TOKEN_KEY, m.sessionToken);
+          } catch {
+            /* private mode etc.; in-memory token still works for this tab */
+          }
+        }
+        this.retryIndex = 0; // success — reset backoff
+        // rejoined: the server is restoring us mid-round; a `start` and
+        // snapshots will follow. Otherwise we're in the lobby.
+        this.phase = m.rejoined ? "playing" : "lobby";
+        // Clear any stale playing-state from the previous connection.
+        if (!m.rejoined) {
+          this.yourEntityId = null;
+          this.snapshot = null;
+          this.countdownRemaining = 0;
+          this.outcome = "ongoing";
         }
         break;
+
       case "lobby":
         this.lobby = m.players;
         this.blockedReason = m.blockedReason;
         break;
+
+      case "countdown":
+        this.countdownRemaining = m.remaining;
+        this.phase = m.remaining > 0 ? "countdown" : "playing";
+        break;
+
       case "start":
         this.yourEntityId = m.yourEntityId;
-        this.snapshot = null;
-        this.outcome = "ongoing";
-        this.phase = "playing";
+        // Don't override countdown; the engine starts ticking later. For
+        // rejoins (no countdown in progress) ensure we're in playing.
+        if (this.phase !== "countdown" && this.phase !== "ended") {
+          this.phase = "playing";
+        }
         break;
+
       case "snapshot":
         this.snapshot = m;
         this.outcome = m.outcome;
         break;
+
       case "outcome":
         this.outcome = m.outcome;
         this.phase = "ended";
         break;
+
       case "toLobby":
         this.phase = "lobby";
         this.snapshot = null;
         this.yourEntityId = null;
         this.outcome = "ongoing";
+        this.countdownRemaining = 0;
+        break;
+
+      case "notice":
+        this.notices.push({
+          id: this.noticeSeq++,
+          kind: m.kind,
+          text: m.text,
+          slot: m.slot,
+          bornAt: performance.now(),
+        });
         break;
     }
   }
 
   private send(msg: ClientMessage): void {
-    if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(msg));
+    }
   }
 
   // ---- Lobby actions ----
-  join(name?: string): void {
-    this.send({ type: "join", name });
-  }
   select(characterId: string): void {
     this.send({ type: "select", characterId });
   }
@@ -122,8 +210,6 @@ export class NetClient {
   }
 
   // ---- In-round ----
-  // Stream the local input as a reduced InputMessage. Caller clears
-  // edge-triggered pressedAbilities after this returns.
   sendInput(input: InputState): void {
     this.send({
       type: "input",
@@ -136,8 +222,14 @@ export class NetClient {
     });
   }
 
-  // Whom this client controls in the current snapshot.
   isMine(entityId: number): boolean {
     return this.yourEntityId === entityId;
+  }
+
+  // Drop notices older than maxAgeMs. Called by main each frame so toasts
+  // fade out without manual upkeep elsewhere.
+  pruneNotices(maxAgeMs = 3500): void {
+    const now = performance.now();
+    this.notices = this.notices.filter((n) => now - n.bornAt < maxAgeMs);
   }
 }

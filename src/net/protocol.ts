@@ -1,22 +1,28 @@
 // Wire protocol shared between the browser client and the authoritative
 // Node server. Type-only imports from the sim keep this file runtime-free
-// except for the two constants, so the client bundle pays nothing to share
-// it and the server has a single source of truth for message shapes.
+// except for the constants, so the client bundle pays nothing to share it
+// and the server has a single source of truth for message shapes.
 
 import type { Entity } from "../core/entity";
 import type { RoundOutcome } from "../modes/mode";
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 export const DEFAULT_PORT = 8787;
+// Hard cap on connected players per session (1 hunter + up to 7 survivors).
+export const MAX_PLAYERS = 8;
+// Countdown length in seconds, broadcast from the server when the lobby
+// transitions to "round starting." The client switches from lobby view to
+// the in-game overlay when the count crosses this threshold.
+export const COUNTDOWN_SECONDS = 5;
+export const COUNTDOWN_INGAME_AT = 3;
 
-export type PlayerSlot = 0 | 1;
+export type PlayerSlot = number; // 0..MAX_PLAYERS-1
 
 // ---- Client → Server ----
 
 // Per-frame input. Mirrors the fields HumanController reads off InputState.
 // keys/pressedAbilities travel as arrays (Sets aren't JSON-serializable);
-// the server rehydrates them. pressedAbilities are edge events — the server
-// accumulates them until a sim tick consumes them.
+// the server rehydrates them.
 export interface InputMessage {
   type: "input";
   keys: string[];
@@ -27,9 +33,13 @@ export interface InputMessage {
   moveVector: { x: number; y: number };
 }
 
+// Initial connection handshake. rejoinToken (when present) asks the server
+// to restore this client to the slot it previously held — if the round is
+// still in progress and the token matches a ghost.
 export interface JoinMessage {
   type: "join";
   name?: string;
+  rejoinToken?: string;
 }
 
 export interface SelectMessage {
@@ -55,13 +65,17 @@ export type ClientMessage =
 
 // ---- Server → Client ----
 
-// Sent once on connect. If the server is full, `slot` is null and the
-// client should show "game full".
+// Sent once on connect. slot=null means the server rejected us (round in
+// progress and no matching rejoin token, or the player cap is reached).
+// sessionToken is a stable identifier the client stores in localStorage and
+// sends back as rejoinToken on the next connection attempt.
 export interface WelcomeMessage {
   type: "welcome";
   protocolVersion: number;
   slot: PlayerSlot | null;
   playerId: string;
+  sessionToken: string;
+  rejoined: boolean; // true if this was a successful rejoin into a round
 }
 
 export interface LobbyPlayerView {
@@ -75,21 +89,18 @@ export interface LobbyPlayerView {
 export interface LobbyMessage {
   type: "lobby";
   players: LobbyPlayerView[];
-  // Why the round can't start yet (null when it can / has). UI hint.
   blockedReason: string | null;
 }
 
-// Sent individually to each client when a round begins — yourEntityId is
-// the character entity this client drives and its camera follows.
+// Sent individually to each client when a round begins, AND when a
+// rejoined client returns mid-round. yourEntityId is the character entity
+// this client drives and its camera follows.
 export interface StartMessage {
   type: "start";
   yourEntityId: number;
   yourSlot: PlayerSlot;
 }
 
-// Broadcast every server tick. The full entity list is authoritative; the
-// client renders it directly. (Static props are resent each tick for now —
-// a P5 optimization can split static/dynamic.)
 export interface SnapshotMessage {
   type: "snapshot";
   tick: number;
@@ -104,10 +115,30 @@ export interface OutcomeMessage {
   outcome: RoundOutcome;
 }
 
-// Sent when the server drops back to the lobby (round ended + restart, or a
-// player left mid-round). Tells clients to leave the playing scene.
+// Server dropped to lobby (round ended + restart, or no humans left mid-
+// round). Tells clients to leave the playing scene.
 export interface ToLobbyMessage {
   type: "toLobby";
+}
+
+// Pre-round countdown, broadcast every server tick while running. remaining
+// is in seconds (fractional). When it crosses the COUNTDOWN_INGAME_AT
+// threshold, the client switches from the lobby panel to the in-game
+// world view (still frozen) with the countdown number overlayed; at 0 the
+// engine starts ticking and snapshots flow.
+export interface CountdownMessage {
+  type: "countdown";
+  remaining: number;
+}
+
+// Transient on-screen notice (drop / rejoin / future system messages). The
+// client renders a toast that fades after a few seconds. kind lets the
+// client style by event type.
+export interface NoticeMessage {
+  type: "notice";
+  kind: "drop" | "rejoin" | "info";
+  text: string;
+  slot?: PlayerSlot;
 }
 
 export type ServerMessage =
@@ -116,4 +147,6 @@ export type ServerMessage =
   | StartMessage
   | SnapshotMessage
   | OutcomeMessage
-  | ToLobbyMessage;
+  | ToLobbyMessage
+  | CountdownMessage
+  | NoticeMessage;

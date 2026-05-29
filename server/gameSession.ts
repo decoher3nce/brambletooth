@@ -1,15 +1,11 @@
-// One authoritative 1v1 match. Wraps the headless sim (World + Engine +
-// Mode + per-player controllers) and exposes the three things the server
-// needs: feed a player's input, advance a tick, and produce a snapshot.
-//
-// Both characters are human-driven here (each by a HumanController reading
-// a server-side InputState that the network layer updates). The sim code is
-// the exact same code the client runs single-player — only the input source
-// and the absence of rendering differ.
+// One authoritative 1vN match. Wraps the headless sim (World + Engine +
+// Mode + per-player controllers) and exposes what the server needs: feed
+// each player's input, advance a tick, produce a snapshot, swap a dropped
+// player's controller to AI, and restore them on rejoin.
 
 import { World } from "../src/core/world";
 import { Engine } from "../src/core/engine";
-import { OneVOneMode } from "../src/modes/oneVOne";
+import { HuntMode } from "../src/modes/hunt";
 import { FOREST_ARENA_CONFIG, buildForest } from "../src/arenas/forest";
 import { createInput } from "../src/core/input";
 import type { InputState } from "../src/core/input";
@@ -35,53 +31,76 @@ interface SessionPlayer {
   entityId: number;
 }
 
-// True only if the two picks form exactly one hunter and one survivor — the
-// server refuses to start an invalid pairing (the lobby should prevent it,
-// this is the backstop).
+// Valid for a 1vN round: exactly one hunter, one or more survivors, and
+// every pick resolves to a known character. The lobby should prevent
+// invalid combos; this is the backstop.
 export function picksAreValid(picks: SessionPick[]): boolean {
-  if (picks.length !== 2) return false;
-  const roles = picks.map((p) => CHARACTERS[p.characterId]?.role);
-  return roles.includes("hunter") && roles.includes("survivor");
+  if (picks.length < 2) return false;
+  let hunters = 0;
+  let survivors = 0;
+  for (const p of picks) {
+    const def = CHARACTERS[p.characterId];
+    if (!def) return false;
+    if (def.role === "hunter") hunters++;
+    else if (def.role === "survivor") survivors++;
+    else return false;
+  }
+  return hunters === 1 && survivors >= 1;
 }
 
 export class GameSession {
   readonly world: World;
   readonly engine: Engine;
-  readonly mode: OneVOneMode;
+  readonly mode: HuntMode;
   private players: SessionPlayer[] = [];
   tickCount = 0;
 
   constructor(picks: SessionPick[]) {
     if (!picksAreValid(picks)) {
-      throw new Error("GameSession requires one hunter and one survivor pick");
+      throw new Error("GameSession requires one hunter and at least one survivor pick");
     }
     const hunterPick = picks.find(
       (p) => CHARACTERS[p.characterId].role === "hunter",
     )!;
-    const survivorPick = picks.find(
+    // Preserve picks order among survivors so we can map each pick to its
+    // spawned entity by index after mode.initialize.
+    const survivorPicks = picks.filter(
       (p) => CHARACTERS[p.characterId].role === "survivor",
-    )!;
+    );
 
     this.world = new World(FOREST_ARENA_CONFIG, TIME_LIMIT_SECONDS);
     buildForest(this.world, Math.floor(Math.random() * 1e9), OBJECTIVE_COUNT);
 
-    this.mode = new OneVOneMode({
+    this.mode = new HuntMode({
       hunterCharacterId: hunterPick.characterId,
-      survivorCharacterId: survivorPick.characterId,
-      // isPlayer is irrelevant server-side — we assign controllers
-      // explicitly below. Pick a value; the server never reads it.
-      playerRole: "survivor",
+      survivorCharacterIds: survivorPicks.map((p) => p.characterId),
+      // isPlayer is irrelevant server-side — each client flags its own
+      // character from yourEntityId. Any value here is fine.
+      playerRole: "hunter",
       objectivesRequired: OBJECTIVES_REQUIRED,
     });
     this.mode.initialize(this.world);
 
     const hunterEntity = this.world.charactersOnTeam("hunter")[0];
-    const survivorEntity = this.world.charactersOnTeam("survivor")[0];
+    // Spawned in survivorCharacterIds order — same order as survivorPicks.
+    const survivorEntities = this.world.charactersOnTeam("survivor");
 
     const controllers = new Map<number, Controller>();
-    for (const pick of picks) {
-      const isHunter = CHARACTERS[pick.characterId].role === "hunter";
-      const entity = isHunter ? hunterEntity : survivorEntity;
+    // Hunter slot -> hunter entity.
+    {
+      const input = createInput();
+      controllers.set(hunterEntity.id, new HumanController(input));
+      this.players.push({
+        slot: hunterPick.slot,
+        characterId: hunterPick.characterId,
+        input,
+        entityId: hunterEntity.id,
+      });
+    }
+    // Survivor slots -> survivor entities by spawn order.
+    for (let i = 0; i < survivorPicks.length; i++) {
+      const pick = survivorPicks[i];
+      const entity = survivorEntities[i];
       const input = createInput();
       controllers.set(entity.id, new HumanController(input));
       this.players.push({
@@ -100,6 +119,10 @@ export class GameSession {
     return this.players.find((p) => p.slot === slot)?.entityId ?? null;
   }
 
+  characterIdForSlot(slot: PlayerSlot): string | null {
+    return this.players.find((p) => p.slot === slot)?.characterId ?? null;
+  }
+
   // A player dropped mid-round — hand their character to an AI controller
   // so the round continues for whoever's left. Returns false if that
   // character has no AI (caller should end the round instead).
@@ -110,6 +133,19 @@ export class GameSession {
     if (!ai) return false;
     this.engine.cfg.controllers.set(p.entityId, ai);
     return true;
+  }
+
+  // A previously-dropped player reconnected and matched their identity
+  // token. Swap the AI back out for a fresh HumanController bound to a new
+  // server-side input state. Returns the entityId the rejoined client now
+  // drives (so the server can send them a fresh `start`).
+  humanReturn(slot: PlayerSlot): number | null {
+    const p = this.players.find((x) => x.slot === slot);
+    if (!p) return null;
+    // Replace input + controller so any stale held-keys can't leak through.
+    p.input = createInput();
+    this.engine.cfg.controllers.set(p.entityId, new HumanController(p.input));
+    return p.entityId;
   }
 
   // Update a player's server-side input from a network message. keys are a

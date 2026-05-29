@@ -14,7 +14,7 @@ import { createInput, bindInput } from "./core/input";
 import { Engine } from "./core/engine";
 import { Renderer, createCamera, screenToWorld } from "./render/renderer";
 import type { Camera } from "./render/renderer";
-import { OneVOneMode } from "./modes/oneVOne";
+import { HuntMode } from "./modes/hunt";
 import { FOREST_ARENA_CONFIG, buildForest } from "./arenas/forest";
 import { createAIController } from "./ai/ai";
 import { HumanController } from "./core/humanController";
@@ -25,6 +25,8 @@ import type { LobbyView } from "./ui/selectScreen";
 import { CHARACTERS } from "./characters/characters";
 import type { Controller } from "./ai/ai";
 import { NetClient, resolveServerUrl } from "./net/netClient";
+import type { NoticeEntry } from "./net/netClient";
+import { MAX_PLAYERS, COUNTDOWN_INGAME_AT } from "./net/protocol";
 
 // --- Setup canvas ---
 const canvas = document.getElementById("game") as HTMLCanvasElement;
@@ -85,7 +87,7 @@ type Scene = "select" | "playing";
 let scene: Scene = "select";
 interface PlayState {
   world: World;
-  mode: OneVOneMode;
+  mode: HuntMode;
   engine: Engine;
   controllers: Map<number, Controller>;
   cam: Camera;
@@ -220,9 +222,9 @@ function startRound(chosenId: string): void {
   const world = new World(FOREST_ARENA_CONFIG, TIME_LIMIT_SECONDS);
   buildForest(world, Math.floor(Math.random() * 1e9), OBJECTIVE_COUNT);
 
-  const mode = new OneVOneMode({
+  const mode = new HuntMode({
     hunterCharacterId: hunterId,
-    survivorCharacterId: survivorId,
+    survivorCharacterIds: [survivorId],
     playerRole,
     objectivesRequired: OBJECTIVES_REQUIRED,
   });
@@ -286,23 +288,32 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
 // lobby broadcast. Slots with no connected player render as "waiting".
 function buildLobbyView(): LobbyView {
   const n = net!;
-  const players = [0, 1].map((slot) => {
-    const p = n.lobby.find((x) => x.slot === slot);
-    if (!p) {
-      return { label: `Player ${slot + 1}`, characterName: null, ready: false, present: false };
-    }
-    const you = slot === n.slot;
+  // One row per connected player. If there's room for more, append a
+  // single "Open slot" placeholder so the lobby telegraphs that more
+  // players can join — without exploding into MAX_PLAYERS rows.
+  const players = n.lobby.map((p) => {
+    const you = p.slot === n.slot;
     return {
-      label: `Player ${slot + 1}${you ? " (you)" : ""}`,
-      characterName: p.characterId ? (CHARACTERS[p.characterId]?.name ?? p.characterId) : null,
+      label: `Player ${p.slot + 1}${you ? " (you)" : ""}`,
+      characterName: p.characterId
+        ? (CHARACTERS[p.characterId]?.name ?? p.characterId)
+        : null,
       ready: p.ready,
       present: true,
     };
   });
+  if (n.lobby.length < MAX_PLAYERS) {
+    players.push({
+      label: "Open slot",
+      characterName: null,
+      ready: false,
+      present: false,
+    });
+  }
   const me = n.lobby.find((p) => p.slot === n.slot);
   const amReady = me?.ready ?? false;
   return {
-    title: "TWO-PLAYER LOBBY",
+    title: "MULTIPLAYER LOBBY",
     players,
     status: n.blockedReason,
     buttonLabel: amReady ? "READY ✓ — TAP TO CANCEL" : "READY UP",
@@ -312,12 +323,17 @@ function buildLobbyView(): LobbyView {
 
 function frameNet(dt: number, dims: { w: number; h: number }): void {
   if (!net) return;
-  const n = net; // stable non-null ref for use inside closures
+  const n = net;
 
-  // Smoothing state only applies during a round.
-  if (net.phase !== "playing" && net.phase !== "ended") netSmoothed.clear();
+  // Smoothing state only applies during a round/countdown.
+  if (n.phase !== "playing" && n.phase !== "ended" && n.phase !== "countdown") {
+    netSmoothed.clear();
+  }
 
-  switch (net.phase) {
+  // Notice toasts age out automatically.
+  n.pruneNotices();
+
+  switch (n.phase) {
     case "connecting":
       netCamInit = false;
       netInitialPickSent = false;
@@ -325,82 +341,181 @@ function frameNet(dt: number, dims: { w: number; h: number }): void {
       return;
     case "full":
       netCamInit = false;
-      drawCenter(dims, "Game is full", "Two players are already connected.");
+      drawCenter(dims, "Game is full", "Maximum players are already connected.");
       return;
     case "disconnected":
       netCamInit = false;
-      drawCenter(dims, "Disconnected", "Lost connection to the server. Reload to retry.");
+      drawCenter(dims, "Disconnected", "Trying to reconnect…");
       return;
     case "lobby":
       netCamInit = false;
-      // Broadcast our default highlight once so it shows on the opponent's
-      // panel without requiring an explicit tap.
-      if (!netInitialPickSent && net.slot !== null) {
+      if (!netInitialPickSent && n.slot !== null) {
         const sel = selectScreen.getSelected();
-        if (sel) net.select(sel);
+        if (sel) n.select(sel);
         netInitialPickSent = true;
       }
       selectScreen.setLobbyView(buildLobbyView());
       selectScreen.draw(ctx, dims);
+      drawNoticesToast(dims, n.notices);
       return;
-    case "playing":
-    case "ended": {
-      const snap = net.snapshot;
-      if (!snap) {
-        drawCenter(dims, "Starting round…", "");
-        return;
-      }
-      // Build the render entity list. Characters are smoothed toward their
-      // authoritative position and flagged isPlayer for our own; fast,
-      // short-lived entities (projectiles) render at the exact server pos.
-      const k = Math.min(1, dt * 18);
-      const liveIds = new Set<number>();
-      const renderEntities = snap.entities.map((e) => {
-        liveIds.add(e.id);
-        if (e.kind !== "character") return e;
-        let s = netSmoothed.get(e.id);
-        if (!s) {
-          s = { x: e.pos.x, y: e.pos.y };
-          netSmoothed.set(e.id, s);
-        } else {
-          s.x += (e.pos.x - s.x) * k;
-          s.y += (e.pos.y - s.y) * k;
+    case "countdown": {
+      const remaining = n.countdownRemaining;
+      const showInGame = remaining <= COUNTDOWN_INGAME_AT;
+      if (!showInGame) {
+        // 5, 4 — lobby with countdown overlay so players see the round
+        // start sequence rooted where they were waiting.
+        if (!netInitialPickSent && n.slot !== null) {
+          const sel = selectScreen.getSelected();
+          if (sel) n.select(sel);
+          netInitialPickSent = true;
         }
-        return { ...e, pos: { x: s.x, y: s.y }, isPlayer: e.id === n.yourEntityId };
-      });
-      for (const id of netSmoothed.keys()) {
-        if (!liveIds.has(id)) netSmoothed.delete(id);
+        selectScreen.setLobbyView(buildLobbyView());
+        selectScreen.draw(ctx, dims);
+        drawCountdownOverlay(dims, remaining);
+      } else {
+        // 3, 2, 1 — switch to the game scene (frozen world) with the
+        // countdown number overlayed so players see who they spawn next to.
+        drawNetGameScene(dt, dims, n);
+        drawCountdownOverlay(dims, remaining);
       }
-
-      if (!netViewWorld) netViewWorld = new World(FOREST_ARENA_CONFIG, snap.timeLimit);
-      netViewWorld.entities = renderEntities;
-      netViewWorld.elapsed = snap.elapsed;
-      netViewWorld.timeLimit = snap.timeLimit;
-
-      const me = netViewWorld.playerCharacter();
-      if (me && !netCamInit) {
-        netCam.target.x = me.pos.x;
-        netCam.target.y = me.pos.y;
-        netCamInit = true;
-      } else if (me) {
-        netCam.target.x += (me.pos.x - netCam.target.x) * Math.min(1, dt * 6);
-        netCam.target.y += (me.pos.y - netCam.target.y) * Math.min(1, dt * 6);
-      }
-
-      input.mouseWorld = screenToWorld(input.mouseScreen, netCam, renderer.cw, renderer.ch);
-      if (net.phase === "playing") net.sendInput(input);
-      input.pressedAbilities.clear();
-
-      renderer.clear("#1a2421");
-      renderer.drawArena(netViewWorld, netCam);
-      renderer.drawEntities(netViewWorld, netCam);
-      drawHUD(ctx, canvas, netViewWorld, net.outcome, false, dims, input.isTouchMode);
-      if (input.isTouchMode) {
-        touchControls.draw(ctx, dims, netViewWorld, net.outcome, false);
-      }
+      drawNoticesToast(dims, n.notices);
       return;
     }
+    case "playing":
+    case "ended":
+      drawNetGameScene(dt, dims, n);
+      drawNoticesToast(dims, n.notices);
+      return;
   }
+}
+
+// Render the networked game: snapshot -> view world -> renderer + HUD +
+// touch overlay. Shared between the playing phase and the in-game tail of
+// the countdown (3, 2, 1). Input is streamed only while truly playing.
+function drawNetGameScene(dt: number, dims: { w: number; h: number }, n: NetClient): void {
+  const snap = n.snapshot;
+  if (!snap) {
+    drawCenter(dims, "Starting round…", "");
+    return;
+  }
+  // Build the render entity list. Characters are smoothed toward their
+  // authoritative position and flagged isPlayer for our own; fast,
+  // short-lived entities (projectiles) render at the exact server pos.
+  const k = Math.min(1, dt * 18);
+  const liveIds = new Set<number>();
+  const renderEntities = snap.entities.map((e) => {
+    liveIds.add(e.id);
+    if (e.kind !== "character") return e;
+    let s = netSmoothed.get(e.id);
+    if (!s) {
+      s = { x: e.pos.x, y: e.pos.y };
+      netSmoothed.set(e.id, s);
+    } else {
+      s.x += (e.pos.x - s.x) * k;
+      s.y += (e.pos.y - s.y) * k;
+    }
+    return { ...e, pos: { x: s.x, y: s.y }, isPlayer: e.id === n.yourEntityId };
+  });
+  for (const id of netSmoothed.keys()) {
+    if (!liveIds.has(id)) netSmoothed.delete(id);
+  }
+
+  if (!netViewWorld) netViewWorld = new World(FOREST_ARENA_CONFIG, snap.timeLimit);
+  netViewWorld.entities = renderEntities;
+  netViewWorld.elapsed = snap.elapsed;
+  netViewWorld.timeLimit = snap.timeLimit;
+
+  const me = netViewWorld.playerCharacter();
+  if (me && !netCamInit) {
+    netCam.target.x = me.pos.x;
+    netCam.target.y = me.pos.y;
+    netCamInit = true;
+  } else if (me) {
+    netCam.target.x += (me.pos.x - netCam.target.x) * Math.min(1, dt * 6);
+    netCam.target.y += (me.pos.y - netCam.target.y) * Math.min(1, dt * 6);
+  }
+
+  input.mouseWorld = screenToWorld(input.mouseScreen, netCam, renderer.cw, renderer.ch);
+  // Stream input only while genuinely playing (not during countdown, not
+  // after the round ended) so abilities don't queue up across boundaries.
+  if (n.phase === "playing") n.sendInput(input);
+  input.pressedAbilities.clear();
+
+  renderer.clear("#1a2421");
+  renderer.drawArena(netViewWorld, netCam);
+  renderer.drawEntities(netViewWorld, netCam);
+  drawHUD(ctx, canvas, netViewWorld, n.outcome, false, dims, input.isTouchMode);
+  if (input.isTouchMode) {
+    touchControls.draw(ctx, dims, netViewWorld, n.outcome, false);
+  }
+}
+
+// Big-number countdown centered on screen. Used at 5,4 over the lobby and
+// at 3,2,1 over the (frozen) game. ceil() so 4.7s reads "5", 0.1s reads "1".
+function drawCountdownOverlay(dims: { w: number; h: number }, remaining: number): void {
+  const n = Math.max(1, Math.ceil(remaining));
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  ctx.fillRect(0, 0, dims.w, dims.h);
+  ctx.fillStyle = "#ffd84a";
+  ctx.font = "bold 180px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(String(n), dims.w / 2, dims.h / 2);
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 18px system-ui, sans-serif";
+  ctx.fillText("GAME BEGINS IN…", dims.w / 2, dims.h / 2 + 130);
+  ctx.restore();
+  ctx.textBaseline = "alphabetic";
+}
+
+// Stack of fading toasts at the top of the screen — drop / rejoin events.
+function drawNoticesToast(dims: { w: number; h: number }, notices: NoticeEntry[]): void {
+  if (notices.length === 0) return;
+  const maxAge = 3500;
+  const now = performance.now();
+  const visible = notices.slice(-5);
+  let y = 96;
+  ctx.save();
+  ctx.font = "bold 14px system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "center";
+  for (const note of visible) {
+    const age = now - note.bornAt;
+    if (age > maxAge) continue;
+    // Fade in fast, hold, fade out over the last 500ms.
+    const alpha = age < 200 ? age / 200 : age > maxAge - 500 ? (maxAge - age) / 500 : 1;
+    const tw = ctx.measureText(note.text).width;
+    const pad = 16;
+    const bw = tw + pad * 2;
+    const bh = 32;
+    const bx = (dims.w - bw) / 2;
+    const tint =
+      note.kind === "drop"
+        ? `rgba(208, 72, 72, ${0.85 * alpha})`
+        : note.kind === "rejoin"
+          ? `rgba(72, 208, 160, ${0.85 * alpha})`
+          : `rgba(255, 216, 74, ${0.85 * alpha})`;
+    ctx.fillStyle = tint;
+    ctx.beginPath();
+    ctx.moveTo(bx + 6, y);
+    ctx.lineTo(bx + bw - 6, y);
+    ctx.arcTo(bx + bw, y, bx + bw, y + 6, 6);
+    ctx.lineTo(bx + bw, y + bh - 6);
+    ctx.arcTo(bx + bw, y + bh, bx + bw - 6, y + bh, 6);
+    ctx.lineTo(bx + 6, y + bh);
+    ctx.arcTo(bx, y + bh, bx, y + bh - 6, 6);
+    ctx.lineTo(bx, y + 6);
+    ctx.arcTo(bx, y, bx + 6, y, 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = `rgba(20, 30, 28, ${alpha})`;
+    ctx.fillText(note.text, dims.w / 2, y + bh / 2);
+    y += bh + 6;
+  }
+  ctx.restore();
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
 }
 
 // ===== Title screen =====
