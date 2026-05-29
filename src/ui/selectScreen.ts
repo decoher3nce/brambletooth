@@ -140,6 +140,72 @@ export class SelectScreen {
       },
       { passive: false },
     );
+
+    // Keyboard navigation. Left/Right moves within a role row; Up/Down
+    // switches between the hunter and survivor rows (keeping column);
+    // Enter/Space starts the round with the current selection.
+    window.addEventListener("keydown", (ev) => {
+      if (!hooks.isActive()) return;
+      switch (ev.key) {
+        case "ArrowLeft":
+          ev.preventDefault();
+          this.moveSelection(-1, 0);
+          break;
+        case "ArrowRight":
+          ev.preventDefault();
+          this.moveSelection(1, 0);
+          break;
+        case "ArrowUp":
+          ev.preventDefault();
+          this.moveSelection(0, -1);
+          break;
+        case "ArrowDown":
+          ev.preventDefault();
+          this.moveSelection(0, 1);
+          break;
+        case "Enter":
+        case " ":
+          ev.preventDefault();
+          if (this.selectedId) hooks.onStart(this.selectedId);
+          break;
+      }
+    });
+  }
+
+  // Move the keyboard selection. dx steps within the current role's filled
+  // list; dy switches role rows (negative = hunters, positive = survivors),
+  // preserving the column index where possible. Keyboard nav overrides any
+  // mouse-hover preview so the detail panel tracks the selection.
+  private moveSelection(dx: number, dy: number): void {
+    const hunters = this.charactersByRole("hunter");
+    const survivors = this.charactersByRole("survivor");
+
+    let role: CharacterRole = "survivor";
+    let idx = 0;
+    const hIdx = hunters.findIndex((c) => c.id === this.selectedId);
+    const sIdx = survivors.findIndex((c) => c.id === this.selectedId);
+    if (hIdx >= 0) {
+      role = "hunter";
+      idx = hIdx;
+    } else if (sIdx >= 0) {
+      role = "survivor";
+      idx = sIdx;
+    }
+
+    if (dy !== 0) {
+      role = dy < 0 ? "hunter" : "survivor";
+    } else if (dx !== 0) {
+      idx += dx;
+    }
+
+    const list = role === "hunter" ? hunters : survivors;
+    if (list.length === 0) return;
+    idx = Math.max(0, Math.min(list.length - 1, idx));
+    const target = list[idx];
+    if (target) {
+      this.selectedId = target.id;
+      this.hoverId = null;
+    }
   }
 
   // Hit-test against current tile/button rects (which are recomputed each
