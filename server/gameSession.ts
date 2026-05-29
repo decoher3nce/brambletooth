@@ -180,6 +180,8 @@ export class GameSession {
       timeLimit: this.world.timeLimit,
       outcome: this.engine.outcome,
       entities: this.world.entities,
+      // Pause is a server-level concept; caller (index.ts) stamps it in.
+      paused: false,
     };
   }
 }

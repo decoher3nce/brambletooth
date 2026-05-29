@@ -54,6 +54,7 @@ let session: GameSession | null = null;
 let tickTimer: ReturnType<typeof setInterval> | null = null;
 let lastTickAt = 0;
 let countdownRemaining = 0; // seconds; >0 means a round is starting
+let serverPaused = false;
 let nextPlayerId = 1;
 
 function send(ws: WebSocket, msg: ServerMessage): void {
@@ -136,22 +137,34 @@ function stepRound(): void {
 
   if (countdownRemaining > 0) {
     countdownRemaining = Math.max(0, countdownRemaining - dt);
-    // Broadcast countdown each tick (~30/s) — small payload, smooth display.
     broadcast({ type: "countdown", remaining: countdownRemaining });
-    // Send a snapshot during the in-game countdown phase so clients have
-    // the world to render under the overlay.
-    broadcast(session.snapshot());
+    broadcast(stampedSnapshot());
+    return;
+  }
+
+  // Paused: keep broadcasting snapshots (so latecomer rendering stays in
+  // sync) but don't advance the sim. Clients show the pause overlay.
+  if (serverPaused) {
+    broadcast(stampedSnapshot());
     return;
   }
 
   session.tick(dt);
-  broadcast(session.snapshot());
+  broadcast(stampedSnapshot());
 
   if (session.outcome !== "ongoing") {
     broadcast({ type: "outcome", outcome: session.outcome });
     console.log(`[round] ended: ${session.outcome}`);
     stopRoundLoop();
   }
+}
+
+// Wrap session.snapshot() to attach the current paused flag without
+// having GameSession know about server-level state.
+function stampedSnapshot() {
+  const s = session!.snapshot();
+  s.paused = serverPaused;
+  return s;
 }
 
 function stopRoundLoop(): void {
@@ -166,6 +179,7 @@ function endRoundToLobby(): void {
   stopRoundLoop();
   session = null;
   countdownRemaining = 0;
+  serverPaused = false;
   ghosts.clear(); // ghosts only matter mid-round
   for (const c of slots) if (c) c.ready = false;
   broadcast({ type: "toLobby" });
@@ -227,6 +241,15 @@ function handleMessage(conn: ClientConn, raw: string): void {
 
     case "restart":
       endRoundToLobby();
+      break;
+
+    case "pause":
+      // Only meaningful during an active round (after countdown).
+      if (!session || countdownRemaining > 0) break;
+      if (serverPaused !== msg.paused) {
+        serverPaused = msg.paused;
+        console.log(`[round] ${serverPaused ? "paused" : "resumed"} by slot ${conn.slot}`);
+      }
       break;
   }
 }

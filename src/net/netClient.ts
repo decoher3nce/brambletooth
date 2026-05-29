@@ -60,6 +60,7 @@ export class NetClient {
   yourEntityId: number | null = null;
   snapshot: SnapshotMessage | null = null;
   outcome: RoundOutcome = "ongoing";
+  paused = false;
   countdownRemaining = 0;
   notices: NoticeEntry[] = [];
 
@@ -182,6 +183,7 @@ export class NetClient {
       case "snapshot":
         this.snapshot = m;
         this.outcome = m.outcome;
+        this.paused = m.paused;
         break;
 
       case "outcome":
@@ -195,6 +197,7 @@ export class NetClient {
         this.yourEntityId = null;
         this.outcome = "ongoing";
         this.countdownRemaining = 0;
+        this.paused = false;
         break;
 
       case "notice":
@@ -224,6 +227,10 @@ export class NetClient {
   }
   restart(): void {
     this.send({ type: "restart" });
+  }
+  // Toggle the server-wide pause. Any player can pause OR resume.
+  setPaused(paused: boolean): void {
+    this.send({ type: "pause", paused });
   }
 
   // ---- In-round ----

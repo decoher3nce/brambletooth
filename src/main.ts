@@ -167,9 +167,11 @@ touchControls.bind(canvas, logicalSize, {
   getWorld: () => (appMode === "net" ? netViewWorld : (play?.world ?? null)),
   getOutcome: () =>
     appMode === "net" ? (net?.outcome ?? "ongoing") : (play?.engine.outcome ?? "ongoing"),
-  isPaused: () => (appMode === "net" ? false : (play?.engine.paused ?? false)),
+  isPaused: () =>
+    appMode === "net" ? (net?.paused ?? false) : (play?.engine.paused ?? false),
   togglePause: () => {
-    if (appMode === "local" && play) play.engine.paused = !play.engine.paused;
+    if (appMode === "net" && net) net.setPaused(!net.paused);
+    else if (appMode === "local" && play) play.engine.paused = !play.engine.paused;
   },
   restart: () => {
     if (appMode === "net") net?.restart();
@@ -193,6 +195,64 @@ function handleTitleTap(p: { x: number; y: number }): void {
   if (!titleButtons) return;
   if (inRect(p, titleButtons.single)) chooseMode("local");
   else if (inRect(p, titleButtons.two)) chooseMode("net");
+}
+
+// ---- Pause / Leave Game ----
+// The pause overlay (drawn by drawHUD) gains a Leave Game button. We layer
+// it on top in main so we can own the hit-test and the points penalty.
+let pauseLeaveBtn: Rect | null = null;
+
+function isPausedNow(): boolean {
+  if (appMode === "local" && play) return play.engine.paused;
+  if (appMode === "net" && net) return net.paused;
+  return false;
+}
+function currentOutcome(): string {
+  if (appMode === "local" && play) return play.engine.outcome;
+  if (appMode === "net" && net) return net.outcome;
+  return "ongoing";
+}
+
+function drawLeaveGameButton(dims: { w: number; h: number }): void {
+  // Only on the pause overlay (not on the post-round outcome screen).
+  if (!isPausedNow() || currentOutcome() !== "ongoing") {
+    pauseLeaveBtn = null;
+    return;
+  }
+  const bw = 300;
+  const bh = 52;
+  const bx = (dims.w - bw) / 2;
+  const by = dims.h / 2 + 80;
+  pauseLeaveBtn = { x: bx, y: by, w: bw, h: bh };
+  ctx.save();
+  ctx.fillStyle = "rgba(208, 72, 72, 0.9)";
+  roundRect(pauseLeaveBtn, 10);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
+  ctx.lineWidth = 1;
+  roundRect(pauseLeaveBtn, 10);
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 16px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(`LEAVE GAME  (−${POINTS_LEAVE_PENALTY} points)`, bx + bw / 2, by + bh / 2);
+  ctx.restore();
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+}
+
+function handleLeaveGameTap(p: { x: number; y: number }): boolean {
+  if (!pauseLeaveBtn) return false;
+  if (!inRect(p, pauseLeaveBtn)) return false;
+  // Apply the penalty against lifetime points (clamped at 0 to keep the
+  // display sane — leaving repeatedly shouldn't drive it negative).
+  addPoints(-POINTS_LEAVE_PENALTY);
+  if (getPoints() < 0) {
+    try { localStorage.setItem("brambletooth.points", "0"); } catch { /* ignore */ }
+  }
+  goToTitle();
+  return true;
 }
 
 // Back is allowed during non-gameplay phases only. Mid-round exit goes
@@ -222,6 +282,7 @@ canvas.addEventListener("mousedown", (ev) => {
   const r = canvas.getBoundingClientRect();
   const p = { x: ev.clientX - r.left, y: ev.clientY - r.top };
   if (started) {
+    if (handleLeaveGameTap(p)) return;
     handleBackTap(p);
   } else {
     handleTitleTap(p);
@@ -235,8 +296,7 @@ canvas.addEventListener(
     const r = canvas.getBoundingClientRect();
     const p = { x: t.clientX - r.left, y: t.clientY - r.top };
     if (started) {
-      // Back hit lives in the top-left corner; never preventDefault for
-      // touches outside it so the rest of the scene's handlers still work.
+      if (handleLeaveGameTap(p)) { ev.preventDefault(); return; }
       if (handleBackTap(p)) ev.preventDefault();
     } else {
       ev.preventDefault();
@@ -272,7 +332,13 @@ function goToTitle(): void {
 window.addEventListener("keydown", (ev) => {
   if (!started) return;
   if (appMode === "net") {
-    if (net && net.phase === "ended" && ev.key.toLowerCase() === "r") net.restart();
+    if (!net) return;
+    if (ev.key === "Escape" && (net.phase === "playing" || net.phase === "ended")) {
+      // Multiplayer pause is server-mediated — toggling here pauses everyone.
+      net.setPaused(!net.paused);
+    } else if (ev.key.toLowerCase() === "r" && net.phase === "ended") {
+      net.restart();
+    }
     return;
   }
   if (scene !== "playing" || !play) return;
@@ -542,7 +608,7 @@ function drawNetGameScene(dt: number, dims: { w: number; h: number }, n: NetClie
   renderer.drawEntities(netViewWorld, netCam, netVis);
   drawHUD(ctx, canvas, netViewWorld, {
     outcome: n.outcome,
-    paused: false,
+    paused: n.paused,
     dimensions: dims,
     isTouchMode: input.isTouchMode,
     points: getPoints(),
@@ -948,6 +1014,7 @@ function frame(now: number) {
   // the other players. Pause -> Leave Game (with penalty) is the only
   // mid-round exit.
   if (started && backAllowed()) drawBackButton();
+  if (started) drawLeaveGameButton(dims);
 
   // Win → points (one-shot per round). Read each frame; transitions to a
   // terminal outcome trigger exactly one increment.

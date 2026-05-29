@@ -6,7 +6,7 @@
 import type { Entity } from "../core/entity";
 import type { RoundOutcome } from "../modes/mode";
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 export const DEFAULT_PORT = 8787;
 // Hard cap on connected players per session (1 hunter + up to 7 survivors).
 export const MAX_PLAYERS = 8;
@@ -56,12 +56,21 @@ export interface RestartMessage {
   type: "restart";
 }
 
+// Toggle the server-side pause (multiplayer). Any player can pause OR
+// resume — same button for everyone. While paused the server's engine
+// doesn't tick; snapshots keep flowing with paused=true.
+export interface PauseMessage {
+  type: "pause";
+  paused: boolean;
+}
+
 export type ClientMessage =
   | JoinMessage
   | SelectMessage
   | ReadyMessage
   | InputMessage
-  | RestartMessage;
+  | RestartMessage
+  | PauseMessage;
 
 // ---- Server → Client ----
 
@@ -108,6 +117,9 @@ export interface SnapshotMessage {
   timeLimit: number;
   outcome: RoundOutcome;
   entities: Entity[];
+  // Server is paused when true — the engine isn't ticking. Clients render
+  // the same pause overlay; any player can resume.
+  paused: boolean;
 }
 
 export interface OutcomeMessage {
