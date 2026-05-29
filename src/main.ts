@@ -23,7 +23,7 @@ import { createAIController } from "./ai/ai";
 import { HumanController } from "./core/humanController";
 import { drawHUD } from "./ui/hud";
 import { TouchControls } from "./ui/touchControls";
-import { SelectScreen } from "./ui/selectScreen";
+import { SelectScreen, slotColor } from "./ui/selectScreen";
 import type { LobbyView } from "./ui/selectScreen";
 import { CHARACTERS } from "./characters/characters";
 import type { Controller } from "./ai/ai";
@@ -596,8 +596,6 @@ function buildLobbyView(): LobbyView {
   // players can join — without exploding into MAX_PLAYERS rows.
   const players = n.lobby.map((p) => {
     const you = p.slot === n.slot;
-    // Server defaults p.name to "Player N" when no join.name was sent, so
-    // this just works whether the player set a name or not.
     return {
       label: `${p.name}${you ? " (you)" : ""}`,
       characterName: p.characterId
@@ -605,15 +603,23 @@ function buildLobbyView(): LobbyView {
         : null,
       ready: p.ready,
       present: true,
+      slot: p.slot,
+      characterId: p.characterId,
+      color: slotColor(p.slot),
+      you,
     };
   });
   if (n.lobby.length < MAX_PLAYERS) {
+    // Cast: TS infers a stricter shape from the map above; the placeholder
+    // intentionally omits slot / color (no assigned player).
     players.push({
       label: "Open slot",
       characterName: null,
       ready: false,
       present: false,
-    });
+      characterId: null,
+      you: false,
+    } as (typeof players)[number]);
   }
   const me = n.lobby.find((p) => p.slot === n.slot);
   const amReady = me?.ready ?? false;

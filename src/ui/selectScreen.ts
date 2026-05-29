@@ -37,10 +37,15 @@ export interface SelectHooks {
 // relabeled primary button. When null, the screen renders as the local
 // single-player picker.
 export interface LobbyPlayerLine {
-  label: string; // e.g. "Player 1 (you)"
+  label: string; // e.g. "Player 1 (you)" or "<player-name> (you)"
   characterName: string | null; // resolved name, or null while picking
   ready: boolean;
   present: boolean; // false = slot empty / waiting to connect
+  // New: lets tiles + panel rows color-code by player.
+  slot?: number;
+  characterId?: string | null;
+  color?: string;
+  you?: boolean;
 }
 export interface LobbyView {
   title: string;
@@ -48,6 +53,24 @@ export interface LobbyView {
   status: string | null; // block reason / "Starting…" — null when hidden
   buttonLabel: string;
   buttonEnabled: boolean;
+}
+
+// Per-slot colors used across the lobby — each player gets one consistent
+// color in the panel row, tile pick tag, and selection box. Order is
+// deliberately distinct (no two adjacent colors confuse each other).
+export const SLOT_COLORS = [
+  "#ff6b6b", // red
+  "#4dabf7", // blue
+  "#69db7c", // green
+  "#ffd43b", // yellow
+  "#cc5de8", // purple
+  "#22b8cf", // cyan
+  "#ff922b", // orange
+  "#a9e34b", // lime
+];
+export function slotColor(slot: number | null | undefined): string {
+  if (slot == null) return "#888";
+  return SLOT_COLORS[slot % SLOT_COLORS.length];
 }
 
 interface TileRect {
@@ -407,11 +430,18 @@ export class SelectScreen {
     view.players.forEach((p, i) => {
       const ry = y + 10 + i * rowH;
       ctx.textBaseline = "middle";
-      // Player label.
-      ctx.fillStyle = p.present ? TEXT : TEXT_DIM;
+      // Colored slot dot.
+      if (p.present && p.color) {
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(x + 14, ry + rowH / 2 - 2, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Player label, in slot color when present.
+      ctx.fillStyle = p.present ? (p.color ?? TEXT) : TEXT_DIM;
       ctx.font = "bold 13px system-ui, sans-serif";
       ctx.textAlign = "left";
-      ctx.fillText(p.label, x + 14, ry + rowH / 2 - 2);
+      ctx.fillText(p.label, x + 26, ry + rowH / 2 - 2);
       // Pick.
       ctx.font = "13px system-ui, sans-serif";
       ctx.fillStyle = p.present ? TEXT_DIM : TEXT_LOCKED;
@@ -478,13 +508,33 @@ export class SelectScreen {
     const selected = def !== null && def.id === this.selectedId;
     const hovered = def !== null && def.id === this.hoverId;
 
+    // Players (in the networked lobby) who picked this character. Includes
+    // YOU if you picked it. Used for the colored border + name tags.
+    const picks =
+      def !== null && this.lobbyView
+        ? this.lobbyView.players.filter(
+            (p) => p.present && p.characterId === def!.id,
+          )
+        : [];
+    const youPicked = picks.some((p) => p.you);
+    const othersPicks = picks.filter((p) => !p.you);
+
     ctx.fillStyle = locked ? TILE_BG_LOCKED : TILE_BG;
     this.roundedRect(ctx, tile.x, tile.y, tile.w, tile.h, 8);
     ctx.fill();
 
-    if (selected) {
-      ctx.strokeStyle = TILE_BORDER_SELECTED;
+    // Border picks the strongest signal: your selection > another player's
+    // selection > hover > neutral.
+    if (selected || youPicked) {
+      // Use your slot color if available (lobby mode), else the canonical
+      // yellow "selected" border.
+      const me = picks.find((p) => p.you);
+      ctx.strokeStyle = me?.color ?? TILE_BORDER_SELECTED;
       ctx.lineWidth = 3;
+    } else if (othersPicks.length > 0) {
+      // Border in the first other-picker's color (rest shown as tags below).
+      ctx.strokeStyle = othersPicks[0].color ?? TILE_BORDER_HOVER;
+      ctx.lineWidth = 2;
     } else if (hovered) {
       ctx.strokeStyle = TILE_BORDER_HOVER;
       ctx.lineWidth = 2;
@@ -506,14 +556,59 @@ export class SelectScreen {
 
     // Filled tile: mini portrait + name.
     const cx = tile.x + tile.w / 2;
-    const cy = tile.y + tile.h / 2 - 6;
-    this.drawPortrait(ctx, def!, cx, cy, 0.9);
+    // Lift the portrait slightly if we have pick tags to render below.
+    const portraitOffset = picks.length > 0 ? -10 : -6;
+    const cy = tile.y + tile.h / 2 + portraitOffset;
+    this.drawPortrait(ctx, def!, cx, cy, picks.length > 0 ? 0.78 : 0.9);
 
     ctx.fillStyle = TEXT;
     ctx.font = "bold 11px system-ui, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "alphabetic";
-    ctx.fillText(def!.name, tile.x + tile.w / 2, tile.y + tile.h - 8);
+    ctx.fillText(
+      def!.name,
+      tile.x + tile.w / 2,
+      tile.y + tile.h - (picks.length > 0 ? 22 : 8),
+    );
+
+    // Player pick tags at the bottom of the tile — colored dot + short
+    // name. Stack up to 2; show "+N" if more.
+    if (picks.length > 0) {
+      const maxRows = 2;
+      const visible = picks.slice(0, maxRows);
+      const extra = picks.length - visible.length;
+      ctx.font = "bold 9px system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      let ty = tile.y + tile.h - 12;
+      for (const p of visible) {
+        // Dot
+        ctx.fillStyle = p.color ?? "#888";
+        ctx.beginPath();
+        ctx.arc(tile.x + 8, ty, 3, 0, Math.PI * 2);
+        ctx.fill();
+        // Name (truncated)
+        const name = this.shortName(p.label);
+        ctx.fillStyle = p.color ?? TEXT;
+        ctx.fillText(name, tile.x + 15, ty);
+        ty += 11;
+      }
+      if (extra > 0) {
+        ctx.fillStyle = TEXT_DIM;
+        ctx.fillText(`+${extra}`, tile.x + 15, ty);
+      }
+    }
+    ctx.textBaseline = "alphabetic";
+    ctx.textAlign = "left";
+  }
+
+  // Compact "<name> (you)" → "<name>" for the tile tag, capped to keep
+  // the tile readable. Drops the "(you)" suffix and any role tag.
+  private shortName(label: string): string {
+    let s = label.replace(/\s*\(you\)\s*$/i, "");
+    const max = 9;
+    if (s.length > max) s = s.slice(0, max - 1) + "…";
+    return s;
   }
 
   private drawDetailCard(
