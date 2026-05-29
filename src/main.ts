@@ -13,7 +13,7 @@ import { Renderer, createCamera, screenToWorld } from "./render/renderer";
 import type { Camera } from "./render/renderer";
 import { OneVOneMode } from "./modes/oneVOne";
 import { FOREST_ARENA_CONFIG, buildForest } from "./arenas/forest";
-import { SlagyAI, MatchAI } from "./ai/ai";
+import { createAIController } from "./ai/ai";
 import { drawHUD } from "./ui/hud";
 import { TouchControls } from "./ui/touchControls";
 import { SelectScreen } from "./ui/selectScreen";
@@ -43,12 +43,21 @@ function logicalSize() {
 
 // --- Round constants ---
 const TIME_LIMIT_SECONDS = 5 * 60;
-const OBJECTIVES_REQUIRED = 4;
-// Default AI opponent per role. When the player picks a hunter, the AI
-// plays this survivor (and vice versa). Constrained by which characters
-// have AI controllers — extend as new AIs land.
-const DEFAULT_AI_HUNTER = "slagy";
-const DEFAULT_AI_SURVIVOR = "match";
+// How many objectives spawn in the arena, and how many the survivor must
+// collect to win. Kept as one source of truth so they can't drift — set
+// OBJECTIVES_REQUIRED < OBJECTIVE_COUNT only if you intend "collect N of M".
+const OBJECTIVE_COUNT = 5;
+const OBJECTIVES_REQUIRED = 5;
+// Characters with working AI controllers, by role. When the player picks a
+// side, the opposite side's character is drawn at random from the matching
+// pool — so playing as a hunter sometimes faces Match, sometimes Magnek.
+// Extend these as new AI controllers land in ai.ts (createAIController).
+const AI_HUNTERS = ["slagy"];
+const AI_SURVIVORS = ["match", "magnek"];
+
+function pickRandom<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
 
 // --- Persistent singletons (alive across scene transitions) ---
 const input = createInput();
@@ -117,16 +126,16 @@ function startRound(chosenId: string): void {
   let playerRole: "hunter" | "survivor";
   if (def.role === "hunter") {
     hunterId = chosenId;
-    survivorId = DEFAULT_AI_SURVIVOR;
+    survivorId = pickRandom(AI_SURVIVORS);
     playerRole = "hunter";
   } else {
-    hunterId = DEFAULT_AI_HUNTER;
+    hunterId = pickRandom(AI_HUNTERS);
     survivorId = chosenId;
     playerRole = "survivor";
   }
 
   const world = new World(FOREST_ARENA_CONFIG, TIME_LIMIT_SECONDS);
-  buildForest(world, Math.floor(Math.random() * 1e9), 5);
+  buildForest(world, Math.floor(Math.random() * 1e9), OBJECTIVE_COUNT);
 
   const mode = new OneVOneMode({
     hunterCharacterId: hunterId,
@@ -139,10 +148,8 @@ function startRound(chosenId: string): void {
   const aiControllers = new Map<number, AIController>();
   for (const c of world.allCharacters()) {
     if (c.isPlayer) continue;
-    if (c.characterId === "slagy") aiControllers.set(c.id, new SlagyAI());
-    else if (c.characterId === "match") aiControllers.set(c.id, new MatchAI());
-    // No MagnekAI yet — Magnek-as-AI would stand still. Guarded by the
-    // DEFAULT_AI_* selection above, but worth noting.
+    const ai = createAIController(c.characterId);
+    if (ai) aiControllers.set(c.id, ai);
   }
 
   const engine = new Engine({ world, mode, input, aiControllers });
