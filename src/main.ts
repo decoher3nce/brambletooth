@@ -1,9 +1,12 @@
-// Main entry point. Two top-level app modes, fixed at boot:
-//   - "local":  single-player vs AI. select -> playing with a local engine.
-//   - "net":    two-device play via the authoritative server. lobby ->
-//               playing, rendering server snapshots and streaming input.
-// Enter networked mode with ?net=1 (a proper menu lands in P4). The local
-// path below is untouched by the networked path.
+// Main entry point.
+//
+// Flow: a title screen offers Single Player (local vs AI) or Two Players
+// (networked via the authoritative server). The chosen mode is fixed for
+// the session. URL shortcuts skip the title: ?solo -> local, ?net=1 -> net.
+//
+//   local: select -> playing, local engine.
+//   net:   connecting -> lobby -> playing, rendering server snapshots and
+//          streaming input. Each device follows its own player.
 
 import "./abilities/abilities"; // ensure abilities are registered
 import { World } from "./core/world";
@@ -18,6 +21,7 @@ import { HumanController } from "./core/humanController";
 import { drawHUD } from "./ui/hud";
 import { TouchControls } from "./ui/touchControls";
 import { SelectScreen } from "./ui/selectScreen";
+import type { LobbyView } from "./ui/selectScreen";
 import { CHARACTERS } from "./characters/characters";
 import type { Controller } from "./ai/ai";
 import { NetClient, resolveServerUrl } from "./net/netClient";
@@ -27,7 +31,6 @@ const canvas = document.getElementById("game") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d", { alpha: false })!;
 
 function resizeCanvas() {
-  // Match device pixel ratio for crisp lines but cap to keep perf sane.
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const w = window.innerWidth;
   const h = window.innerHeight;
@@ -45,12 +48,8 @@ function logicalSize() {
 
 // --- Round constants ---
 const TIME_LIMIT_SECONDS = 5 * 60;
-// How many objectives spawn in the arena, and how many the survivor must
-// collect to win. Kept as one source of truth so they can't drift — set
-// OBJECTIVES_REQUIRED < OBJECTIVE_COUNT only if you intend "collect N of M".
 const OBJECTIVE_COUNT = 5;
 const OBJECTIVES_REQUIRED = 5;
-// Characters with working AI controllers, by role (local mode only).
 const AI_HUNTERS = ["slagy"];
 const AI_SURVIVORS = ["match", "magnek"];
 
@@ -58,60 +57,81 @@ function pickRandom<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-// --- App mode (fixed at boot) ---
-type AppMode = "local" | "net";
-const appMode: AppMode = new URLSearchParams(location.search).has("net")
-  ? "net"
-  : "local";
+type Rect = { x: number; y: number; w: number; h: number };
+function inRect(p: { x: number; y: number }, r: Rect): boolean {
+  return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+}
 
-// --- Persistent singletons (alive across scene transitions) ---
+// --- App mode (chosen at the title, or via URL shortcut) ---
+type AppMode = "local" | "net";
+let appMode: AppMode | null = null;
+let started = false;
+let net: NetClient | null = null;
+
+function chooseMode(mode: AppMode): void {
+  appMode = mode;
+  started = true;
+  if (mode === "net" && !net) net = new NetClient(resolveServerUrl());
+}
+
+// --- Persistent singletons ---
 const input = createInput();
 bindInput(canvas, input);
-
 const renderer = new Renderer(ctx, canvas);
 renderer.setDimensionSource(() => logicalSize());
 
 // --- Local scene state ---
 type Scene = "select" | "playing";
 let scene: Scene = "select";
-
 interface PlayState {
   world: World;
   mode: OneVOneMode;
   engine: Engine;
   controllers: Map<number, Controller>;
   cam: Camera;
-  chosenCharacterId: string; // for restoring select-screen highlight
+  chosenCharacterId: string;
 }
 let play: PlayState | null = null;
 
-// --- Networked state ---
-const net: NetClient | null =
-  appMode === "net" ? new NetClient(resolveServerUrl()) : null;
-// View world: a throwaway World we stuff each snapshot's entities into, so
-// the existing renderer/HUD (which take a World) work unchanged on remote
-// state. The client's own character is flagged isPlayer for camera + HUD.
+// --- Networked render state ---
 let netViewWorld: World | null = null;
 const netCam: Camera = createCamera({ x: 0, y: 0 });
 let netCamInit = false;
+// One-shot: broadcast our default highlight when we (re)enter the lobby so
+// the opponent sees our pick without us tapping. Reset when we leave lobby.
+let netInitialPickSent = false;
 
-// --- Select screen (shared by local select and net lobby) ---
+// --- Select screen (local picker + networked lobby) ---
 const selectScreen = new SelectScreen();
 selectScreen.bind(canvas, logicalSize, {
   onStart: (chosenId) => {
     if (appMode === "net" && net) {
-      net.select(chosenId);
-      net.ready(true);
-    } else {
+      // READY toggle: ready up with the current pick, or cancel if ready.
+      const me = net.lobby.find((p) => p.slot === net!.slot);
+      if (me?.ready) {
+        net.ready(false);
+      } else {
+        net.select(chosenId);
+        net.ready(true);
+      }
+    } else if (appMode === "local") {
       startRound(chosenId);
     }
   },
+  onSelect: (id) => {
+    // Live pick broadcast so the opponent sees it immediately.
+    if (appMode === "net" && net && net.phase === "lobby") net.select(id);
+  },
   isTouchMode: () => input.isTouchMode,
   isActive: () =>
-    appMode === "net" ? net?.phase === "lobby" : scene === "select",
+    !started
+      ? false
+      : appMode === "net"
+        ? net?.phase === "lobby"
+        : scene === "select",
 });
 
-// --- Touch controls (bound once; net-aware hooks) ---
+// --- Touch controls (mode-aware hooks) ---
 const touchControls = new TouchControls();
 touchControls.bind(canvas, logicalSize, {
   input,
@@ -120,22 +140,49 @@ touchControls.bind(canvas, logicalSize, {
     appMode === "net" ? (net?.outcome ?? "ongoing") : (play?.engine.outcome ?? "ongoing"),
   isPaused: () => (appMode === "net" ? false : (play?.engine.paused ?? false)),
   togglePause: () => {
-    if (appMode !== "net" && play) play.engine.paused = !play.engine.paused;
+    if (appMode === "local" && play) play.engine.paused = !play.engine.paused;
   },
   restart: () => {
     if (appMode === "net") net?.restart();
-    else goToSelect();
+    else if (appMode === "local") goToSelect();
   },
   isPlaying: () =>
     appMode === "net"
       ? net?.phase === "playing" || net?.phase === "ended"
-      : scene === "playing",
+      : appMode === "local"
+        ? scene === "playing"
+        : false,
 });
+
+// --- Title screen input (gated to !started) ---
+let titleButtons: { single: Rect; two: Rect } | null = null;
+function handleTitleTap(p: { x: number; y: number }): void {
+  if (started || !titleButtons) return;
+  if (inRect(p, titleButtons.single)) chooseMode("local");
+  else if (inRect(p, titleButtons.two)) chooseMode("net");
+}
+canvas.addEventListener("mousedown", (ev) => {
+  if (started) return;
+  const r = canvas.getBoundingClientRect();
+  handleTitleTap({ x: ev.clientX - r.left, y: ev.clientY - r.top });
+});
+canvas.addEventListener(
+  "touchstart",
+  (ev) => {
+    if (started) return;
+    const t = ev.changedTouches[0];
+    if (!t) return;
+    ev.preventDefault();
+    const r = canvas.getBoundingClientRect();
+    handleTitleTap({ x: t.clientX - r.left, y: t.clientY - r.top });
+  },
+  { passive: false },
+);
 
 // --- Keyboard ---
 window.addEventListener("keydown", (ev) => {
+  if (!started) return;
   if (appMode === "net") {
-    // No pause in networked play (server keeps running). R restarts after a round.
     if (net && net.phase === "ended" && ev.key.toLowerCase() === "r") net.restart();
     return;
   }
@@ -204,6 +251,7 @@ function goToSelect(): void {
 
 function frameLocal(dt: number, dims: { w: number; h: number }): void {
   if (scene === "select") {
+    selectScreen.setLobbyView(null);
     selectScreen.draw(ctx, dims);
     return;
   }
@@ -230,13 +278,42 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
 
 // ===== Networked mode =====
 
+// Build the lobby overlay for the select screen from the latest server
+// lobby broadcast. Slots with no connected player render as "waiting".
+function buildLobbyView(): LobbyView {
+  const n = net!;
+  const players = [0, 1].map((slot) => {
+    const p = n.lobby.find((x) => x.slot === slot);
+    if (!p) {
+      return { label: `Player ${slot + 1}`, characterName: null, ready: false, present: false };
+    }
+    const you = slot === n.slot;
+    return {
+      label: `Player ${slot + 1}${you ? " (you)" : ""}`,
+      characterName: p.characterId ? (CHARACTERS[p.characterId]?.name ?? p.characterId) : null,
+      ready: p.ready,
+      present: true,
+    };
+  });
+  const me = n.lobby.find((p) => p.slot === n.slot);
+  const amReady = me?.ready ?? false;
+  return {
+    title: "TWO-PLAYER LOBBY",
+    players,
+    status: n.blockedReason,
+    buttonLabel: amReady ? "READY ✓ — TAP TO CANCEL" : "READY UP",
+    buttonEnabled: true,
+  };
+}
+
 function frameNet(dt: number, dims: { w: number; h: number }): void {
   if (!net) return;
 
   switch (net.phase) {
     case "connecting":
       netCamInit = false;
-      drawCenter(dims, "Connecting to server…", net ? resolveServerUrl() : "");
+      netInitialPickSent = false;
+      drawCenter(dims, "Connecting to server…", resolveServerUrl());
       return;
     case "full":
       netCamInit = false;
@@ -246,13 +323,18 @@ function frameNet(dt: number, dims: { w: number; h: number }): void {
       netCamInit = false;
       drawCenter(dims, "Disconnected", "Lost connection to the server. Reload to retry.");
       return;
-    case "lobby": {
+    case "lobby":
       netCamInit = false;
+      // Broadcast our default highlight once so it shows on the opponent's
+      // panel without requiring an explicit tap.
+      if (!netInitialPickSent && net.slot !== null) {
+        const sel = selectScreen.getSelected();
+        if (sel) net.select(sel);
+        netInitialPickSent = true;
+      }
+      selectScreen.setLobbyView(buildLobbyView());
       selectScreen.draw(ctx, dims);
-      // Banner: either "waiting" guidance or the start-block reason.
-      if (net.blockedReason) drawBanner(dims, net.blockedReason);
       return;
-    }
     case "playing":
     case "ended": {
       const snap = net.snapshot;
@@ -264,7 +346,6 @@ function frameNet(dt: number, dims: { w: number; h: number }): void {
       netViewWorld.entities = snap.entities;
       netViewWorld.elapsed = snap.elapsed;
       netViewWorld.timeLimit = snap.timeLimit;
-      // Flag our own character so playerCharacter()/camera/HUD track it.
       for (const e of snap.entities) {
         if (e.kind === "character") e.isPlayer = e.id === net.yourEntityId;
       }
@@ -279,8 +360,6 @@ function frameNet(dt: number, dims: { w: number; h: number }): void {
         netCam.target.y += (me.pos.y - netCam.target.y) * Math.min(1, dt * 6);
       }
 
-      // Project aim and stream input up. pressedAbilities are edge events —
-      // clear them after sending so each press transmits once.
       input.mouseWorld = screenToWorld(input.mouseScreen, netCam, renderer.cw, renderer.ch);
       if (net.phase === "playing") net.sendInput(input);
       input.pressedAbilities.clear();
@@ -297,7 +376,68 @@ function frameNet(dt: number, dims: { w: number; h: number }): void {
   }
 }
 
-// Centered title + subtitle over a dimmed background (connecting/full/etc).
+// ===== Title screen =====
+
+function frameTitle(dims: { w: number; h: number }): void {
+  const cw = dims.w;
+  const ch = dims.h;
+  ctx.fillStyle = "#1a2421";
+  ctx.fillRect(0, 0, cw, ch);
+
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.font = "bold 52px system-ui, sans-serif";
+  ctx.fillText("BRAMBLETOOTH", cw / 2, ch * 0.3);
+  ctx.fillStyle = "rgba(255,255,255,0.5)";
+  ctx.font = "15px system-ui, sans-serif";
+  ctx.fillText("Asymmetric isometric arena — 1v1 hunter vs survivor", cw / 2, ch * 0.3 + 30);
+
+  const bw = 300;
+  const bh = 64;
+  const gap = 20;
+  const bx = cw / 2 - bw / 2;
+  const by = ch * 0.5;
+  const single: Rect = { x: bx, y: by, w: bw, h: bh };
+  const two: Rect = { x: bx, y: by + bh + gap, w: bw, h: bh };
+  titleButtons = { single, two };
+
+  drawButton(single, "SINGLE PLAYER", true);
+  drawButton(two, "TWO PLAYERS", true);
+
+  ctx.fillStyle = "rgba(255,255,255,0.4)";
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.fillText(
+    "Two Players connects to the game server over your network.",
+    cw / 2,
+    by + 2 * bh + gap + 34,
+  );
+}
+
+function drawButton(r: Rect, label: string, primary: boolean): void {
+  ctx.fillStyle = primary ? "#ffd84a" : "rgba(40,52,48,0.9)";
+  roundRect(r, 12);
+  ctx.fill();
+  ctx.fillStyle = primary ? "#1a2421" : "#fff";
+  ctx.font = "bold 20px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2);
+  ctx.textBaseline = "alphabetic";
+}
+
+function roundRect(r: Rect, rad: number): void {
+  const { x, y, w, h } = r;
+  ctx.beginPath();
+  ctx.moveTo(x + rad, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rad);
+  ctx.arcTo(x + w, y + h, x, y + h, rad);
+  ctx.arcTo(x, y + h, x, y, rad);
+  ctx.arcTo(x, y, x + w, y, rad);
+  ctx.closePath();
+}
+
+// Shared full-screen status text (net connecting/full/disconnected/start).
 function drawCenter(dims: { w: number; h: number }, title: string, subtitle: string): void {
   ctx.fillStyle = "#1a2421";
   ctx.fillRect(0, 0, dims.w, dims.h);
@@ -313,28 +453,20 @@ function drawCenter(dims: { w: number; h: number }, title: string, subtitle: str
   }
 }
 
-// Small status banner near the top (used in the net lobby while waiting).
-function drawBanner(dims: { w: number; h: number }, text: string): void {
-  ctx.font = "bold 14px system-ui, sans-serif";
-  const w = ctx.measureText(text).width + 32;
-  const x = (dims.w - w) / 2;
-  const y = dims.h - 130;
-  ctx.fillStyle = "rgba(0,0,0,0.6)";
-  ctx.fillRect(x, y, w, 32);
-  ctx.fillStyle = "#ffd84a";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(text, dims.w / 2, y + 16);
-}
+// --- URL shortcuts (skip the title) ---
+const params = new URLSearchParams(location.search);
+if (params.has("net")) chooseMode("net");
+else if (params.has("solo")) chooseMode("local");
 
 // --- Loop ---
 let last = performance.now();
 function frame(now: number) {
-  const dt = Math.min(0.05, (now - last) / 1000); // clamp big jumps
+  const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   const dims = logicalSize();
 
-  if (appMode === "net") frameNet(dt, dims);
+  if (!started) frameTitle(dims);
+  else if (appMode === "net") frameNet(dt, dims);
   else frameLocal(dt, dims);
 
   requestAnimationFrame(frame);

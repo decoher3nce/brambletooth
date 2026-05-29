@@ -19,12 +19,35 @@ import type { CharacterDef, CharacterRole } from "../characters/characters";
 import { ABILITIES } from "../abilities/abilities";
 
 export interface SelectHooks {
+  // Fired when the primary button is pressed (START locally; READY toggle
+  // in a networked lobby). Receives the current selection.
   onStart: (characterId: string) => void;
+  // Fired whenever the selection changes (tap / arrow). Networked lobby
+  // uses it to broadcast the pick live so the opponent sees it.
+  onSelect?: (characterId: string) => void;
   isTouchMode: () => boolean;
   // Returns true when the select scene is the active scene. When false,
   // all input handlers short-circuit — but the listeners stay bound to
   // avoid leaking/reattaching across scene transitions.
   isActive: () => boolean;
+}
+
+// Optional overlay that turns the picker into a two-player networked lobby:
+// a status line, a panel showing both players' picks + ready state, and a
+// relabeled primary button. When null, the screen renders as the local
+// single-player picker.
+export interface LobbyPlayerLine {
+  label: string; // e.g. "Player 1 (you)"
+  characterName: string | null; // resolved name, or null while picking
+  ready: boolean;
+  present: boolean; // false = slot empty / waiting to connect
+}
+export interface LobbyView {
+  title: string;
+  players: LobbyPlayerLine[];
+  status: string | null; // block reason / "Starting…" — null when hidden
+  buttonLabel: string;
+  buttonEnabled: boolean;
 }
 
 interface TileRect {
@@ -78,6 +101,15 @@ export class SelectScreen {
   private startBtn: ButtonRect | null = null;
   // Mouse position in CSS pixels — used to derive hover on desktop.
   private mouse: { x: number; y: number } | null = null;
+  // Set in bind(); lets non-handler methods (moveSelection) fire onSelect.
+  private hooks: SelectHooks | null = null;
+  // Non-null in networked lobby mode (set each frame by main before draw).
+  private lobbyView: LobbyView | null = null;
+
+  // Toggle networked-lobby chrome. Pass null to render the local picker.
+  setLobbyView(view: LobbyView | null): void {
+    this.lobbyView = view;
+  }
 
   constructor() {
     // Default selection: first survivor in CHARACTERS so START is
@@ -95,11 +127,18 @@ export class SelectScreen {
     }
   }
 
+  // Current selection — networked lobby broadcasts this on entry so the
+  // default highlight shows on the opponent's screen without a manual tap.
+  getSelected(): string | null {
+    return this.selectedId;
+  }
+
   bind(
     canvas: HTMLCanvasElement,
     getDims: () => { w: number; h: number },
     hooks: SelectHooks,
   ): void {
+    this.hooks = hooks;
     const pointFromMouse = (ev: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
       return { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
@@ -202,9 +241,10 @@ export class SelectScreen {
     if (list.length === 0) return;
     idx = Math.max(0, Math.min(list.length - 1, idx));
     const target = list[idx];
-    if (target) {
+    if (target && target.id !== this.selectedId) {
       this.selectedId = target.id;
       this.hoverId = null;
+      this.hooks?.onSelect?.(target.id);
     }
   }
 
@@ -218,10 +258,12 @@ export class SelectScreen {
         p.x >= tile.x && p.x <= tile.x + tile.w &&
         p.y >= tile.y && p.y <= tile.y + tile.h
       ) {
+        const changed = tile.characterId !== this.selectedId;
         this.selectedId = tile.characterId;
         // On touch, we also want the detail panel to show the just-tapped
         // character — clear hover so the displayed character == selected.
         this.hoverId = null;
+        if (changed) hooks.onSelect?.(tile.characterId);
         return;
       }
     }
@@ -272,12 +314,12 @@ export class SelectScreen {
     ctx.fillStyle = BG_COLOR;
     ctx.fillRect(0, 0, cw, ch);
 
-    // Title.
+    // Title (lobby title in networked mode).
     ctx.fillStyle = TEXT;
     ctx.font = "bold 28px system-ui, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "alphabetic";
-    ctx.fillText("CHOOSE YOUR CHARACTER", cw / 2, 56);
+    ctx.fillText(this.lobbyView?.title ?? "CHOOSE YOUR CHARACTER", cw / 2, 56);
 
     // Layout block: grid on left, detail card on right, centered as a unit.
     const layoutW = ROW_WIDTH + DETAIL_GAP + DETAIL_W;
@@ -318,13 +360,77 @@ export class SelectScreen {
     // Detail card.
     this.drawDetailCard(ctx, detailX, gridTop, DETAIL_W, DETAIL_H);
 
-    // START button: under the grid, centered on grid column.
-    const startW = 220;
+    // Networked lobby panel (both players' picks + ready) below the grid.
+    if (this.lobbyView) {
+      this.drawLobbyPanel(ctx, gridX, gridBottom + 28, ROW_WIDTH, this.lobbyView);
+    }
+
+    // Primary button: under the grid, centered on grid column. Label and
+    // enabled state come from the lobby view when networked.
+    const startW = 240;
     const startH = 56;
     const startX = gridX + (ROW_WIDTH - startW) / 2;
     const startY = Math.max(gridBottom + 36, ch - 100);
     this.startBtn = { x: startX, y: startY, w: startW, h: startH };
-    this.drawStartButton(ctx, this.startBtn, this.selectedId !== null);
+    const label = this.lobbyView ? this.lobbyView.buttonLabel : "START";
+    const enabled = this.lobbyView
+      ? this.lobbyView.buttonEnabled
+      : this.selectedId !== null;
+    this.drawStartButton(ctx, this.startBtn, enabled, label);
+  }
+
+  // Two-row panel: Player 1 / Player 2 with pick + ready state, plus a
+  // status line beneath. Only drawn in networked lobby mode.
+  private drawLobbyPanel(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    w: number,
+    view: LobbyView,
+  ): void {
+    const rowH = 30;
+    const panelH = rowH * view.players.length + 14;
+    ctx.fillStyle = PANEL_BG;
+    this.roundedRect(ctx, x, y, w, panelH, 8);
+    ctx.fill();
+    ctx.strokeStyle = PANEL_STROKE;
+    ctx.lineWidth = 1;
+    this.roundedRect(ctx, x, y, w, panelH, 8);
+    ctx.stroke();
+
+    view.players.forEach((p, i) => {
+      const ry = y + 10 + i * rowH;
+      ctx.textBaseline = "middle";
+      // Player label.
+      ctx.fillStyle = p.present ? TEXT : TEXT_DIM;
+      ctx.font = "bold 13px system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText(p.label, x + 14, ry + rowH / 2 - 2);
+      // Pick.
+      ctx.font = "13px system-ui, sans-serif";
+      ctx.fillStyle = p.present ? TEXT_DIM : TEXT_LOCKED;
+      const pick = !p.present
+        ? "waiting to join…"
+        : (p.characterName ?? "picking…");
+      ctx.textAlign = "center";
+      ctx.fillText(pick, x + w / 2, ry + rowH / 2 - 2);
+      // Ready badge.
+      ctx.textAlign = "right";
+      if (p.present) {
+        ctx.fillStyle = p.ready ? "#48d0a0" : TEXT_DIM;
+        ctx.font = "bold 12px system-ui, sans-serif";
+        ctx.fillText(p.ready ? "READY ✓" : "not ready", x + w - 14, ry + rowH / 2 - 2);
+      }
+    });
+
+    if (view.status) {
+      ctx.fillStyle = ACCENT;
+      ctx.font = "bold 13px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "alphabetic";
+      ctx.fillText(view.status, x + w / 2, y + panelH + 22);
+    }
+    ctx.textBaseline = "alphabetic";
   }
 
   private drawRoleSection(
@@ -568,6 +674,7 @@ export class SelectScreen {
     ctx: CanvasRenderingContext2D,
     b: ButtonRect,
     enabled: boolean,
+    label: string,
   ): void {
     ctx.fillStyle = enabled ? ACCENT : "rgba(255, 216, 74, 0.25)";
     this.roundedRect(ctx, b.x, b.y, b.w, b.h, 10);
@@ -576,7 +683,7 @@ export class SelectScreen {
     ctx.font = "bold 18px system-ui, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText("START", b.x + b.w / 2, b.y + b.h / 2);
+    ctx.fillText(label, b.x + b.w / 2, b.y + b.h / 2);
   }
 
   private roundedRect(
