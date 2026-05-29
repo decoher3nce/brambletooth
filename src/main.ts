@@ -80,9 +80,11 @@ function chooseMode(mode: AppMode): void {
   if (mode === "net" && !net) net = new NetClient(resolveServerUrl(), getName());
 }
 
-// ---- Persistent profile (localStorage) ----
+// ---- Persistent profile (localStorage; synced to server when logged in) ----
 const NAME_KEY = "brambletooth.name";
 const POINTS_KEY = "brambletooth.points";
+const PIN_KEY = "brambletooth.pin";
+const LOGGEDIN_KEY = "brambletooth.loggedIn";
 
 function getName(): string {
   try { return (localStorage.getItem(NAME_KEY) ?? "").slice(0, 24); }
@@ -95,8 +97,119 @@ function getPoints(): number {
   try { return Number(localStorage.getItem(POINTS_KEY) ?? "0") || 0; }
   catch { return 0; }
 }
+function setPointsLocal(n: number): void {
+  try { localStorage.setItem(POINTS_KEY, String(Math.max(0, Math.floor(n)))); } catch { /* ignore */ }
+}
 function addPoints(n: number): void {
-  try { localStorage.setItem(POINTS_KEY, String(getPoints() + n)); } catch { /* ignore */ }
+  setPointsLocal(getPoints() + n);
+  scheduleProfileSync();
+}
+
+// ---- Server-backed profile (login + sync) ----
+const PROFILE_API_LOGIN = () => `${profileApiBase()}/api/login`;
+const PROFILE_API_SYNC = () => `${profileApiBase()}/api/profile/sync`;
+function profileApiBase(): string {
+  // Same host as the WS server (8787). Vite (5173) on the same hostname.
+  const params = new URLSearchParams(location.search);
+  const override = params.get("server");
+  if (override) {
+    // override could be "host:port" or a full ws:// URL.
+    const trimmed = override.replace(/^wss?:\/\//, "");
+    return `http://${trimmed}`;
+  }
+  return `http://${location.hostname}:8787`;
+}
+
+let loggedIn = false;
+let loginError: string | null = null;
+let loginPending = false;
+let syncTimer: ReturnType<typeof setTimeout> | null = null;
+
+function getPin(): string {
+  try { return localStorage.getItem(PIN_KEY) ?? ""; }
+  catch { return ""; }
+}
+function setPin(p: string): void {
+  try { localStorage.setItem(PIN_KEY, p); } catch { /* ignore */ }
+}
+
+interface ProfileResponse {
+  ok: boolean;
+  profile?: { name: string; points: number; achievements?: string[] };
+  error?: string;
+}
+
+async function tryLogin(name: string, pin: string): Promise<boolean> {
+  loginPending = true;
+  loginError = null;
+  try {
+    const r = await fetch(PROFILE_API_LOGIN(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, pin }),
+    });
+    const body = (await r.json()) as ProfileResponse;
+    if (!body.ok || !body.profile) {
+      loginError = body.error ?? "Login failed";
+      return false;
+    }
+    setName(body.profile.name);
+    setPin(pin);
+    setPointsLocal(body.profile.points);
+    loggedIn = true;
+    try { localStorage.setItem(LOGGEDIN_KEY, "1"); } catch { /* ignore */ }
+    nameInput.value = body.profile.name;
+    pinInput.value = pin;
+    return true;
+  } catch (err) {
+    loginError = `Can't reach the server (${(err as Error).message ?? "network"})`;
+    return false;
+  } finally {
+    loginPending = false;
+  }
+}
+
+function tryLogout(): void {
+  loggedIn = false;
+  loginError = null;
+  try { localStorage.removeItem(LOGGEDIN_KEY); localStorage.removeItem(PIN_KEY); } catch { /* ignore */ }
+  pinInput.value = "";
+  // Keep the local name + points — they're already shown without login.
+}
+
+// Debounce profile sync — avoid spamming the server on rapid point events.
+function scheduleProfileSync(): void {
+  if (!loggedIn) return;
+  if (syncTimer) clearTimeout(syncTimer);
+  syncTimer = setTimeout(async () => {
+    const name = getName();
+    const pin = getPin();
+    if (!name || !pin) return;
+    try {
+      const r = await fetch(PROFILE_API_SYNC(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, pin, points: getPoints() }),
+      });
+      const body = (await r.json()) as ProfileResponse;
+      if (body.ok && body.profile) {
+        // Server may report a higher number (synced from another device).
+        setPointsLocal(body.profile.points);
+      }
+    } catch { /* swallow — local is the source of truth until next sync */ }
+  }, 800);
+}
+
+// On page load: if the user was previously logged in, try silently with
+// stored credentials. Falls through to the inputs if it fails.
+async function autoLoginIfPossible(): Promise<void> {
+  try {
+    if (localStorage.getItem(LOGGEDIN_KEY) !== "1") return;
+  } catch { return; }
+  const name = getName();
+  const pin = getPin();
+  if (!name || !pin) return;
+  await tryLogin(name, pin);
 }
 
 // --- Persistent singletons ---
@@ -188,13 +301,43 @@ touchControls.bind(canvas, logicalSize, {
 // --- Title screen + back-button input ---
 // Title hit zones (only when !started). Back-button hit zone (only when
 // started) is stored separately and computed each draw from logical size.
-let titleButtons: { single: Rect; two: Rect } | null = null;
+let titleButtons: { single: Rect; two: Rect; ffa: Rect } | null = null;
+let titleLoginBtn: Rect | null = null;
+let titleLogoutBtn: Rect | null = null;
+let titleProfileBtn: Rect | null = null;
+let titleProfileBackBtn: Rect | null = null;
+type TitleSubScene = "main" | "profile";
+let titleSubScene: TitleSubScene = "main";
 const backBtnRect: Rect = { x: 20, y: 20, w: 96, h: 36 };
 
 function handleTitleTap(p: { x: number; y: number }): void {
+  // Profile sub-scene: only one button to handle (BACK).
+  if (titleSubScene === "profile") {
+    if (titleProfileBackBtn && inRect(p, titleProfileBackBtn)) {
+      titleSubScene = "main";
+    }
+    return;
+  }
+  // Login button (when not logged in).
+  if (titleLoginBtn && inRect(p, titleLoginBtn)) {
+    const name = nameInput.value.trim();
+    const pin = pinInput.value.trim();
+    void tryLogin(name, pin);
+    return;
+  }
+  // Logged-in actions.
+  if (titleLogoutBtn && inRect(p, titleLogoutBtn)) {
+    tryLogout();
+    return;
+  }
+  if (titleProfileBtn && inRect(p, titleProfileBtn)) {
+    titleSubScene = "profile";
+    return;
+  }
   if (!titleButtons) return;
   if (inRect(p, titleButtons.single)) chooseMode("local");
   else if (inRect(p, titleButtons.two)) chooseMode("net");
+  // FFA is grayed out — coming soon, no handler.
 }
 
 // ---- Pause / Leave Game ----
@@ -322,6 +465,7 @@ function goToTitle(): void {
   netSmoothed.clear();
   appMode = null;
   started = false;
+  titleSubScene = "main";
   // Reset per-round point-award trackers so a fresh round starts clean.
   localAwards = newAwardState();
   netAwards = newAwardState();
@@ -689,19 +833,13 @@ function drawNoticesToast(dims: { w: number; h: number }, notices: NoticeEntry[]
 
 // ===== Title screen =====
 
-// ---- DOM name input (real keyboard on iPad) ----
-// Lives over the canvas; shown only on the title screen.
-const nameInput = document.createElement("input");
-nameInput.type = "text";
-nameInput.maxLength = 24;
-nameInput.placeholder = "Enter your name";
-nameInput.setAttribute("autocomplete", "off");
-nameInput.setAttribute("autocapitalize", "words");
-nameInput.style.cssText = [
+// ---- DOM inputs (real keyboard on iPad) ----
+// Live over the canvas; shown only on the title screen, only when the
+// player isn't logged in.
+const inputBaseStyle = [
   "position: fixed",
   "left: 50%",
   "transform: translateX(-50%)",
-  "width: 320px",
   "height: 44px",
   "padding: 0 14px",
   "font: 600 16px system-ui, sans-serif",
@@ -714,69 +852,340 @@ nameInput.style.cssText = [
   "display: none",
   "z-index: 10",
 ].join("; ");
+
+const nameInput = document.createElement("input");
+nameInput.type = "text";
+nameInput.maxLength = 24;
+nameInput.placeholder = "Enter your name";
+nameInput.setAttribute("autocomplete", "off");
+nameInput.setAttribute("autocapitalize", "words");
+nameInput.style.cssText = inputBaseStyle + "; width: 320px";
 nameInput.value = getName();
 nameInput.addEventListener("input", () => setName(nameInput.value));
-nameInput.addEventListener("focus", () => {
-  nameInput.style.borderColor = "#ffd84a";
-});
-nameInput.addEventListener("blur", () => {
-  nameInput.style.borderColor = "rgba(255, 255, 255, 0.15)";
-});
+nameInput.addEventListener("focus", () => { nameInput.style.borderColor = "#ffd84a"; });
+nameInput.addEventListener("blur", () => { nameInput.style.borderColor = "rgba(255, 255, 255, 0.15)"; });
 document.body.appendChild(nameInput);
 
+const pinInput = document.createElement("input");
+pinInput.type = "tel";
+pinInput.maxLength = 8;
+pinInput.placeholder = "PIN (3-8 digits)";
+pinInput.setAttribute("inputmode", "numeric");
+pinInput.setAttribute("pattern", "\\d*");
+pinInput.setAttribute("autocomplete", "off");
+pinInput.style.cssText = inputBaseStyle + "; width: 200px; text-align: center; letter-spacing: 4px";
+pinInput.addEventListener("focus", () => { pinInput.style.borderColor = "#ffd84a"; });
+pinInput.addEventListener("blur", () => { pinInput.style.borderColor = "rgba(255, 255, 255, 0.15)"; });
+document.body.appendChild(pinInput);
+
 function frameTitle(dims: { w: number; h: number }): void {
+  if (titleSubScene === "profile") {
+    frameProfile(dims);
+    return;
+  }
+
   const cw = dims.w;
   const ch = dims.h;
   ctx.fillStyle = "#1a2421";
   ctx.fillRect(0, 0, cw, ch);
 
+  // ---- Title + dramatic blurb ----
   ctx.fillStyle = "#fff";
   ctx.textAlign = "center";
   ctx.textBaseline = "alphabetic";
   ctx.font = "bold 52px system-ui, sans-serif";
-  ctx.fillText("BRAMBLETOOTH", cw / 2, ch * 0.22);
-  ctx.fillStyle = "rgba(255,255,255,0.5)";
-  ctx.font = "15px system-ui, sans-serif";
-  ctx.fillText("Asymmetric isometric arena — hunter vs survivors", cw / 2, ch * 0.22 + 30);
+  ctx.fillText("BRAMBLETOOTH", cw / 2, ch * 0.14);
 
-  // Profile area: name input (DOM, positioned just below) + points.
-  const inputTop = ch * 0.36;
-  nameInput.style.display = "block";
-  nameInput.style.top = `${inputTop}px`;
-  // Centered label above the input.
   ctx.fillStyle = "rgba(255,255,255,0.55)";
-  ctx.font = "12px system-ui, sans-serif";
-  ctx.fillText("YOUR NAME", cw / 2, inputTop - 10);
-
-  // Points line just below the input.
-  const points = getPoints();
-  ctx.fillStyle = "#ffd84a";
-  ctx.font = "bold 14px system-ui, sans-serif";
+  ctx.font = "15px system-ui, sans-serif";
   ctx.fillText(
-    points === 1 ? "★ 1 point" : `★ ${points} points`,
+    "Hunters vs Survivors in an asymmetric isometric arena.",
     cw / 2,
-    inputTop + 76,
+    ch * 0.14 + 28,
   );
+  ctx.fillStyle = "rgba(208, 72, 72, 0.9)";
+  ctx.font = "italic 13px system-ui, sans-serif";
+  ctx.fillText(
+    "Hunters strike from the shadows — invisible behind every obstacle.",
+    cw / 2,
+    ch * 0.14 + 50,
+  );
+  ctx.fillStyle = "rgba(255,255,255,0.45)";
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.fillText("Sneak. Hunt. Survive.", cw / 2, ch * 0.14 + 70);
 
-  const bw = 300;
-  const bh = 64;
-  const gap = 20;
+  // ---- Profile area: login form OR logged-in greeting ----
+  const profileTop = ch * 0.3;
+  if (loggedIn) {
+    // Hide DOM inputs; render welcome + points + LOGOUT/PROFILE buttons.
+    nameInput.style.display = "none";
+    pinInput.style.display = "none";
+    drawLoggedInProfilePanel(dims, profileTop);
+  } else {
+    drawLoginForm(dims, profileTop);
+  }
+
+  // ---- Mode buttons (three; FFA grayed) ----
+  const bw = 320;
+  const bh = 60;
+  const gap = 14;
   const bx = cw / 2 - bw / 2;
   const by = ch * 0.58;
   const single: Rect = { x: bx, y: by, w: bw, h: bh };
   const two: Rect = { x: bx, y: by + bh + gap, w: bw, h: bh };
-  titleButtons = { single, two };
+  const ffa: Rect = { x: bx, y: by + 2 * (bh + gap), w: bw, h: bh };
+  titleButtons = { single, two, ffa };
 
-  drawButton(single, "SINGLE PLAYER", true);
-  drawButton(two, "MULTIPLAYER", true);
+  drawModeButton(single, "SINGLE PLAYER", "1 vs Computer", true, true);
+  drawModeButton(two, "MULTIPLAYER", "1 vs Many (over your network)", true, true);
+  drawModeButton(ffa, "FREE FOR ALL", "N vs N · with players + computers · COMING SOON", false, false);
+}
 
-  ctx.fillStyle = "rgba(255,255,255,0.4)";
+function drawLoginForm(dims: { w: number; h: number }, top: number): void {
+  const cw = dims.w;
+  nameInput.style.display = "block";
+  nameInput.style.top = `${top}px`;
+  pinInput.style.display = "block";
+  pinInput.style.top = `${top + 54}px`;
+
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
   ctx.font = "12px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("LOG IN to keep your points across devices", cw / 2, top - 10);
+
+  // LOGIN button just below the PIN input.
+  const bw = 200;
+  const bh = 40;
+  const bx = (cw - bw) / 2;
+  const by = top + 54 + 54;
+  titleLoginBtn = { x: bx, y: by, w: bw, h: bh };
+  ctx.fillStyle = loginPending ? "rgba(255,216,74,0.5)" : "#ffd84a";
+  roundRect(titleLoginBtn, 8);
+  ctx.fill();
+  ctx.fillStyle = "#1a2421";
+  ctx.font = "bold 14px system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.fillText(loginPending ? "LOGGING IN…" : "LOG IN", bx + bw / 2, by + bh / 2);
+  ctx.textBaseline = "alphabetic";
+
+  if (loginError) {
+    ctx.fillStyle = "#d04848";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText(loginError, cw / 2, by + bh + 18);
+  } else {
+    ctx.fillStyle = "rgba(255,255,255,0.4)";
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.fillText(
+      "Or just pick a mode below to play without saving points.",
+      cw / 2,
+      by + bh + 18,
+    );
+  }
+
+  // Old local-only points still visible (so the user sees what they have).
+  const points = getPoints();
+  if (points > 0) {
+    ctx.fillStyle = "rgba(255,216,74,0.7)";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText(`Local points: ★ ${points}`, cw / 2, by + bh + 36);
+  }
+
+  // Clear other button refs.
+  titleLogoutBtn = null;
+  titleProfileBtn = null;
+}
+
+function drawLoggedInProfilePanel(dims: { w: number; h: number }, top: number): void {
+  const cw = dims.w;
+  const name = getName() || "Player";
+  const points = getPoints();
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("LOGGED IN", cw / 2, top - 6);
+
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 22px system-ui, sans-serif";
+  ctx.fillText(`Welcome back, ${name}`, cw / 2, top + 20);
+
+  ctx.fillStyle = "#ffd84a";
+  ctx.font = "bold 16px system-ui, sans-serif";
   ctx.fillText(
-    "Multiplayer connects to the game server over your network.",
+    points === 1 ? "★ 1 point" : `★ ${points} points`,
     cw / 2,
-    by + 2 * bh + gap + 34,
+    top + 46,
   );
+
+  // Profile + Logout buttons side-by-side.
+  const bw = 140;
+  const bh = 36;
+  const gap = 12;
+  const groupW = 2 * bw + gap;
+  const startX = (cw - groupW) / 2;
+  const by = top + 64;
+  titleProfileBtn = { x: startX, y: by, w: bw, h: bh };
+  titleLogoutBtn = { x: startX + bw + gap, y: by, w: bw, h: bh };
+
+  ctx.fillStyle = "rgba(40, 52, 48, 0.95)";
+  roundRect(titleProfileBtn, 8);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.2)";
+  ctx.lineWidth = 1;
+  roundRect(titleProfileBtn, 8);
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.fillText("PROFILE", titleProfileBtn.x + bw / 2, by + bh / 2);
+
+  ctx.fillStyle = "rgba(40, 52, 48, 0.95)";
+  roundRect(titleLogoutBtn, 8);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.2)";
+  roundRect(titleLogoutBtn, 8);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.fillText("LOG OUT", titleLogoutBtn.x + bw / 2, by + bh / 2);
+  ctx.textBaseline = "alphabetic";
+
+  titleLoginBtn = null;
+}
+
+// ---- Profile sub-scene ----
+function frameProfile(dims: { w: number; h: number }): void {
+  const cw = dims.w;
+  const ch = dims.h;
+  ctx.fillStyle = "#1a2421";
+  ctx.fillRect(0, 0, cw, ch);
+  nameInput.style.display = "none";
+  pinInput.style.display = "none";
+
+  // Header
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 36px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText("PROFILE", cw / 2, ch * 0.14);
+
+  const name = getName() || "Player";
+  const points = getPoints();
+  ctx.fillStyle = "rgba(255,255,255,0.7)";
+  ctx.font = "16px system-ui, sans-serif";
+  ctx.fillText(name, cw / 2, ch * 0.14 + 28);
+  ctx.fillStyle = "#ffd84a";
+  ctx.font = "bold 18px system-ui, sans-serif";
+  ctx.fillText(
+    points === 1 ? "★ 1 point" : `★ ${points} points`,
+    cw / 2,
+    ch * 0.14 + 54,
+  );
+
+  // Achievements panel — placeholder for future dev.
+  const panelW = Math.min(540, cw - 80);
+  const panelX = (cw - panelW) / 2;
+  const panelY = ch * 0.32;
+  const panelH = 260;
+  ctx.fillStyle = "rgba(20, 30, 28, 0.85)";
+  roundRect({ x: panelX, y: panelY, w: panelW, h: panelH }, 12);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.lineWidth = 1;
+  roundRect({ x: panelX, y: panelY, w: panelW, h: panelH }, 12);
+  ctx.stroke();
+
+  ctx.fillStyle = "#ffd84a";
+  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText("ACHIEVEMENTS", panelX + 16, panelY + 22);
+
+  const achievements: { title: string; desc: string }[] = [
+    { title: "First Blood", desc: "Catch your first survivor as the hunter" },
+    { title: "Collector", desc: "Collect 5 objectives in one round" },
+    { title: "Untouchable", desc: "Survive a full round without dropping below half HP" },
+    { title: "Ghost", desc: "Win a round as the hunter without being seen" },
+    { title: "Veteran", desc: "Reach 100 lifetime points" },
+  ];
+  ctx.fillStyle = "rgba(255,255,255,0.6)";
+  ctx.font = "12px system-ui, sans-serif";
+  let ay = panelY + 50;
+  for (const a of achievements) {
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.fillText(`☐ ${a.title}`, panelX + 16, ay);
+    ctx.fillStyle = "rgba(255,255,255,0.5)";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText(a.desc, panelX + 16, ay + 16);
+    ay += 38;
+  }
+  ctx.fillStyle = "rgba(255,255,255,0.4)";
+  ctx.font = "italic 11px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(
+    "Achievement tracking is coming soon.",
+    cw / 2,
+    panelY + panelH - 14,
+  );
+
+  // BACK button bottom center.
+  const bw = 160;
+  const bh = 40;
+  const bx = (cw - bw) / 2;
+  const by = panelY + panelH + 24;
+  titleProfileBackBtn = { x: bx, y: by, w: bw, h: bh };
+  ctx.fillStyle = "rgba(40, 52, 48, 0.95)";
+  roundRect(titleProfileBackBtn, 8);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.2)";
+  ctx.lineWidth = 1;
+  roundRect(titleProfileBackBtn, 8);
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  ctx.fillText("← BACK", bx + bw / 2, by + bh / 2);
+  ctx.textBaseline = "alphabetic";
+}
+
+// Mode button: bigger, two-line (title + subtitle), with an enabled/disabled
+// look. Disabled is rendered dim and non-interactive.
+function drawModeButton(
+  r: Rect,
+  title: string,
+  subtitle: string,
+  primary: boolean,
+  enabled: boolean,
+): void {
+  const fill = enabled
+    ? primary
+      ? "#ffd84a"
+      : "rgba(40,52,48,0.9)"
+    : "rgba(40,52,48,0.5)";
+  const titleColor = enabled ? (primary ? "#1a2421" : "#fff") : "rgba(255,255,255,0.35)";
+  const subColor = enabled
+    ? primary
+      ? "rgba(26,36,33,0.7)"
+      : "rgba(255,255,255,0.55)"
+    : "rgba(255,255,255,0.25)";
+
+  ctx.fillStyle = fill;
+  roundRect(r, 12);
+  ctx.fill();
+  if (!enabled) {
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.lineWidth = 1;
+    roundRect(r, 12);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = titleColor;
+  ctx.font = "bold 19px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(title, r.x + r.w / 2, r.y + r.h / 2 - 2);
+
+  ctx.fillStyle = subColor;
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.fillText(subtitle, r.x + r.w / 2, r.y + r.h / 2 + 16);
 }
 
 // Small "← BACK" pill in the top-left, drawn over every non-title scene.
@@ -993,16 +1402,26 @@ const params = new URLSearchParams(location.search);
 if (params.has("net")) chooseMode("net");
 else if (params.has("solo")) chooseMode("local");
 
+// Attempt silent login from stored credentials before the first render.
+void autoLoginIfPossible();
+
 // --- Loop ---
 let last = performance.now();
 function frame(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
-  // Hide the name input whenever we're not on the title. frameTitle re-
-  // shows it on the next title frame.
-  if (started && nameInput.style.display !== "none") {
-    nameInput.style.display = "none";
-    if (document.activeElement === nameInput) nameInput.blur();
+  // Hide DOM inputs whenever we're not on the main title sub-scene. The
+  // frame draws re-show them when needed.
+  const inputsShouldHide = started || titleSubScene !== "main" || loggedIn;
+  if (inputsShouldHide) {
+    if (nameInput.style.display !== "none") {
+      nameInput.style.display = "none";
+      if (document.activeElement === nameInput) nameInput.blur();
+    }
+    if (pinInput.style.display !== "none") {
+      pinInput.style.display = "none";
+      if (document.activeElement === pinInput) pinInput.blur();
+    }
   }
   const dims = logicalSize();
 

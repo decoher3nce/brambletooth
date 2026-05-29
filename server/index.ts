@@ -12,8 +12,10 @@
 
 import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { GameSession, picksAreValid } from "./gameSession";
 import type { SessionPick } from "./gameSession";
+import { login as profileLogin, syncProfile } from "./profiles";
 import {
   PROTOCOL_VERSION,
   DEFAULT_PORT,
@@ -431,9 +433,81 @@ function wireConn(conn: ClientConn): void {
   });
 }
 
-const wss = new WebSocketServer({ port: PORT });
+// ---- HTTP routes (profile login + sync) sharing the WS port ----
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Cache-Control": "no-store",
+  });
+  res.end(JSON.stringify(body));
+}
+
+function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    req.on("data", (chunk) => {
+      raw += chunk;
+      // Hard cap (16 KB) — these payloads are tiny.
+      if (raw.length > 16 * 1024) {
+        reject(new Error("payload too large"));
+        req.destroy();
+      }
+    });
+    req.on("end", () => {
+      try { resolve(raw ? JSON.parse(raw) : {}); }
+      catch (err) { reject(err); }
+    });
+    req.on("error", reject);
+  });
+}
+
+const httpServer = createServer(async (req, res) => {
+  // CORS preflight.
+  if (req.method === "OPTIONS") {
+    sendJson(res, 204, {});
+    return;
+  }
+  try {
+    if (req.url === "/api/login" && req.method === "POST") {
+      const body = (await readJsonBody(req)) as { name?: unknown; pin?: unknown };
+      const result = profileLogin(body.name, body.pin);
+      sendJson(res, 200, result);
+      return;
+    }
+    if (req.url === "/api/profile/sync" && req.method === "POST") {
+      const body = (await readJsonBody(req)) as {
+        name?: unknown; pin?: unknown; points?: number; achievements?: string[];
+      };
+      const result = syncProfile(body.name, body.pin, {
+        points: body.points,
+        achievements: body.achievements,
+      });
+      sendJson(res, 200, result);
+      return;
+    }
+    if (req.url === "/" || req.url === "/health") {
+      sendJson(res, 200, { ok: true, service: "brambletooth", protocol: PROTOCOL_VERSION });
+      return;
+    }
+    sendJson(res, 404, { ok: false, error: "Not found" });
+  } catch (err) {
+    sendJson(res, 400, { ok: false, error: (err as Error).message || "Bad request" });
+  }
+});
+
+// Attach WebSocket on the same HTTP server (so ws:// and http:// share :8787).
+const wss = new WebSocketServer({ noServer: true });
+httpServer.on("upgrade", (req, socket, head) => {
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.emit("connection", ws, req);
+  });
+});
 wss.on("connection", onConnection);
-wss.on("listening", () => {
-  console.log(`Brambletooth server listening on ws://0.0.0.0:${PORT}`);
+
+httpServer.listen(PORT, () => {
+  console.log(`Brambletooth server listening on http://0.0.0.0:${PORT} (HTTP + WS)`);
   console.log(`Clients on your Tailnet connect via the host's Tailscale address.`);
 });
