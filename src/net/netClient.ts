@@ -64,13 +64,17 @@ export class NetClient {
   notices: NoticeEntry[] = [];
 
   private url: string;
+  private name: string;
   private ws: WebSocket | null = null;
   private sessionToken: string | null = null;
   private retryIndex = 0;
   private noticeSeq = 1;
+  // Set by disconnect() — onclose then refuses to schedule a reconnect.
+  private intentionalClose = false;
 
-  constructor(url: string) {
+  constructor(url: string, name = "") {
     this.url = url;
+    this.name = name;
     try {
       this.sessionToken = localStorage.getItem(TOKEN_KEY);
     } catch {
@@ -79,14 +83,26 @@ export class NetClient {
     this.connect();
   }
 
+  // Caller (the back button) is leaving the multiplayer session. Close the
+  // WebSocket cleanly and suppress the auto-reconnect that would normally
+  // try to keep us alive across blips. The instance is single-shot — after
+  // disconnect(), callers should drop the reference and build a new one.
+  disconnect(): void {
+    this.intentionalClose = true;
+    if (this.ws) {
+      try { this.ws.close(); } catch { /* already closed */ }
+    }
+  }
+
   private connect(): void {
     this.phase = "connecting";
     const ws = new WebSocket(this.url);
     this.ws = ws;
     ws.onopen = () => {
-      // Auto-send join. Include rejoinToken if we have one; the server uses
-      // it to detect a returning ghost and restore us into the same slot.
+      // Auto-send join. Include name (so the lobby shows it) and rejoinToken
+      // (so the server can restore us into a ghost slot if a round is going).
       const join: ClientMessage = { type: "join" };
+      if (this.name) join.name = this.name;
       if (this.sessionToken) join.rejoinToken = this.sessionToken;
       ws.send(JSON.stringify(join));
     };
@@ -98,6 +114,7 @@ export class NetClient {
       }
     };
     ws.onclose = () => {
+      if (this.intentionalClose) return; // caller closed us; don't retry
       if (this.phase === "full") return; // server rejected; don't retry
       this.phase = "disconnected";
       this.scheduleReconnect();

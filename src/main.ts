@@ -64,7 +64,7 @@ function inRect(p: { x: number; y: number }, r: Rect): boolean {
   return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
 }
 
-// --- App mode (chosen at the title, or via URL shortcut) ---
+// --- App mode (chosen at title; the back button can return us here) ---
 type AppMode = "local" | "net";
 let appMode: AppMode | null = null;
 let started = false;
@@ -73,7 +73,26 @@ let net: NetClient | null = null;
 function chooseMode(mode: AppMode): void {
   appMode = mode;
   started = true;
-  if (mode === "net" && !net) net = new NetClient(resolveServerUrl());
+  if (mode === "net" && !net) net = new NetClient(resolveServerUrl(), getName());
+}
+
+// ---- Persistent profile (localStorage) ----
+const NAME_KEY = "brambletooth.name";
+const POINTS_KEY = "brambletooth.points";
+
+function getName(): string {
+  try { return (localStorage.getItem(NAME_KEY) ?? "").slice(0, 24); }
+  catch { return ""; }
+}
+function setName(name: string): void {
+  try { localStorage.setItem(NAME_KEY, name.slice(0, 24)); } catch { /* private mode */ }
+}
+function getPoints(): number {
+  try { return Number(localStorage.getItem(POINTS_KEY) ?? "0") || 0; }
+  catch { return 0; }
+}
+function addPoints(n: number): void {
+  try { localStorage.setItem(POINTS_KEY, String(getPoints() + n)); } catch { /* ignore */ }
 }
 
 // --- Persistent singletons ---
@@ -160,30 +179,70 @@ touchControls.bind(canvas, logicalSize, {
         : false,
 });
 
-// --- Title screen input (gated to !started) ---
+// --- Title screen + back-button input ---
+// Title hit zones (only when !started). Back-button hit zone (only when
+// started) is stored separately and computed each draw from logical size.
 let titleButtons: { single: Rect; two: Rect } | null = null;
+const backBtnRect: Rect = { x: 20, y: 20, w: 96, h: 36 };
+
 function handleTitleTap(p: { x: number; y: number }): void {
-  if (started || !titleButtons) return;
+  if (!titleButtons) return;
   if (inRect(p, titleButtons.single)) chooseMode("local");
   else if (inRect(p, titleButtons.two)) chooseMode("net");
 }
+
+function handleBackTap(p: { x: number; y: number }): boolean {
+  if (!inRect(p, backBtnRect)) return false;
+  goToTitle();
+  return true;
+}
+
 canvas.addEventListener("mousedown", (ev) => {
-  if (started) return;
   const r = canvas.getBoundingClientRect();
-  handleTitleTap({ x: ev.clientX - r.left, y: ev.clientY - r.top });
+  const p = { x: ev.clientX - r.left, y: ev.clientY - r.top };
+  if (started) {
+    handleBackTap(p);
+  } else {
+    handleTitleTap(p);
+  }
 });
 canvas.addEventListener(
   "touchstart",
   (ev) => {
-    if (started) return;
     const t = ev.changedTouches[0];
     if (!t) return;
-    ev.preventDefault();
     const r = canvas.getBoundingClientRect();
-    handleTitleTap({ x: t.clientX - r.left, y: t.clientY - r.top });
+    const p = { x: t.clientX - r.left, y: t.clientY - r.top };
+    if (started) {
+      // Back hit lives in the top-left corner; never preventDefault for
+      // touches outside it so the rest of the scene's handlers still work.
+      if (handleBackTap(p)) ev.preventDefault();
+    } else {
+      ev.preventDefault();
+      handleTitleTap(p);
+    }
   },
   { passive: false },
 );
+
+// Tear down whichever mode we're in and return to the title. Clean shutdown
+// of the networking layer (disconnect, no auto-reconnect) so the server's
+// slot frees immediately rather than waiting for a ghost timeout.
+function goToTitle(): void {
+  if (appMode === "net" && net) {
+    net.disconnect();
+    net = null;
+  }
+  play = null;
+  scene = "select";
+  netViewWorld = null;
+  netCamInit = false;
+  netInitialPickSent = false;
+  netSmoothed.clear();
+  appMode = null;
+  started = false;
+  // Reset name input visibility — frameTitle will re-show it next frame.
+}
 
 // --- Keyboard ---
 window.addEventListener("keydown", (ev) => {
@@ -293,8 +352,10 @@ function buildLobbyView(): LobbyView {
   // players can join — without exploding into MAX_PLAYERS rows.
   const players = n.lobby.map((p) => {
     const you = p.slot === n.slot;
+    // Server defaults p.name to "Player N" when no join.name was sent, so
+    // this just works whether the player set a name or not.
     return {
-      label: `Player ${p.slot + 1}${you ? " (you)" : ""}`,
+      label: `${p.name}${you ? " (you)" : ""}`,
       characterName: p.characterId
         ? (CHARACTERS[p.characterId]?.name ?? p.characterId)
         : null,
@@ -520,6 +581,41 @@ function drawNoticesToast(dims: { w: number; h: number }, notices: NoticeEntry[]
 
 // ===== Title screen =====
 
+// ---- DOM name input (real keyboard on iPad) ----
+// Lives over the canvas; shown only on the title screen.
+const nameInput = document.createElement("input");
+nameInput.type = "text";
+nameInput.maxLength = 24;
+nameInput.placeholder = "Enter your name";
+nameInput.setAttribute("autocomplete", "off");
+nameInput.setAttribute("autocapitalize", "words");
+nameInput.style.cssText = [
+  "position: fixed",
+  "left: 50%",
+  "transform: translateX(-50%)",
+  "width: 320px",
+  "height: 44px",
+  "padding: 0 14px",
+  "font: 600 16px system-ui, sans-serif",
+  "background: rgba(40, 52, 48, 0.9)",
+  "border: 2px solid rgba(255, 255, 255, 0.15)",
+  "border-radius: 10px",
+  "color: #fff",
+  "outline: none",
+  "box-sizing: border-box",
+  "display: none",
+  "z-index: 10",
+].join("; ");
+nameInput.value = getName();
+nameInput.addEventListener("input", () => setName(nameInput.value));
+nameInput.addEventListener("focus", () => {
+  nameInput.style.borderColor = "#ffd84a";
+});
+nameInput.addEventListener("blur", () => {
+  nameInput.style.borderColor = "rgba(255, 255, 255, 0.15)";
+});
+document.body.appendChild(nameInput);
+
 function frameTitle(dims: { w: number; h: number }): void {
   const cw = dims.w;
   const ch = dims.h;
@@ -530,16 +626,35 @@ function frameTitle(dims: { w: number; h: number }): void {
   ctx.textAlign = "center";
   ctx.textBaseline = "alphabetic";
   ctx.font = "bold 52px system-ui, sans-serif";
-  ctx.fillText("BRAMBLETOOTH", cw / 2, ch * 0.3);
+  ctx.fillText("BRAMBLETOOTH", cw / 2, ch * 0.22);
   ctx.fillStyle = "rgba(255,255,255,0.5)";
   ctx.font = "15px system-ui, sans-serif";
-  ctx.fillText("Asymmetric isometric arena — 1v1 hunter vs survivor", cw / 2, ch * 0.3 + 30);
+  ctx.fillText("Asymmetric isometric arena — hunter vs survivors", cw / 2, ch * 0.22 + 30);
+
+  // Profile area: name input (DOM, positioned just below) + points.
+  const inputTop = ch * 0.36;
+  nameInput.style.display = "block";
+  nameInput.style.top = `${inputTop}px`;
+  // Centered label above the input.
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.fillText("YOUR NAME", cw / 2, inputTop - 10);
+
+  // Points line just below the input.
+  const points = getPoints();
+  ctx.fillStyle = "#ffd84a";
+  ctx.font = "bold 14px system-ui, sans-serif";
+  ctx.fillText(
+    points === 1 ? "★ 1 point" : `★ ${points} points`,
+    cw / 2,
+    inputTop + 76,
+  );
 
   const bw = 300;
   const bh = 64;
   const gap = 20;
   const bx = cw / 2 - bw / 2;
-  const by = ch * 0.5;
+  const by = ch * 0.58;
   const single: Rect = { x: bx, y: by, w: bw, h: bh };
   const two: Rect = { x: bx, y: by + bh + gap, w: bw, h: bh };
   titleButtons = { single, two };
@@ -554,6 +669,27 @@ function frameTitle(dims: { w: number; h: number }): void {
     cw / 2,
     by + 2 * bh + gap + 34,
   );
+}
+
+// Small "← BACK" pill in the top-left, drawn over every non-title scene.
+function drawBackButton(): void {
+  const b = backBtnRect;
+  ctx.save();
+  ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+  roundRect(b, 8);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
+  ctx.lineWidth = 1;
+  roundRect(b, 8);
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 12px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("← BACK", b.x + b.w / 2, b.y + b.h / 2);
+  ctx.restore();
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
 }
 
 function drawButton(r: Rect, label: string, primary: boolean): void {
@@ -595,6 +731,57 @@ function drawCenter(dims: { w: number; h: number }, title: string, subtitle: str
   }
 }
 
+// ---- Win detection -> points ----
+// Award exactly once per round on the transition from "ongoing" to a
+// terminal outcome. Re-arms each round by re-seeing "ongoing" (which the
+// engine / NetClient set on round start + toLobby), so consecutive rounds
+// each get their own chance to award.
+let prevLocalOutcome = "ongoing";
+let prevNetOutcome = "ongoing";
+
+function myTeamLocal(): "hunter" | "survivor" | null {
+  return play?.world.playerCharacter()?.team ?? null;
+}
+function myTeamNet(): "hunter" | "survivor" | null {
+  if (!net || !netViewWorld || net.yourEntityId == null) return null;
+  for (const e of netViewWorld.entities) {
+    if (e.kind === "character" && e.id === net.yourEntityId) return e.team;
+  }
+  return null;
+}
+
+function awardPointsIfWon(): void {
+  if (appMode === "local" && play) {
+    const out = play.engine.outcome;
+    if (out === "ongoing") {
+      prevLocalOutcome = "ongoing";
+    } else if (prevLocalOutcome === "ongoing") {
+      const team = myTeamLocal();
+      if (
+        (out === "hunter_win" && team === "hunter") ||
+        (out === "survivor_win" && team === "survivor")
+      ) {
+        addPoints(1);
+      }
+      prevLocalOutcome = out;
+    }
+  } else if (appMode === "net" && net) {
+    const out = net.outcome;
+    if (out === "ongoing") {
+      prevNetOutcome = "ongoing";
+    } else if (prevNetOutcome === "ongoing") {
+      const team = myTeamNet();
+      if (
+        (out === "hunter_win" && team === "hunter") ||
+        (out === "survivor_win" && team === "survivor")
+      ) {
+        addPoints(1);
+      }
+      prevNetOutcome = out;
+    }
+  }
+}
+
 // --- URL shortcuts (skip the title) ---
 const params = new URLSearchParams(location.search);
 if (params.has("net")) chooseMode("net");
@@ -605,11 +792,24 @@ let last = performance.now();
 function frame(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
+  // Hide the name input whenever we're not on the title. frameTitle re-
+  // shows it on the next title frame.
+  if (started && nameInput.style.display !== "none") {
+    nameInput.style.display = "none";
+    if (document.activeElement === nameInput) nameInput.blur();
+  }
   const dims = logicalSize();
 
   if (!started) frameTitle(dims);
   else if (appMode === "net") frameNet(dt, dims);
   else frameLocal(dt, dims);
+
+  // Back button rides on top of every non-title scene.
+  if (started) drawBackButton();
+
+  // Win → points (one-shot per round). Read each frame; transitions to a
+  // terminal outcome trigger exactly one increment.
+  awardPointsIfWon();
 
   requestAnimationFrame(frame);
 }
