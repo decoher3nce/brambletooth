@@ -14,33 +14,25 @@ import type {
 import { isCharacter, isProjectile, isTrap, isObjective, isProp } from "../core/entity";
 import type { Vec2 } from "../core/math";
 import { add, scale, normalize, sub, len, dist, clamp, circlesOverlap } from "../core/math";
-import type { InputState } from "../core/input";
 import { ABILITIES } from "../abilities/abilities";
 import { CHARACTERS } from "../characters/characters";
 import type { GameMode, RoundOutcome } from "../modes/mode";
-import type { AIController, AIIntent } from "../ai/ai";
+import type { Controller, AIIntent } from "../ai/ai";
 
 export interface EngineConfig {
   world: World;
   mode: GameMode;
-  input: InputState;
-  // Map of character entity id -> AI controller (player is omitted)
-  aiControllers: Map<number, AIController>;
+  // Per-character controller (AI or human). Characters without an entry
+  // simply produce no intent that tick (e.g. a dropped network player
+  // before AI takeover).
+  controllers: Map<number, Controller>;
 }
 
 export class Engine {
   outcome: RoundOutcome = "ongoing";
   paused: boolean = false;
-  // Track per-character "intent" each frame so renderer/HUD can use it.
-  lastPlayerIntent: { moveDir: Vec2; aim: Vec2 } = {
-    moveDir: { x: 0, y: 0 },
-    aim: { x: 0, y: 0 },
-  };
 
   constructor(public cfg: EngineConfig) {}
-
-  // Player ability key bindings: q/e/r/f map to ability slots 0..3.
-  private static ABILITY_KEYS = ["q", "e", "r", "f"];
 
   tick(dt: number): void {
     if (this.paused) return;
@@ -49,20 +41,15 @@ export class Engine {
     const world = this.cfg.world;
     world.elapsed += dt;
 
-    // 1) Gather intents for each character
+    // 1) Gather intents — every character is driven by its controller
+    // (AI or human). Controllers consume their own edge-triggered input
+    // (e.g. HumanController clears pressedAbilities after reading).
     const intents = new Map<number, AIIntent>();
     for (const c of world.allCharacters()) {
       if (c.dead) continue;
-      if (c.isPlayer) {
-        intents.set(c.id, this.playerIntent(c));
-      } else {
-        const ai = this.cfg.aiControllers.get(c.id);
-        if (ai) intents.set(c.id, ai.update(c, world, dt));
-      }
+      const ctrl = this.cfg.controllers.get(c.id);
+      if (ctrl) intents.set(c.id, ctrl.update(c, world, dt));
     }
-
-    // Consume edge-triggered ability keys after we've read them.
-    this.cfg.input.pressedAbilities.clear();
 
     // 2) Apply movement
     for (const c of world.allCharacters()) {
@@ -277,66 +264,5 @@ export class Engine {
     p.x = clamp(p.x, b.minX + c.radius, b.maxX - c.radius);
     p.y = clamp(p.y, b.minY + c.radius, b.maxY - c.radius);
     return p;
-  }
-
-  private playerIntent(c: CharacterEntity): AIIntent {
-    const input = this.cfg.input;
-    let moveDir: Vec2 = { x: 0, y: 0 };
-    let aim: Vec2;
-
-    if (input.isTouchMode) {
-      // Touch path: joystick supplies an analog move vector. There is no
-      // separate aim input in v0.1, so we derive aim from the move
-      // direction. Standing still falls back to current facing.
-      moveDir = { x: input.moveVector.x, y: input.moveVector.y };
-      const m = Math.hypot(moveDir.x, moveDir.y);
-      if (m > 0.05) {
-        aim = {
-          x: c.pos.x + (moveDir.x / m) * 1000,
-          y: c.pos.y + (moveDir.y / m) * 1000,
-        };
-      } else {
-        aim = {
-          x: c.pos.x + Math.cos(c.facing) * 100,
-          y: c.pos.y + Math.sin(c.facing) * 100,
-        };
-      }
-    } else {
-      // Keyboard + mouse path.
-      // WASD relative to isometric: we want pressing W to move "up-left" in
-      // world space so it feels intuitive on the screen. The iso projection
-      // rotates world x/y by 45deg.
-      // Define world axes such that:
-      //   W = -y (north)   S = +y (south)
-      //   A = -x (west)    D = +x (east)
-      // The visual rotation is handled by the renderer; from the player's
-      // POV "up" on screen IS world-up because we picked our iso transform
-      // to make that the case. (See worldToScreen — north y is up.)
-      if (input.keys.has("w")) moveDir.y -= 1;
-      if (input.keys.has("s")) moveDir.y += 1;
-      if (input.keys.has("a")) moveDir.x -= 1;
-      if (input.keys.has("d")) moveDir.x += 1;
-      aim = { ...input.mouseWorld };
-    }
-
-    this.lastPlayerIntent = { moveDir, aim };
-
-    const fired: string[] = [];
-    const def = CHARACTERS[c.characterId];
-    for (let i = 0; i < Engine.ABILITY_KEYS.length; i++) {
-      const k = Engine.ABILITY_KEYS[i];
-      if (input.pressedAbilities.has(k)) {
-        const aId = def.abilities[i];
-        if (aId) fired.push(aId);
-      }
-    }
-    // Mouse click = first ability (slash / overdrive). Skipped in touch
-    // mode — the touch button for slot 0 already covers it via the
-    // pressedAbilities path.
-    if (!input.isTouchMode && input.mouseDown && def.abilities[0]) {
-      // Use cooldown-aware spam: just request; cooldown check rejects.
-      fired.push(def.abilities[0]);
-    }
-    return { moveDir, aim, abilitiesToFire: fired };
   }
 }

@@ -14,11 +14,12 @@ import type { Camera } from "./render/renderer";
 import { OneVOneMode } from "./modes/oneVOne";
 import { FOREST_ARENA_CONFIG, buildForest } from "./arenas/forest";
 import { createAIController } from "./ai/ai";
+import { HumanController } from "./core/humanController";
 import { drawHUD } from "./ui/hud";
 import { TouchControls } from "./ui/touchControls";
 import { SelectScreen } from "./ui/selectScreen";
 import { CHARACTERS } from "./characters/characters";
-import type { AIController } from "./ai/ai";
+import type { Controller } from "./ai/ai";
 
 // --- Setup canvas ---
 const canvas = document.getElementById("game") as HTMLCanvasElement;
@@ -76,7 +77,7 @@ interface PlayState {
   world: World;
   mode: OneVOneMode;
   engine: Engine;
-  aiControllers: Map<number, AIController>;
+  controllers: Map<number, Controller>;
   cam: Camera;
   chosenCharacterId: string; // for restoring select-screen highlight
 }
@@ -145,18 +146,24 @@ function startRound(chosenId: string): void {
   });
   mode.initialize(world);
 
-  const aiControllers = new Map<number, AIController>();
+  // One controller per character: the local human drives the player; AI
+  // drives the rest. (Networked play will swap in remote-input-fed
+  // HumanControllers for the second player here.)
+  const controllers = new Map<number, Controller>();
   for (const c of world.allCharacters()) {
-    if (c.isPlayer) continue;
-    const ai = createAIController(c.characterId);
-    if (ai) aiControllers.set(c.id, ai);
+    if (c.isPlayer) {
+      controllers.set(c.id, new HumanController(input));
+    } else {
+      const ai = createAIController(c.characterId);
+      if (ai) controllers.set(c.id, ai);
+    }
   }
 
-  const engine = new Engine({ world, mode, input, aiControllers });
+  const engine = new Engine({ world, mode, controllers });
   const player = world.playerCharacter();
   const cam = createCamera(player ? { ...player.pos } : { x: 0, y: 0 });
 
-  play = { world, mode, engine, aiControllers, cam, chosenCharacterId: chosenId };
+  play = { world, mode, engine, controllers, cam, chosenCharacterId: chosenId };
   scene = "playing";
 }
 

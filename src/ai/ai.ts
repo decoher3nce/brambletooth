@@ -19,6 +19,14 @@ export interface AIController {
   update(self: CharacterEntity, world: World, dt: number): AIIntent;
 }
 
+// A Controller maps (self, world, dt) -> intent each tick. AIController and
+// the input-driven HumanController both satisfy this shape, so the engine
+// can drive any character — AI or human, local or networked — through one
+// uniform map without branching on who's behind the wheel.
+export interface Controller {
+  update(self: CharacterEntity, world: World, dt: number): AIIntent;
+}
+
 // ---- Shared steering ----
 //
 // Take a desired goal direction (toward a target, away from a threat,
