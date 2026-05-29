@@ -1,9 +1,9 @@
-// Main entry point. Owns the scene state machine:
-//   - "select": SelectScreen draws the character picker, engine is dormant.
-//   - "playing": Engine ticks a round; HUD + touch overlay render on top.
-// A round transitions back to "select" when the player taps restart, so
-// the select screen doubles as a post-round lobby with the prior pick
-// still highlighted.
+// Main entry point. Two top-level app modes, fixed at boot:
+//   - "local":  single-player vs AI. select -> playing with a local engine.
+//   - "net":    two-device play via the authoritative server. lobby ->
+//               playing, rendering server snapshots and streaming input.
+// Enter networked mode with ?net=1 (a proper menu lands in P4). The local
+// path below is untouched by the networked path.
 
 import "./abilities/abilities"; // ensure abilities are registered
 import { World } from "./core/world";
@@ -20,6 +20,7 @@ import { TouchControls } from "./ui/touchControls";
 import { SelectScreen } from "./ui/selectScreen";
 import { CHARACTERS } from "./characters/characters";
 import type { Controller } from "./ai/ai";
+import { NetClient, resolveServerUrl } from "./net/netClient";
 
 // --- Setup canvas ---
 const canvas = document.getElementById("game") as HTMLCanvasElement;
@@ -49,16 +50,19 @@ const TIME_LIMIT_SECONDS = 5 * 60;
 // OBJECTIVES_REQUIRED < OBJECTIVE_COUNT only if you intend "collect N of M".
 const OBJECTIVE_COUNT = 5;
 const OBJECTIVES_REQUIRED = 5;
-// Characters with working AI controllers, by role. When the player picks a
-// side, the opposite side's character is drawn at random from the matching
-// pool — so playing as a hunter sometimes faces Match, sometimes Magnek.
-// Extend these as new AI controllers land in ai.ts (createAIController).
+// Characters with working AI controllers, by role (local mode only).
 const AI_HUNTERS = ["slagy"];
 const AI_SURVIVORS = ["match", "magnek"];
 
 function pickRandom<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
+
+// --- App mode (fixed at boot) ---
+type AppMode = "local" | "net";
+const appMode: AppMode = new URLSearchParams(location.search).has("net")
+  ? "net"
+  : "local";
 
 // --- Persistent singletons (alive across scene transitions) ---
 const input = createInput();
@@ -67,12 +71,10 @@ bindInput(canvas, input);
 const renderer = new Renderer(ctx, canvas);
 renderer.setDimensionSource(() => logicalSize());
 
-// --- Scene state ---
+// --- Local scene state ---
 type Scene = "select" | "playing";
 let scene: Scene = "select";
 
-// PlayState bundles everything that's per-round and gets discarded when
-// the player returns to the select screen. The singletons above persist.
 interface PlayState {
   world: World;
   mode: OneVOneMode;
@@ -83,30 +85,60 @@ interface PlayState {
 }
 let play: PlayState | null = null;
 
-// --- Select screen ---
+// --- Networked state ---
+const net: NetClient | null =
+  appMode === "net" ? new NetClient(resolveServerUrl()) : null;
+// View world: a throwaway World we stuff each snapshot's entities into, so
+// the existing renderer/HUD (which take a World) work unchanged on remote
+// state. The client's own character is flagged isPlayer for camera + HUD.
+let netViewWorld: World | null = null;
+const netCam: Camera = createCamera({ x: 0, y: 0 });
+let netCamInit = false;
+
+// --- Select screen (shared by local select and net lobby) ---
 const selectScreen = new SelectScreen();
 selectScreen.bind(canvas, logicalSize, {
-  onStart: (chosenId) => startRound(chosenId),
+  onStart: (chosenId) => {
+    if (appMode === "net" && net) {
+      net.select(chosenId);
+      net.ready(true);
+    } else {
+      startRound(chosenId);
+    }
+  },
   isTouchMode: () => input.isTouchMode,
-  isActive: () => scene === "select",
+  isActive: () =>
+    appMode === "net" ? net?.phase === "lobby" : scene === "select",
 });
 
-// --- Touch controls (bound once; gated by scene inside) ---
+// --- Touch controls (bound once; net-aware hooks) ---
 const touchControls = new TouchControls();
 touchControls.bind(canvas, logicalSize, {
   input,
-  getWorld: () => play?.world ?? null,
-  getOutcome: () => play?.engine.outcome ?? "ongoing",
-  isPaused: () => play?.engine.paused ?? false,
+  getWorld: () => (appMode === "net" ? netViewWorld : (play?.world ?? null)),
+  getOutcome: () =>
+    appMode === "net" ? (net?.outcome ?? "ongoing") : (play?.engine.outcome ?? "ongoing"),
+  isPaused: () => (appMode === "net" ? false : (play?.engine.paused ?? false)),
   togglePause: () => {
-    if (play) play.engine.paused = !play.engine.paused;
+    if (appMode !== "net" && play) play.engine.paused = !play.engine.paused;
   },
-  restart: () => goToSelect(),
-  isPlaying: () => scene === "playing",
+  restart: () => {
+    if (appMode === "net") net?.restart();
+    else goToSelect();
+  },
+  isPlaying: () =>
+    appMode === "net"
+      ? net?.phase === "playing" || net?.phase === "ended"
+      : scene === "playing",
 });
 
-// --- Keyboard: Esc pause / R restart (scene-aware) ---
+// --- Keyboard ---
 window.addEventListener("keydown", (ev) => {
+  if (appMode === "net") {
+    // No pause in networked play (server keeps running). R restarts after a round.
+    if (net && net.phase === "ended" && ev.key.toLowerCase() === "r") net.restart();
+    return;
+  }
   if (scene !== "playing" || !play) return;
   if (ev.key === "Escape") {
     play.engine.paused = !play.engine.paused;
@@ -115,9 +147,8 @@ window.addEventListener("keydown", (ev) => {
   }
 });
 
-// Build a fresh round around the player's chosen character. The opposite
-// role gets filled with the default AI opponent. Player role is derived
-// from the chosen character's role.
+// ===== Local mode =====
+
 function startRound(chosenId: string): void {
   const def = CHARACTERS[chosenId];
   if (!def) return;
@@ -146,9 +177,6 @@ function startRound(chosenId: string): void {
   });
   mode.initialize(world);
 
-  // One controller per character: the local human drives the player; AI
-  // drives the rest. (Networked play will swap in remote-input-fed
-  // HumanControllers for the second player here.)
   const controllers = new Map<number, Controller>();
   for (const c of world.allCharacters()) {
     if (c.isPlayer) {
@@ -167,8 +195,6 @@ function startRound(chosenId: string): void {
   scene = "playing";
 }
 
-// Tear down the active round and return to the select screen, preserving
-// the player's prior pick as the default highlight.
 function goToSelect(): void {
   const prior = play?.chosenCharacterId ?? null;
   play = null;
@@ -176,28 +202,16 @@ function goToSelect(): void {
   if (prior) selectScreen.setSelected(prior);
 }
 
-// --- Loop ---
-let last = performance.now();
-function frame(now: number) {
-  const dt = Math.min(0.05, (now - last) / 1000); // clamp big jumps
-  last = now;
-  const dims = logicalSize();
-
+function frameLocal(dt: number, dims: { w: number; h: number }): void {
   if (scene === "select") {
     selectScreen.draw(ctx, dims);
-  } else if (scene === "playing" && play) {
+    return;
+  }
+  if (scene === "playing" && play) {
     const p = play;
-    // Project mouse to world before engine tick so abilities aim correctly.
-    input.mouseWorld = screenToWorld(
-      input.mouseScreen,
-      p.cam,
-      renderer.cw,
-      renderer.ch,
-    );
-
+    input.mouseWorld = screenToWorld(input.mouseScreen, p.cam, renderer.cw, renderer.ch);
     p.engine.tick(dt);
 
-    // Camera follows player smoothly.
     const player = p.world.playerCharacter();
     if (player) {
       p.cam.target.x += (player.pos.x - p.cam.target.x) * Math.min(1, dt * 6);
@@ -207,19 +221,121 @@ function frame(now: number) {
     renderer.clear("#1a2421");
     renderer.drawArena(p.world, p.cam);
     renderer.drawEntities(p.world, p.cam);
-    drawHUD(
-      ctx,
-      canvas,
-      p.world,
-      p.engine.outcome,
-      p.engine.paused,
-      dims,
-      input.isTouchMode,
-    );
+    drawHUD(ctx, canvas, p.world, p.engine.outcome, p.engine.paused, dims, input.isTouchMode);
     if (input.isTouchMode) {
       touchControls.draw(ctx, dims, p.world, p.engine.outcome, p.engine.paused);
     }
   }
+}
+
+// ===== Networked mode =====
+
+function frameNet(dt: number, dims: { w: number; h: number }): void {
+  if (!net) return;
+
+  switch (net.phase) {
+    case "connecting":
+      netCamInit = false;
+      drawCenter(dims, "Connecting to server…", net ? resolveServerUrl() : "");
+      return;
+    case "full":
+      netCamInit = false;
+      drawCenter(dims, "Game is full", "Two players are already connected.");
+      return;
+    case "disconnected":
+      netCamInit = false;
+      drawCenter(dims, "Disconnected", "Lost connection to the server. Reload to retry.");
+      return;
+    case "lobby": {
+      netCamInit = false;
+      selectScreen.draw(ctx, dims);
+      // Banner: either "waiting" guidance or the start-block reason.
+      if (net.blockedReason) drawBanner(dims, net.blockedReason);
+      return;
+    }
+    case "playing":
+    case "ended": {
+      const snap = net.snapshot;
+      if (!snap) {
+        drawCenter(dims, "Starting round…", "");
+        return;
+      }
+      if (!netViewWorld) netViewWorld = new World(FOREST_ARENA_CONFIG, snap.timeLimit);
+      netViewWorld.entities = snap.entities;
+      netViewWorld.elapsed = snap.elapsed;
+      netViewWorld.timeLimit = snap.timeLimit;
+      // Flag our own character so playerCharacter()/camera/HUD track it.
+      for (const e of snap.entities) {
+        if (e.kind === "character") e.isPlayer = e.id === net.yourEntityId;
+      }
+
+      const me = netViewWorld.playerCharacter();
+      if (me && !netCamInit) {
+        netCam.target.x = me.pos.x;
+        netCam.target.y = me.pos.y;
+        netCamInit = true;
+      } else if (me) {
+        netCam.target.x += (me.pos.x - netCam.target.x) * Math.min(1, dt * 6);
+        netCam.target.y += (me.pos.y - netCam.target.y) * Math.min(1, dt * 6);
+      }
+
+      // Project aim and stream input up. pressedAbilities are edge events —
+      // clear them after sending so each press transmits once.
+      input.mouseWorld = screenToWorld(input.mouseScreen, netCam, renderer.cw, renderer.ch);
+      if (net.phase === "playing") net.sendInput(input);
+      input.pressedAbilities.clear();
+
+      renderer.clear("#1a2421");
+      renderer.drawArena(netViewWorld, netCam);
+      renderer.drawEntities(netViewWorld, netCam);
+      drawHUD(ctx, canvas, netViewWorld, net.outcome, false, dims, input.isTouchMode);
+      if (input.isTouchMode) {
+        touchControls.draw(ctx, dims, netViewWorld, net.outcome, false);
+      }
+      return;
+    }
+  }
+}
+
+// Centered title + subtitle over a dimmed background (connecting/full/etc).
+function drawCenter(dims: { w: number; h: number }, title: string, subtitle: string): void {
+  ctx.fillStyle = "#1a2421";
+  ctx.fillRect(0, 0, dims.w, dims.h);
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.font = "bold 28px system-ui, sans-serif";
+  ctx.fillText(title, dims.w / 2, dims.h / 2 - 6);
+  if (subtitle) {
+    ctx.fillStyle = "rgba(255,255,255,0.6)";
+    ctx.font = "14px system-ui, sans-serif";
+    ctx.fillText(subtitle, dims.w / 2, dims.h / 2 + 24);
+  }
+}
+
+// Small status banner near the top (used in the net lobby while waiting).
+function drawBanner(dims: { w: number; h: number }, text: string): void {
+  ctx.font = "bold 14px system-ui, sans-serif";
+  const w = ctx.measureText(text).width + 32;
+  const x = (dims.w - w) / 2;
+  const y = dims.h - 130;
+  ctx.fillStyle = "rgba(0,0,0,0.6)";
+  ctx.fillRect(x, y, w, 32);
+  ctx.fillStyle = "#ffd84a";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, dims.w / 2, y + 16);
+}
+
+// --- Loop ---
+let last = performance.now();
+function frame(now: number) {
+  const dt = Math.min(0.05, (now - last) / 1000); // clamp big jumps
+  last = now;
+  const dims = logicalSize();
+
+  if (appMode === "net") frameNet(dt, dims);
+  else frameLocal(dt, dims);
 
   requestAnimationFrame(frame);
 }
