@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { GameSession, picksAreValid } from "./gameSession";
 import type { SessionPick } from "./gameSession";
-import { login as profileLogin, syncProfile } from "./profiles";
+import { login as profileLogin, syncProfile, lookupPublic } from "./profiles";
 import {
   PROTOCOL_VERSION,
   DEFAULT_PORT,
@@ -486,6 +486,16 @@ const httpServer = createServer(async (req, res) => {
         achievements: body.achievements,
       });
       sendJson(res, 200, result);
+      return;
+    }
+    // Public profile lookup by name (no PIN). Used by the lobby to render
+    // hover tooltips for other players. Anonymous players (never logged
+    // in) get ok:false / 404.
+    if (req.url && req.url.startsWith("/api/profile/public") && req.method === "GET") {
+      const url = new URL(req.url, "http://x");
+      const name = url.searchParams.get("name");
+      const result = lookupPublic(name);
+      sendJson(res, result.ok ? 200 : 404, result);
       return;
     }
     if (req.url === "/" || req.url === "/health") {

@@ -97,6 +97,30 @@ export function login(name: unknown, pin: unknown): LoginResult {
   return { ok: true, profile };
 }
 
+// Public lookup by name — returns only the safe fields (name, points,
+// achievements). No PIN, no timestamps. Used by the lobby to render
+// hover tooltips for other players.
+export interface PublicProfile {
+  name: string;
+  points: number;
+  achievements: string[];
+}
+export function lookupPublic(name: unknown): { ok: boolean; profile?: PublicProfile; error?: string } {
+  ensureLoaded();
+  if (!isValidName(name)) return { ok: false, error: "Invalid name" };
+  const key = keyOf(name);
+  const existing = store[key];
+  if (!existing) return { ok: false, error: "Not found" };
+  return {
+    ok: true,
+    profile: {
+      name: existing.name,
+      points: existing.points,
+      achievements: existing.achievements ?? [],
+    },
+  };
+}
+
 // Update points (and any future profile fields). Defensive: we take the
 // max of client and server points so a stale client can't roll us back.
 export function syncProfile(

@@ -128,6 +128,9 @@ export class SelectScreen {
   private hooks: SelectHooks | null = null;
   // Non-null in networked lobby mode (set each frame by main before draw).
   private lobbyView: LobbyView | null = null;
+  // Hover/pin state for player rows so main can draw a profile tooltip.
+  private playerRows: Array<{ rect: ButtonRect; name: string }> = [];
+  private pinnedPlayer: string | null = null;
 
   // Toggle networked-lobby chrome. Pass null to render the local picker.
   setLobbyView(view: LobbyView | null): void {
@@ -154,6 +157,27 @@ export class SelectScreen {
   // default highlight shows on the opponent's screen without a manual tap.
   getSelected(): string | null {
     return this.selectedId;
+  }
+
+  // Whichever player row the user is hovering (desktop) OR has tap-pinned
+  // (touch). main reads this each frame to fetch their public profile and
+  // draw the tooltip. Skips the local user — no point inspecting yourself.
+  getHoveredPlayer(): { name: string; rect: ButtonRect } | null {
+    if (this.pinnedPlayer) {
+      const pinned = this.playerRows.find((r) => r.name === this.pinnedPlayer);
+      if (pinned) return { name: pinned.name, rect: pinned.rect };
+    }
+    if (!this.mouse) return null;
+    for (const row of this.playerRows) {
+      const r = row.rect;
+      if (
+        this.mouse.x >= r.x && this.mouse.x <= r.x + r.w &&
+        this.mouse.y >= r.y && this.mouse.y <= r.y + r.h
+      ) {
+        return { name: row.name, rect: r };
+      }
+    }
+    return null;
   }
 
   bind(
@@ -275,6 +299,18 @@ export class SelectScreen {
   // draw). If the user taps before the first draw, hit zones are empty and
   // taps no-op until the first frame paints — fine for our use case.
   private handleTap(p: { x: number; y: number }, hooks: SelectHooks): void {
+    // Player rows first: tap-to-pin a profile tooltip; tap the same row
+    // again (or anywhere else) clears it.
+    for (const row of this.playerRows) {
+      const r = row.rect;
+      if (p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h) {
+        this.pinnedPlayer = this.pinnedPlayer === row.name ? null : row.name;
+        return;
+      }
+    }
+    // Tap outside any pinned row clears the pin.
+    if (this.pinnedPlayer) this.pinnedPlayer = null;
+
     for (const tile of this.tiles) {
       if (
         tile.characterId &&
@@ -427,8 +463,21 @@ export class SelectScreen {
     this.roundedRect(ctx, x, y, w, panelH, 8);
     ctx.stroke();
 
+    // Reset hover targets for this frame; other players' rows become
+    // hover-able (skip yourself — no point inspecting your own profile).
+    this.playerRows = [];
     view.players.forEach((p, i) => {
       const ry = y + 10 + i * rowH;
+      // Register this row as a hover target if it's a real, non-you player.
+      if (p.present && !p.you) {
+        // Use the raw player name (strip " (you)" if present, though
+        // we already filtered above).
+        const name = p.label.replace(/\s*\(you\)\s*$/i, "");
+        this.playerRows.push({
+          rect: { x, y: ry, w, h: rowH },
+          name,
+        });
+      }
       ctx.textBaseline = "middle";
       // Colored slot dot.
       if (p.present && p.color) {

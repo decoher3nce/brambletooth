@@ -200,6 +200,47 @@ function scheduleProfileSync(): void {
   }, 800);
 }
 
+// ---- Public-profile lookup cache (for lobby hover tooltips) ----
+interface PublicProfile {
+  name: string;
+  points: number;
+  achievements: string[];
+}
+interface CachedLookup {
+  profile: PublicProfile | null; // null = looked up, no profile exists
+  fetchedAt: number;
+}
+const PUBLIC_PROFILE_TTL_MS = 30_000;
+const publicProfileCache = new Map<string, CachedLookup>();
+const publicProfileInFlight = new Set<string>();
+
+function publicProfileFor(name: string): CachedLookup | "loading" | null {
+  if (!name) return null;
+  const key = name.trim().toLowerCase();
+  const cached = publicProfileCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < PUBLIC_PROFILE_TTL_MS) {
+    return cached;
+  }
+  // Stale or missing — kick off a fetch (deduplicated).
+  if (!publicProfileInFlight.has(key)) {
+    publicProfileInFlight.add(key);
+    void fetch(`${profileApiBase()}/api/profile/public?name=${encodeURIComponent(name)}`)
+      .then(async (r) => {
+        const body = (await r.json()) as { ok: boolean; profile?: PublicProfile };
+        publicProfileCache.set(key, {
+          profile: body.ok && body.profile ? body.profile : null,
+          fetchedAt: Date.now(),
+        });
+      })
+      .catch(() => {
+        // Network failure — cache the miss briefly so we don't hammer.
+        publicProfileCache.set(key, { profile: null, fetchedAt: Date.now() });
+      })
+      .finally(() => publicProfileInFlight.delete(key));
+  }
+  return cached ?? "loading";
+}
+
 // On page load: if the user was previously logged in, try silently with
 // stored credentials. Falls through to the inputs if it fails.
 async function autoLoginIfPossible(): Promise<void> {
@@ -667,6 +708,7 @@ function frameNet(dt: number, dims: { w: number; h: number }): void {
       }
       selectScreen.setLobbyView(buildLobbyView());
       selectScreen.draw(ctx, dims);
+      drawPlayerHoverTooltip(dims);
       drawNoticesToast(dims, n.notices);
       return;
     case "countdown": {
@@ -789,6 +831,98 @@ function drawCountdownOverlay(dims: { w: number; h: number }, remaining: number)
 }
 
 // Stack of fading toasts at the top of the screen — drop / rejoin events.
+// Floating profile card anchored to the row the user is hovering / has
+// pinned. Shows points and any unlocked achievements; says "Not logged
+// in" if the player has no server profile.
+function drawPlayerHoverTooltip(dims: { w: number; h: number }): void {
+  const hover = selectScreen.getHoveredPlayer();
+  if (!hover) return;
+  const lookup = publicProfileFor(hover.name);
+
+  const padX = 14;
+  const padY = 12;
+  const lineH = 17;
+  const titleH = 22;
+  const profile = lookup === "loading" ? null : lookup?.profile ?? null;
+  const status =
+    lookup === "loading"
+      ? "Loading…"
+      : profile
+        ? null
+        : "Not logged in — points not tracked";
+  const achievements = profile?.achievements ?? [];
+
+  // Compute card width by measuring the widest line.
+  ctx.save();
+  ctx.font = "bold 14px system-ui, sans-serif";
+  const nameWidth = ctx.measureText(hover.name).width;
+  ctx.font = "13px system-ui, sans-serif";
+  const lines: string[] = [];
+  if (status) {
+    lines.push(status);
+  } else if (profile) {
+    lines.push(profile.points === 1 ? "★ 1 point" : `★ ${profile.points} points`);
+    if (achievements.length === 0) lines.push("No achievements yet");
+    else for (const a of achievements) lines.push(`✓ ${a}`);
+  }
+  let maxW = nameWidth;
+  for (const ln of lines) maxW = Math.max(maxW, ctx.measureText(ln).width);
+  const cardW = Math.min(280, Math.max(180, maxW + padX * 2));
+  const cardH = titleH + padY + lines.length * lineH + padY;
+
+  // Anchor to the right of the row, clamped to screen.
+  let cx = hover.rect.x + hover.rect.w + 12;
+  let cy = hover.rect.y;
+  if (cx + cardW > dims.w - 12) cx = hover.rect.x - cardW - 12;
+  if (cx < 12) cx = 12;
+  if (cy + cardH > dims.h - 12) cy = dims.h - cardH - 12;
+  if (cy < 12) cy = 12;
+
+  // Card background.
+  ctx.fillStyle = "rgba(20, 30, 28, 0.95)";
+  ctx.beginPath();
+  ctx.moveTo(cx + 8, cy);
+  ctx.arcTo(cx + cardW, cy, cx + cardW, cy + 8, 8);
+  ctx.lineTo(cx + cardW, cy + cardH - 8);
+  ctx.arcTo(cx + cardW, cy + cardH, cx + cardW - 8, cy + cardH, 8);
+  ctx.lineTo(cx + 8, cy + cardH);
+  ctx.arcTo(cx, cy + cardH, cx, cy + cardH - 8, 8);
+  ctx.lineTo(cx, cy + 8);
+  ctx.arcTo(cx, cy, cx + 8, cy, 8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255, 216, 74, 0.4)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Title (name).
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 14px system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(hover.name, cx + padX, cy + padY + 12);
+
+  // Body lines.
+  ctx.font = "13px system-ui, sans-serif";
+  let ty = cy + padY + titleH + lineH - 4;
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (i === 0 && profile) {
+      ctx.fillStyle = "#ffd84a";
+      ctx.font = "bold 13px system-ui, sans-serif";
+    } else if (ln.startsWith("✓")) {
+      ctx.fillStyle = "#48d0a0";
+      ctx.font = "13px system-ui, sans-serif";
+    } else {
+      ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
+      ctx.font = "13px system-ui, sans-serif";
+    }
+    ctx.fillText(ln, cx + padX, ty);
+    ty += lineH;
+  }
+  ctx.restore();
+}
+
 function drawNoticesToast(dims: { w: number; h: number }, notices: NoticeEntry[]): void {
   if (notices.length === 0) return;
   const maxAge = 3500;
