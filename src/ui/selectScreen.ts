@@ -366,16 +366,22 @@ export class SelectScreen {
     }
 
     // Primary button: under the grid, centered on grid column. Label and
-    // enabled state come from the lobby view when networked.
-    const startW = 240;
-    const startH = 56;
-    const startX = gridX + (ROW_WIDTH - startW) / 2;
-    const startY = Math.max(gridBottom + 36, ch - 100);
-    this.startBtn = { x: startX, y: startY, w: startW, h: startH };
+    // enabled state come from the lobby view when networked. Width is
+    // measured against the label so long copy ("READY ✓ — TAP TO CANCEL")
+    // fits comfortably without clipping or hugging the edge.
     const label = this.lobbyView ? this.lobbyView.buttonLabel : "START";
     const enabled = this.lobbyView
       ? this.lobbyView.buttonEnabled
       : this.selectedId !== null;
+    ctx.save();
+    ctx.font = "bold 18px system-ui, sans-serif";
+    const measured = ctx.measureText(label).width;
+    ctx.restore();
+    const startW = Math.max(240, Math.ceil(measured) + 56);
+    const startH = 56;
+    const startX = gridX + (ROW_WIDTH - startW) / 2;
+    const startY = Math.max(gridBottom + 36, ch - 100);
+    this.startBtn = { x: startX, y: startY, w: startW, h: startH };
     this.drawStartButton(ctx, this.startBtn, enabled, label);
   }
 

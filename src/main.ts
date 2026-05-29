@@ -545,12 +545,12 @@ function frameTitle(dims: { w: number; h: number }): void {
   titleButtons = { single, two };
 
   drawButton(single, "SINGLE PLAYER", true);
-  drawButton(two, "TWO PLAYERS", true);
+  drawButton(two, "MULTIPLAYER", true);
 
   ctx.fillStyle = "rgba(255,255,255,0.4)";
   ctx.font = "12px system-ui, sans-serif";
   ctx.fillText(
-    "Two Players connects to the game server over your network.",
+    "Multiplayer connects to the game server over your network.",
     cw / 2,
     by + 2 * bh + gap + 34,
   );
