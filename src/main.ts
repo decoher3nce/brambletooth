@@ -13,6 +13,9 @@ import { World } from "./core/world";
 import { createInput, bindInput } from "./core/input";
 import { Engine } from "./core/engine";
 import { Renderer, createCamera, screenToWorld } from "./render/renderer";
+import type { Entity, CharacterEntity } from "./core/entity";
+import { isProp } from "./core/entity";
+import { distToSegment } from "./core/math";
 import type { Camera } from "./render/renderer";
 import { HuntMode } from "./modes/hunt";
 import { FOREST_ARENA_CONFIG, buildForest } from "./arenas/forest";
@@ -50,7 +53,8 @@ function logicalSize() {
 
 // --- Round constants ---
 const TIME_LIMIT_SECONDS = 5 * 60;
-const OBJECTIVE_COUNT = 5;
+// First survivor to collect this many objectives wins for survivors.
+// Objectives spawn one at a time and respawn on collect.
 const OBJECTIVES_REQUIRED = 5;
 const AI_HUNTERS = ["slagy"];
 const AI_SURVIVORS = ["match", "magnek"];
@@ -191,7 +195,24 @@ function handleTitleTap(p: { x: number; y: number }): void {
   else if (inRect(p, titleButtons.two)) chooseMode("net");
 }
 
+// Back is allowed during non-gameplay phases only. Mid-round exit goes
+// through the pause overlay's Leave Game (with a point penalty).
+function backAllowed(): boolean {
+  if (!started) return false;
+  if (appMode === "local") return scene === "select";
+  if (appMode === "net") {
+    return (
+      net?.phase === "lobby" ||
+      net?.phase === "connecting" ||
+      net?.phase === "full" ||
+      net?.phase === "disconnected"
+    );
+  }
+  return false;
+}
+
 function handleBackTap(p: { x: number; y: number }): boolean {
+  if (!backAllowed()) return false;
   if (!inRect(p, backBtnRect)) return false;
   goToTitle();
   return true;
@@ -241,6 +262,9 @@ function goToTitle(): void {
   netSmoothed.clear();
   appMode = null;
   started = false;
+  // Reset per-round point-award trackers so a fresh round starts clean.
+  localAwards = newAwardState();
+  netAwards = newAwardState();
   // Reset name input visibility — frameTitle will re-show it next frame.
 }
 
@@ -279,7 +303,9 @@ function startRound(chosenId: string): void {
   }
 
   const world = new World(FOREST_ARENA_CONFIG, TIME_LIMIT_SECONDS);
-  buildForest(world, Math.floor(Math.random() * 1e9), OBJECTIVE_COUNT);
+  // HuntMode owns objective spawning (one at a time, respawn on collect),
+  // so the arena builder places no objectives.
+  buildForest(world, Math.floor(Math.random() * 1e9), 0);
 
   const mode = new HuntMode({
     hunterCharacterId: hunterId,
@@ -333,8 +359,16 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
 
     renderer.clear("#1a2421");
     renderer.drawArena(p.world, p.cam);
-    renderer.drawEntities(p.world, p.cam);
-    drawHUD(ctx, canvas, p.world, p.engine.outcome, p.engine.paused, dims, input.isTouchMode);
+    const localVis = visibilityFilter(p.world, p.world.playerCharacter()?.id);
+    renderer.drawEntities(p.world, p.cam, localVis);
+    drawHUD(ctx, canvas, p.world, {
+      outcome: p.engine.outcome,
+      paused: p.engine.paused,
+      dimensions: dims,
+      isTouchMode: input.isTouchMode,
+      points: getPoints(),
+      objectivesRequired: OBJECTIVES_REQUIRED,
+    });
     if (input.isTouchMode) {
       touchControls.draw(ctx, dims, p.world, p.engine.outcome, p.engine.paused);
     }
@@ -504,8 +538,16 @@ function drawNetGameScene(dt: number, dims: { w: number; h: number }, n: NetClie
 
   renderer.clear("#1a2421");
   renderer.drawArena(netViewWorld, netCam);
-  renderer.drawEntities(netViewWorld, netCam);
-  drawHUD(ctx, canvas, netViewWorld, n.outcome, false, dims, input.isTouchMode);
+  const netVis = visibilityFilter(netViewWorld, n.yourEntityId);
+  renderer.drawEntities(netViewWorld, netCam, netVis);
+  drawHUD(ctx, canvas, netViewWorld, {
+    outcome: n.outcome,
+    paused: false,
+    dimensions: dims,
+    isTouchMode: input.isTouchMode,
+    points: getPoints(),
+    objectivesRequired: OBJECTIVES_REQUIRED,
+  });
   if (input.isTouchMode) {
     touchControls.draw(ctx, dims, netViewWorld, n.outcome, false);
   }
@@ -731,54 +773,152 @@ function drawCenter(dims: { w: number; h: number }, title: string, subtitle: str
   }
 }
 
-// ---- Win detection -> points ----
-// Award exactly once per round on the transition from "ongoing" to a
-// terminal outcome. Re-arms each round by re-seeing "ongoing" (which the
-// engine / NetClient set on round start + toLobby), so consecutive rounds
-// each get their own chance to award.
-let prevLocalOutcome = "ongoing";
-let prevNetOutcome = "ongoing";
+// ---- Line of sight ----
+// Survivors only see hunters they have a clear line to. Cheap line-segment
+// vs. blocking-prop circle test against every prop. ~50 ops/frame in the
+// forest arena — negligible. Hunters see everything (standard).
+const LOS_FUDGE = 4; // forgiving corners
 
-function myTeamLocal(): "hunter" | "survivor" | null {
-  return play?.world.playerCharacter()?.team ?? null;
-}
-function myTeamNet(): "hunter" | "survivor" | null {
-  if (!net || !netViewWorld || net.yourEntityId == null) return null;
-  for (const e of netViewWorld.entities) {
-    if (e.kind === "character" && e.id === net.yourEntityId) return e.team;
+function hasLineOfSight(a: { x: number; y: number }, b: { x: number; y: number }, entities: Entity[]): boolean {
+  for (const e of entities) {
+    if (!isProp(e) || !e.blocking) continue;
+    if (distToSegment(e.pos, a, b) <= e.radius + LOS_FUDGE) return false;
   }
-  return null;
+  return true;
+}
+
+// Returns a predicate for renderer.drawEntities. When the viewer is a
+// survivor, hunters out of LOS are filtered out (sneaky hunter feel).
+function visibilityFilter(world: World, viewerEntityId: number | null | undefined): ((e: Entity) => boolean) | undefined {
+  if (viewerEntityId == null) return undefined;
+  const viewer = world.entities.find(
+    (e): e is CharacterEntity => e.kind === "character" && e.id === viewerEntityId,
+  );
+  if (!viewer || viewer.team !== "survivor") return undefined;
+  const entities = world.entities;
+  return (e: Entity): boolean => {
+    if (e.kind !== "character") return true;
+    if (e.team !== "hunter") return true;
+    if (e.id === viewer.id) return true;
+    return hasLineOfSight(viewer.pos, e.pos, entities);
+  };
+}
+
+// ---- Multi-event scoring ----
+// Awards across each round, idempotent within the round:
+//   Hunter: +5 per catch (survivor disappears from the world), +20 round win.
+//   Survivor: +5 per objective YOU personally collected, +10 if you survive
+//             to round end alive, +20 round win.
+// Penalty (separate): -15 leave-game (applied directly by the pause overlay).
+//
+// State persists across rounds; the natural "outcome -> ongoing" transition
+// (engine on local startRound, NetClient on toLobby) re-arms via endAwarded.
+const POINTS_CATCH = 5;
+const POINTS_OBJECTIVE = 5;
+const POINTS_SURVIVE = 10;
+const POINTS_WIN = 20;
+export const POINTS_LEAVE_PENALTY = 15;
+
+interface RoundAwardState {
+  prevSurvivorIds: Set<number>;
+  collectedIds: Set<number>;
+  endAwarded: boolean;
+  lastSeenTeam: "hunter" | "survivor" | null;
+}
+function newAwardState(): RoundAwardState {
+  return {
+    prevSurvivorIds: new Set(),
+    collectedIds: new Set(),
+    endAwarded: false,
+    lastSeenTeam: null,
+  };
+}
+let localAwards = newAwardState();
+let netAwards = newAwardState();
+
+function processAwards(
+  world: World,
+  outcome: string,
+  viewerEntityId: number | null,
+  state: RoundAwardState,
+): void {
+  if (viewerEntityId == null) return;
+
+  // Re-arm on round start. End-of-previous-round set endAwarded; the next
+  // "ongoing" frame is the new round's first opportunity.
+  if (outcome === "ongoing" && state.endAwarded) {
+    state.prevSurvivorIds = new Set();
+    state.collectedIds = new Set();
+    state.endAwarded = false;
+  }
+
+  // Find / refresh my own entity + team.
+  let me: { team: "hunter" | "survivor"; hp: number } | null = null;
+  for (const e of world.entities) {
+    if (e.kind === "character" && e.id === viewerEntityId) {
+      me = e;
+      state.lastSeenTeam = e.team;
+      break;
+    }
+  }
+
+  // Catch detection (hunter only): entities that vanished since last frame
+  // got killed. (Engine cleanupDead removes corpses; AI takeover keeps a
+  // disconnected survivor alive in the world, so a drop doesn't false-fire.)
+  const currentSurvivorIds = new Set<number>();
+  for (const e of world.entities) {
+    if (e.kind === "character" && e.team === "survivor") currentSurvivorIds.add(e.id);
+  }
+  if (state.lastSeenTeam === "hunter") {
+    for (const id of state.prevSurvivorIds) {
+      if (!currentSurvivorIds.has(id)) addPoints(POINTS_CATCH);
+    }
+  }
+  state.prevSurvivorIds = currentSurvivorIds;
+
+  // Objective collect (survivor only): server flags collectedBy on the
+  // entity at pickup time; clients each detect their own credit.
+  if (state.lastSeenTeam === "survivor") {
+    for (const e of world.entities) {
+      if (
+        e.kind === "objective" &&
+        e.collected &&
+        e.collectedBy === viewerEntityId &&
+        !state.collectedIds.has(e.id)
+      ) {
+        state.collectedIds.add(e.id);
+        addPoints(POINTS_OBJECTIVE);
+      }
+    }
+  }
+
+  // End-of-round: win + survive (one-shot).
+  if (outcome !== "ongoing" && !state.endAwarded) {
+    state.endAwarded = true;
+    if (state.lastSeenTeam) {
+      if (
+        (outcome === "hunter_win" && state.lastSeenTeam === "hunter") ||
+        (outcome === "survivor_win" && state.lastSeenTeam === "survivor")
+      ) {
+        addPoints(POINTS_WIN);
+      }
+    }
+    if (state.lastSeenTeam === "survivor" && me && me.hp > 0) {
+      addPoints(POINTS_SURVIVE);
+    }
+  }
 }
 
 function awardPointsIfWon(): void {
   if (appMode === "local" && play) {
-    const out = play.engine.outcome;
-    if (out === "ongoing") {
-      prevLocalOutcome = "ongoing";
-    } else if (prevLocalOutcome === "ongoing") {
-      const team = myTeamLocal();
-      if (
-        (out === "hunter_win" && team === "hunter") ||
-        (out === "survivor_win" && team === "survivor")
-      ) {
-        addPoints(1);
-      }
-      prevLocalOutcome = out;
-    }
-  } else if (appMode === "net" && net) {
-    const out = net.outcome;
-    if (out === "ongoing") {
-      prevNetOutcome = "ongoing";
-    } else if (prevNetOutcome === "ongoing") {
-      const team = myTeamNet();
-      if (
-        (out === "hunter_win" && team === "hunter") ||
-        (out === "survivor_win" && team === "survivor")
-      ) {
-        addPoints(1);
-      }
-      prevNetOutcome = out;
-    }
+    processAwards(
+      play.world,
+      play.engine.outcome,
+      play.world.playerCharacter()?.id ?? null,
+      localAwards,
+    );
+  } else if (appMode === "net" && net && netViewWorld) {
+    processAwards(netViewWorld, net.outcome, net.yourEntityId, netAwards);
   }
 }
 
@@ -804,8 +944,10 @@ function frame(now: number) {
   else if (appMode === "net") frameNet(dt, dims);
   else frameLocal(dt, dims);
 
-  // Back button rides on top of every non-title scene.
-  if (started) drawBackButton();
+  // Back button only in non-gameplay phases — leaving a live game cheats
+  // the other players. Pause -> Leave Game (with penalty) is the only
+  // mid-round exit.
+  if (started && backAllowed()) drawBackButton();
 
   // Win → points (one-shot per round). Read each frame; transitions to a
   // terminal outcome trigger exactly one increment.

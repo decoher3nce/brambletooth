@@ -51,6 +51,10 @@ export interface CharacterEntity extends BaseEntity {
   isPlayer: boolean;
   // Active channeled-ability state (undefined when not channeling).
   charging?: ChannelState;
+  // Survivor-only counter: how many objectives this survivor has collected
+  // this round. Win condition = any survivor's count reaching the target.
+  // Always 0 for hunters; kept on every character for protocol simplicity.
+  objectivesCollected: number;
 }
 
 export interface ProjectileEntity extends BaseEntity {
@@ -77,6 +81,9 @@ export interface TrapEntity extends BaseEntity {
 export interface ObjectiveEntity extends BaseEntity {
   kind: "objective";
   collected: boolean;
+  // The character entity that collected this objective (when collected).
+  // Lets clients award objective-collect points to the right player.
+  collectedBy?: EntityId;
 }
 
 export type PropShape = "tree" | "stump" | "rock";

@@ -16,8 +16,7 @@ import { CHARACTERS } from "../src/characters/characters";
 import type { PlayerSlot, InputMessage, SnapshotMessage } from "../src/net/protocol";
 
 const TIME_LIMIT_SECONDS = 5 * 60;
-const OBJECTIVE_COUNT = 5;
-const OBJECTIVES_REQUIRED = 5;
+const OBJECTIVES_REQUIRED = 5; // per-survivor target — first to this wins
 
 export interface SessionPick {
   slot: PlayerSlot;
@@ -69,7 +68,8 @@ export class GameSession {
     );
 
     this.world = new World(FOREST_ARENA_CONFIG, TIME_LIMIT_SECONDS);
-    buildForest(this.world, Math.floor(Math.random() * 1e9), OBJECTIVE_COUNT);
+    // HuntMode owns objective spawning (one-at-a-time, respawn on collect).
+    buildForest(this.world, Math.floor(Math.random() * 1e9), 0);
 
     this.mode = new HuntMode({
       hunterCharacterId: hunterPick.characterId,

@@ -151,16 +151,19 @@ export class Renderer {
     }
   }
 
-  // Draw all entities, depth-sorted by world y (then world x).
-  drawEntities(world: World, cam: Camera): void {
+  // Draw all entities, depth-sorted by world y (then world x). An optional
+  // visibility predicate lets the caller hide individual entities — used by
+  // main.ts for line-of-sight: survivors don't render hunters whose sight
+  // line is blocked by a prop.
+  drawEntities(world: World, cam: Camera, visible?: (e: Entity) => boolean): void {
     const sorted = [...world.entities].sort((a, b) => {
-      // Props with greater y are "in front". Same for characters.
       const ay = a.pos.y;
       const by = b.pos.y;
       if (ay !== by) return ay - by;
       return a.pos.x - b.pos.x;
     });
     for (const e of sorted) {
+      if (visible && !visible(e)) continue;
       this.drawEntity(e, cam);
     }
   }

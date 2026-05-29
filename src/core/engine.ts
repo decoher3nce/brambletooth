@@ -206,13 +206,18 @@ export class Engine {
       }
     }
 
-    // 6) Objective pickup (survivor only)
+    // 6) Objective pickup (survivor only) — attribute to the collector,
+    // increment their per-survivor count, and notify the mode so it can
+    // spawn a replacement if it wants to (HuntMode keeps exactly one).
     for (const o of world.entities) {
       if (!isObjective(o)) continue;
       if (o.collected) continue;
       for (const c of world.charactersOnTeam("survivor")) {
         if (circlesOverlap(o.pos, o.radius, c.pos, c.radius)) {
           o.collected = true;
+          o.collectedBy = c.id;
+          c.objectivesCollected += 1;
+          this.cfg.mode.onObjectiveCollected?.(world, c.id);
           break;
         }
       }

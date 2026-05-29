@@ -1,179 +1,240 @@
 // Heads-up display: timer, HP bar, ability cooldowns, objective counter,
-// outcome banner.
+// points, and pause/outcome banner. All live across the top now —
+// gameplay reads cleaner without info competing with the player's
+// character at the bottom of the screen.
 
 import type { World } from "../core/world";
-import type { CharacterEntity } from "../core/entity";
-import { isObjective } from "../core/entity";
 import { CHARACTERS } from "../characters/characters";
 import { ABILITIES } from "../abilities/abilities";
 import type { RoundOutcome } from "../modes/mode";
 
 const ABILITY_KEYS = ["Q", "E", "R", "F"];
 
+export interface HUDOptions {
+  outcome: RoundOutcome;
+  paused: boolean;
+  dimensions: { w: number; h: number };
+  isTouchMode: boolean;
+  // Lifetime points display (top-right).
+  points: number;
+  // Per-survivor target (5) — used to render objective progress.
+  objectivesRequired: number;
+}
+
 export function drawHUD(
   ctx: CanvasRenderingContext2D,
-  canvas: HTMLCanvasElement,
+  _canvas: HTMLCanvasElement,
   world: World,
-  outcome: RoundOutcome,
-  paused: boolean,
-  dimensions?: { w: number; h: number },
-  // Touch mode hides the keyboard/mouse-specific ability bar and controls
-  // hint (the touch overlay supplies its own). HP + timer + objectives +
-  // pause/outcome banner all still render.
-  isTouchMode: boolean = false,
+  opts: HUDOptions,
 ): void {
-  const cw = dimensions ? dimensions.w : canvas.width;
-  const ch = dimensions ? dimensions.h : canvas.height;
+  const { dimensions: dims, isTouchMode, points, outcome, paused, objectivesRequired } = opts;
+  const cw = dims.w;
+  const ch = dims.h;
   const player = world.playerCharacter();
 
-  // Top center: timer + objectives
+  // ---- Top-left: name + HP ----
+  if (player) {
+    drawNameAndHp(ctx, player);
+  }
+
+  // ---- Top-center: timer + objective progress ----
   const remaining = Math.max(0, world.timeLimit - world.elapsed);
   const mm = Math.floor(remaining / 60);
   const ss = Math.floor(remaining % 60);
   const timerText = `${mm}:${ss.toString().padStart(2, "0")}`;
-
-  const objs = world.entities.filter(isObjective);
-  const collected = objs.filter((o) => o.collected).length;
-
   ctx.font = "bold 28px system-ui, sans-serif";
   ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
   ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
   ctx.fillRect(cw / 2 - 100, 10, 200, 40);
   ctx.fillStyle = "#fff";
   ctx.fillText(timerText, cw / 2, 40);
 
+  // Objective progress: survivor sees their own count, hunter sees the
+  // leading survivor's (since first-to-target wins).
+  const survivors = world.charactersOnTeam("survivor");
+  const leadingCount = survivors.reduce(
+    (m, s) => (s.objectivesCollected > m ? s.objectivesCollected : m),
+    0,
+  );
+  let objLine: string;
+  if (player?.team === "survivor") {
+    objLine = `★ ${player.objectivesCollected} / ${objectivesRequired}`;
+  } else {
+    objLine = `Lead ${leadingCount} / ${objectivesRequired}`;
+  }
   ctx.font = "13px system-ui, sans-serif";
   ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
   ctx.fillRect(cw / 2 - 80, 56, 160, 22);
   ctx.fillStyle = "#ffd84a";
-  ctx.fillText(`★ Objectives  ${collected} / ${objs.length}`, cw / 2, 72);
+  ctx.fillText(objLine, cw / 2, 72);
 
-  // Bottom: player HP + ability bar
-  if (player) {
-    const def = CHARACTERS[player.characterId];
-
-    // Name + HP
-    const hpW = 240;
-    const hpH = 16;
-    const hpX = 20;
-    const hpY = ch - 110;
-    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-    ctx.fillRect(hpX - 6, hpY - 22, hpW + 12, hpH + 28);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 14px system-ui, sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText(`${def.name} — ${player.team.toUpperCase()}`, hpX, hpY - 6);
-    ctx.fillStyle = "#333";
-    ctx.fillRect(hpX, hpY, hpW, hpH);
-    ctx.fillStyle = player.team === "hunter" ? "#d04848" : "#48d0a0";
-    ctx.fillRect(hpX, hpY, hpW * (player.hp / player.maxHp), hpH);
-    ctx.fillStyle = "#fff";
-    ctx.font = "11px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(`${Math.ceil(player.hp)} / ${player.maxHp}`, hpX + hpW / 2, hpY + 12);
-
-    // Ability slots (keyboard/mouse). On touch, the touch overlay draws
-    // larger thumb-friendly buttons in the bottom-right, so skip this row.
-    if (!isTouchMode) {
-    const slotSize = 56;
-    const gap = 8;
-    const startX = hpX;
-    const startY = ch - 70;
-    for (let i = 0; i < 4; i++) {
-      const x = startX + i * (slotSize + gap);
-      const y = startY;
-      const abilityId = def.abilities[i];
-      // Slot background
-      ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-      ctx.fillRect(x, y, slotSize, slotSize);
-      if (!abilityId) {
-        // Locked slot
-        ctx.strokeStyle = "rgba(255,255,255,0.15)";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x, y, slotSize, slotSize);
-        ctx.fillStyle = "rgba(255,255,255,0.25)";
-        ctx.font = "10px system-ui, sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText("LOCKED", x + slotSize / 2, y + slotSize / 2);
-        continue;
-      }
-      const ability = ABILITIES[abilityId];
-      const cd = player.cooldowns[abilityId] ?? 0;
-      const ready = cd <= 0;
-
-      // Slot color
-      ctx.strokeStyle = ready ? "#ffd84a" : "rgba(255,255,255,0.2)";
-      ctx.lineWidth = ready ? 2 : 1;
-      ctx.strokeRect(x, y, slotSize, slotSize);
-
-      // Name
-      ctx.fillStyle = ready ? "#fff" : "rgba(255,255,255,0.5)";
-      ctx.font = "bold 11px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      const nameLines = ability.name.split(" ");
-      let ty = y + 18;
-      for (const line of nameLines) {
-        ctx.fillText(line, x + slotSize / 2, ty);
-        ty += 12;
-      }
-
-      // Cooldown overlay
-      if (!ready) {
-        const pct = cd / ability.cooldown;
-        ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-        ctx.fillRect(x, y, slotSize, slotSize * pct);
-        ctx.fillStyle = "#fff";
-        ctx.font = "bold 16px system-ui, sans-serif";
-        ctx.fillText(cd.toFixed(1), x + slotSize / 2, y + slotSize / 2 + 6);
-      }
-
-      // Key binding label
-      ctx.fillStyle = ready ? "#ffd84a" : "rgba(255,216,74,0.4)";
-      ctx.font = "bold 11px system-ui, sans-serif";
-      ctx.textAlign = "right";
-      ctx.fillText(ABILITY_KEYS[i], x + slotSize - 4, y + slotSize - 4);
-    }
-    } // end !isTouchMode ability slot block
+  // ---- Top-right: points + (desktop) ability bar ----
+  // Ability bar lives at the top-right on desktop. On touch the big
+  // bottom-right touch buttons cover this, so we skip it and just show
+  // points.
+  let topRightX = cw - 16;
+  if (!isTouchMode && player) {
+    topRightX = drawAbilityBar(ctx, player, cw);
   }
+  drawPoints(ctx, points, topRightX - 12);
 
-  // Controls hint (small, top right) — keyboard/mouse only.
-  if (!isTouchMode) {
-    ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
-    ctx.fillRect(cw - 200, 10, 190, 80);
-    ctx.fillStyle = "#fff";
-    ctx.font = "11px system-ui, sans-serif";
-    ctx.textAlign = "left";
-    ctx.fillText("WASD — move", cw - 192, 28);
-    ctx.fillText("Mouse — aim", cw - 192, 44);
-    ctx.fillText("Q E R F — abilities", cw - 192, 60);
-    ctx.fillText("Esc — pause", cw - 192, 76);
-  }
-
-  // Pause / outcome overlay
+  // ---- Pause / outcome overlay ----
   if (paused || outcome !== "ongoing") {
-    ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
-    ctx.fillRect(0, 0, cw, ch);
-    ctx.fillStyle = "#fff";
-    ctx.textAlign = "center";
-    ctx.font = "bold 56px system-ui, sans-serif";
-    let title = "PAUSED";
-    let subtitle = isTouchMode ? "Tap to resume" : "Press Esc to resume";
-    const restartHint = isTouchMode ? "Tap to restart." : "Press R to restart.";
-    if (outcome === "hunter_win") {
-      title = "HUNTER WINS";
-      subtitle = `Slagy got you. ${restartHint}`;
-      ctx.fillStyle = "#d04848";
-    } else if (outcome === "survivor_win") {
-      title = "SURVIVOR WINS";
-      subtitle = `You made it. ${restartHint}`;
-      ctx.fillStyle = "#48d0a0";
-    } else if (outcome === "draw") {
-      title = "DRAW";
-      ctx.fillStyle = "#fff";
-    }
-    ctx.fillText(title, cw / 2, ch / 2 - 10);
-    ctx.fillStyle = "#fff";
-    ctx.font = "16px system-ui, sans-serif";
-    ctx.fillText(subtitle, cw / 2, ch / 2 + 30);
+    drawPauseOrOutcome(ctx, cw, ch, outcome, paused, isTouchMode);
   }
+}
+
+function drawNameAndHp(ctx: CanvasRenderingContext2D, p: ReturnType<World["playerCharacter"]> & {}): void {
+  const def = CHARACTERS[(p as { characterId: string }).characterId];
+  const character = p as {
+    team: "hunter" | "survivor";
+    hp: number;
+    maxHp: number;
+  };
+  const x = 20;
+  const y = 14;
+  const w = 220;
+  const h = 50;
+  ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(`${def.name} · ${character.team.toUpperCase()}`, x + 8, y + 18);
+  // HP bar below the name.
+  const barX = x + 8;
+  const barY = y + 26;
+  const barW = w - 16;
+  const barH = 14;
+  ctx.fillStyle = "#333";
+  ctx.fillRect(barX, barY, barW, barH);
+  ctx.fillStyle = character.team === "hunter" ? "#d04848" : "#48d0a0";
+  ctx.fillRect(barX, barY, barW * (character.hp / character.maxHp), barH);
+  ctx.fillStyle = "#fff";
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(
+    `${Math.ceil(character.hp)} / ${character.maxHp}`,
+    barX + barW / 2,
+    barY + 11,
+  );
+}
+
+// Draws four ability slots in a horizontal row anchored to the top-right.
+// Returns the X coordinate of the bar's LEFT edge so the points display
+// can sit just left of it without overlapping.
+function drawAbilityBar(
+  ctx: CanvasRenderingContext2D,
+  p: ReturnType<World["playerCharacter"]> & {},
+  cw: number,
+): number {
+  const player = p as {
+    characterId: string;
+    cooldowns: Record<string, number>;
+    charging?: { abilityId: string; remaining: number; total: number };
+  };
+  const def = CHARACTERS[player.characterId];
+  const slot = 50;
+  const gap = 6;
+  const padding = 16;
+  const rowW = 4 * slot + 3 * gap;
+  const x0 = cw - padding - rowW;
+  const y = 14;
+  for (let i = 0; i < 4; i++) {
+    const x = x0 + i * (slot + gap);
+    ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+    ctx.fillRect(x, y, slot, slot);
+    const abilityId = def.abilities[i];
+    if (!abilityId) {
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x, y, slot, slot);
+      ctx.fillStyle = "rgba(255,255,255,0.22)";
+      ctx.font = "9px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("LOCKED", x + slot / 2, y + slot / 2 + 2);
+      continue;
+    }
+    const ability = ABILITIES[abilityId];
+    const cd = player.cooldowns[abilityId] ?? 0;
+    const ready = cd <= 0;
+    ctx.strokeStyle = ready ? "#ffd84a" : "rgba(255,255,255,0.2)";
+    ctx.lineWidth = ready ? 2 : 1;
+    ctx.strokeRect(x, y, slot, slot);
+    ctx.fillStyle = ready ? "#fff" : "rgba(255,255,255,0.55)";
+    ctx.font = "bold 10px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    const lines = ability.name.split(" ");
+    let ty = y + 16;
+    for (const line of lines) {
+      ctx.fillText(line, x + slot / 2, ty);
+      ty += 11;
+    }
+    if (!ready) {
+      const pct = Math.min(1, cd / ability.cooldown);
+      ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+      ctx.fillRect(x, y, slot, slot * pct);
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 14px system-ui, sans-serif";
+      ctx.fillText(cd.toFixed(1), x + slot / 2, y + slot / 2 + 5);
+    }
+    ctx.fillStyle = ready ? "#ffd84a" : "rgba(255,216,74,0.45)";
+    ctx.font = "bold 10px system-ui, sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(ABILITY_KEYS[i], x + slot - 4, y + slot - 4);
+  }
+  return x0;
+}
+
+function drawPoints(ctx: CanvasRenderingContext2D, points: number, rightEdgeX: number): void {
+  const label = points === 1 ? "★ 1" : `★ ${points}`;
+  ctx.font = "bold 16px system-ui, sans-serif";
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "right";
+  const w = ctx.measureText(label).width + 24;
+  const h = 36;
+  const x = rightEdgeX - w;
+  const y = 14;
+  ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = "#ffd84a";
+  ctx.fillText(label, x + w - 12, y + 24);
+}
+
+function drawPauseOrOutcome(
+  ctx: CanvasRenderingContext2D,
+  cw: number,
+  ch: number,
+  outcome: RoundOutcome,
+  paused: boolean,
+  isTouchMode: boolean,
+): void {
+  ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+  ctx.fillRect(0, 0, cw, ch);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  let title = "PAUSED";
+  let subtitle = isTouchMode ? "Tap the pause button to resume" : "Press Esc to resume";
+  let titleColor = "#fff";
+  const restartHint = isTouchMode ? "Tap to restart." : "Press R to restart.";
+  if (outcome === "hunter_win") {
+    title = "HUNTER WINS";
+    subtitle = restartHint;
+    titleColor = "#d04848";
+  } else if (outcome === "survivor_win") {
+    title = "SURVIVORS WIN";
+    subtitle = restartHint;
+    titleColor = "#48d0a0";
+  } else if (outcome === "draw") {
+    title = "DRAW";
+    titleColor = "#fff";
+  }
+  ctx.fillStyle = titleColor;
+  ctx.font = "bold 56px system-ui, sans-serif";
+  ctx.fillText(title, cw / 2, ch / 2 - 10);
+  ctx.fillStyle = "#fff";
+  ctx.font = "16px system-ui, sans-serif";
+  ctx.fillText(subtitle, cw / 2, ch / 2 + 30);
 }

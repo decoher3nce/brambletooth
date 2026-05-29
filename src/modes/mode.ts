@@ -15,4 +15,7 @@ export interface GameMode {
   initialize(world: World): void;
   // Called each tick after physics. Returns current outcome.
   checkOutcome(world: World): RoundOutcome;
+  // Optional hook fired immediately after a survivor picks up an objective.
+  // Lets modes spawn replacements (HuntMode keeps exactly one on the field).
+  onObjectiveCollected?(world: World, collectorId: number): void;
 }

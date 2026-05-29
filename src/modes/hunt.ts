@@ -1,13 +1,16 @@
 // 1vN Hunter vs Survivors mode. One hunter, one or more survivors.
 // - Hunter wins by reducing all survivors' HP to zero before the timer.
-// - Survivors win by surviving the timer OR by collectively collecting the
-//   required number of objectives.
-// - With N=1 this is the original 1v1 (local single-player still uses it).
+// - Survivors win by surviving the timer OR by any single survivor
+//   collecting `objectivesRequired` objectives. Objectives respawn one at
+//   a time as each is taken, so the field always has exactly one target.
+// - With N=1 this reduces to 1v1 (local single-player still uses it).
 
 import type { World } from "../core/world";
 import type { GameMode, RoundOutcome } from "./mode";
-import type { CharacterEntity } from "../core/entity";
+import type { CharacterEntity, ObjectiveEntity } from "../core/entity";
+import { isProp } from "../core/entity";
 import { CHARACTERS } from "../characters/characters";
+import { dist } from "../core/math";
 
 export interface HuntConfig {
   hunterCharacterId: string;
@@ -18,8 +21,14 @@ export interface HuntConfig {
   // authoritative play ignores this — each client flags its own isPlayer
   // from the yourEntityId it receives in `start`.
   playerRole: "hunter" | "survivor";
+  // Per-survivor target. The first survivor to collect this many objectives
+  // wins for the survivor team.
   objectivesRequired: number;
 }
+
+const OBJECTIVE_RADIUS = 22;
+const SPAWN_MARGIN = 100;
+const MIN_OBJECTIVE_CLEARANCE = 60; // away from any character / prop / plate
 
 export class HuntMode implements GameMode {
   id = "hunt";
@@ -47,12 +56,10 @@ export class HuntMode implements GameMode {
       cooldowns: {},
       statuses: {},
       isPlayer: this.cfg.playerRole === "hunter",
+      objectivesCollected: 0,
     });
 
-    // Survivors spawn distributed across the north edge. N=1 centers them;
-    // N>1 spreads them evenly with arena padding so they don't clip the
-    // fence. Spawn order matches the array — callers can map back to picks
-    // by index via world.charactersOnTeam("survivor").
+    // Survivors spawn distributed across the north edge.
     const ids = this.cfg.survivorCharacterIds;
     const n = ids.length;
     const padding = 120;
@@ -77,10 +84,69 @@ export class HuntMode implements GameMode {
         vel: { x: 0, y: 0 },
         cooldowns: {},
         statuses: {},
-        // Local single-player only ever has one survivor; flag the first.
         isPlayer: this.cfg.playerRole === "survivor" && i === 0,
+        objectivesCollected: 0,
       });
     }
+
+    // One objective at a time — spawn the first.
+    this.spawnObjective(world);
+  }
+
+  // Called by the engine whenever an objective is picked up. We just
+  // spawn the next so the field never has zero (until the round ends).
+  onObjectiveCollected(world: World, _collectorId: number): void {
+    this.spawnObjective(world);
+  }
+
+  private spawnObjective(world: World): void {
+    const b = world.arena.bounds;
+    // Try several random placements; keep the first one that doesn't
+    // overlap a blocking prop or sit on top of a character / plate. If
+    // we can't find a spot in a reasonable number of tries, fall back to
+    // whatever the last candidate was — better to have an objective than
+    // skip the spawn.
+    let chosen: { x: number; y: number } | null = null;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const x = b.minX + SPAWN_MARGIN + Math.random() * (b.maxX - b.minX - 2 * SPAWN_MARGIN);
+      const y = b.minY + SPAWN_MARGIN + Math.random() * (b.maxY - b.minY - 2 * SPAWN_MARGIN);
+      let ok = true;
+      for (const e of world.entities) {
+        if (isProp(e) && e.blocking) {
+          if (dist({ x, y }, e.pos) < e.radius + MIN_OBJECTIVE_CLEARANCE) {
+            ok = false;
+            break;
+          }
+        } else if (e.kind === "character") {
+          if (dist({ x, y }, e.pos) < e.radius + MIN_OBJECTIVE_CLEARANCE) {
+            ok = false;
+            break;
+          }
+        } else if (e.kind === "plate") {
+          if (dist({ x, y }, e.pos) < e.radius + 30) {
+            ok = false;
+            break;
+          }
+        } else if (e.kind === "objective" && !e.collected) {
+          // Don't spawn a second live objective on top of an existing one
+          // (defensive — initialize shouldn't produce this case).
+          if (dist({ x, y }, e.pos) < e.radius + 60) {
+            ok = false;
+            break;
+          }
+        }
+      }
+      if (ok) { chosen = { x, y }; break; }
+      if (attempt === 39) chosen = { x, y }; // give up; use last candidate
+    }
+    if (!chosen) return;
+    world.spawn<ObjectiveEntity>({
+      kind: "objective",
+      pos: chosen,
+      radius: OBJECTIVE_RADIUS,
+      collected: false,
+      dead: false,
+    });
   }
 
   checkOutcome(world: World): RoundOutcome {
@@ -90,14 +156,11 @@ export class HuntMode implements GameMode {
     if (survivors.length === 0) return "hunter_win";
     if (hunters.length === 0) return "survivor_win";
 
-    const objectives = world.entities.filter(
-      (e) => e.kind === "objective",
-    ) as Array<{ collected: boolean }>;
-    const collected = objectives.filter((o) => o.collected).length;
-    if (collected >= this.cfg.objectivesRequired) return "survivor_win";
-
+    // First survivor to reach the per-survivor target wins.
+    if (survivors.some((s) => s.objectivesCollected >= this.cfg.objectivesRequired)) {
+      return "survivor_win";
+    }
     if (world.elapsed >= world.timeLimit) return "survivor_win";
-
     return "ongoing";
   }
 }

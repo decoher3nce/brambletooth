@@ -51,3 +51,17 @@ export function circlesOverlap(a: Vec2, ra: number, b: Vec2, rb: number): boolea
   const r = ra + rb;
   return dx * dx + dy * dy <= r * r;
 }
+
+// Perpendicular distance from point p to segment a-b (clamped at endpoints).
+// Used for line-of-sight tests and any line-segment-vs-circle check.
+export function distToSegment(p: Vec2, a: Vec2, b: Vec2): number {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const ablen2 = abx * abx + aby * aby;
+  if (ablen2 < 1e-6) return dist(p, a);
+  let t = ((p.x - a.x) * abx + (p.y - a.y) * aby) / ablen2;
+  t = Math.max(0, Math.min(1, t));
+  const cx = a.x + abx * t;
+  const cy = a.y + aby * t;
+  return Math.hypot(p.x - cx, p.y - cy);
+}
