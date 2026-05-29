@@ -100,6 +100,10 @@ let netCamInit = false;
 // One-shot: broadcast our default highlight when we (re)enter the lobby so
 // the opponent sees our pick without us tapping. Reset when we leave lobby.
 let netInitialPickSent = false;
+// Client-side smoothing: rendered character positions ease toward the
+// authoritative snapshot position, turning 30 Hz steps into fluid motion.
+// Keyed by entity id; pruned/cleared when entities vanish or the round ends.
+const netSmoothed = new Map<number, { x: number; y: number }>();
 
 // --- Select screen (local picker + networked lobby) ---
 const selectScreen = new SelectScreen();
@@ -308,6 +312,10 @@ function buildLobbyView(): LobbyView {
 
 function frameNet(dt: number, dims: { w: number; h: number }): void {
   if (!net) return;
+  const n = net; // stable non-null ref for use inside closures
+
+  // Smoothing state only applies during a round.
+  if (net.phase !== "playing" && net.phase !== "ended") netSmoothed.clear();
 
   switch (net.phase) {
     case "connecting":
@@ -342,13 +350,32 @@ function frameNet(dt: number, dims: { w: number; h: number }): void {
         drawCenter(dims, "Starting round…", "");
         return;
       }
+      // Build the render entity list. Characters are smoothed toward their
+      // authoritative position and flagged isPlayer for our own; fast,
+      // short-lived entities (projectiles) render at the exact server pos.
+      const k = Math.min(1, dt * 18);
+      const liveIds = new Set<number>();
+      const renderEntities = snap.entities.map((e) => {
+        liveIds.add(e.id);
+        if (e.kind !== "character") return e;
+        let s = netSmoothed.get(e.id);
+        if (!s) {
+          s = { x: e.pos.x, y: e.pos.y };
+          netSmoothed.set(e.id, s);
+        } else {
+          s.x += (e.pos.x - s.x) * k;
+          s.y += (e.pos.y - s.y) * k;
+        }
+        return { ...e, pos: { x: s.x, y: s.y }, isPlayer: e.id === n.yourEntityId };
+      });
+      for (const id of netSmoothed.keys()) {
+        if (!liveIds.has(id)) netSmoothed.delete(id);
+      }
+
       if (!netViewWorld) netViewWorld = new World(FOREST_ARENA_CONFIG, snap.timeLimit);
-      netViewWorld.entities = snap.entities;
+      netViewWorld.entities = renderEntities;
       netViewWorld.elapsed = snap.elapsed;
       netViewWorld.timeLimit = snap.timeLimit;
-      for (const e of snap.entities) {
-        if (e.kind === "character") e.isPlayer = e.id === net.yourEntityId;
-      }
 
       const me = netViewWorld.playerCharacter();
       if (me && !netCamInit) {

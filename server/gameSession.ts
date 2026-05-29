@@ -14,6 +14,7 @@ import { FOREST_ARENA_CONFIG, buildForest } from "../src/arenas/forest";
 import { createInput } from "../src/core/input";
 import type { InputState } from "../src/core/input";
 import { HumanController } from "../src/core/humanController";
+import { createAIController } from "../src/ai/ai";
 import type { Controller } from "../src/ai/ai";
 import { CHARACTERS } from "../src/characters/characters";
 import type { PlayerSlot, InputMessage, SnapshotMessage } from "../src/net/protocol";
@@ -97,6 +98,18 @@ export class GameSession {
   // The character entity a given player's camera should follow / control.
   entityIdForSlot(slot: PlayerSlot): number | null {
     return this.players.find((p) => p.slot === slot)?.entityId ?? null;
+  }
+
+  // A player dropped mid-round — hand their character to an AI controller
+  // so the round continues for whoever's left. Returns false if that
+  // character has no AI (caller should end the round instead).
+  aiTakeover(slot: PlayerSlot): boolean {
+    const p = this.players.find((x) => x.slot === slot);
+    if (!p) return false;
+    const ai = createAIController(p.characterId);
+    if (!ai) return false;
+    this.engine.cfg.controllers.set(p.entityId, ai);
+    return true;
   }
 
   // Update a player's server-side input from a network message. keys are a

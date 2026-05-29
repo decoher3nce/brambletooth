@@ -181,6 +181,14 @@ function handleMessage(conn: ClientConn, raw: string): void {
 }
 
 function onConnection(ws: WebSocket): void {
+  // Reject joins while a round is in progress — joining only happens in the
+  // lobby. (A dropped player's slot is taken over by AI for the round.)
+  if (session) {
+    send(ws, { type: "welcome", protocolVersion: PROTOCOL_VERSION, slot: null, playerId: "" });
+    ws.close();
+    return;
+  }
+
   const slot: PlayerSlot | null = slots[0] === null ? 0 : slots[1] === null ? 1 : null;
 
   if (slot === null) {
@@ -213,10 +221,17 @@ function onConnection(ws: WebSocket): void {
   ws.on("close", () => {
     slots[slot] = null;
     console.log(`[conn] ${conn.playerId} (slot ${slot}) left`);
-    // If a round was in progress, abandon it — both players return to the
-    // lobby. (AI takeover of the dropped slot is a P5 nicety.)
     if (session) {
-      endRoundToLobby();
+      // Round in progress: hand the dropped player's character to AI and
+      // keep going for whoever's left. Only fall back to the lobby if no
+      // human remains or that character has no AI controller.
+      const took = session.aiTakeover(slot);
+      const humansLeft = slots.filter((c) => c !== null).length;
+      if (!took || humansLeft === 0) {
+        endRoundToLobby();
+      } else {
+        console.log(`[round] slot ${slot} dropped -> AI took over`);
+      }
     } else {
       broadcastLobby();
     }
