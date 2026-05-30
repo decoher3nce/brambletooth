@@ -17,11 +17,17 @@ export interface EarnedAchievement {
   earnedAt: number; // unix ms; 0 = unknown (migrated from legacy string[])
 }
 
+export interface PurchasedItem {
+  id: string;
+  purchasedAt: number; // unix ms; 0 = unknown (migrated from legacy string[])
+}
+
 export interface ProfileRecord {
   name: string;                       // canonical (player-typed) form
   pin: string;                        // plaintext (see security note)
   points: number;
   achievements: EarnedAchievement[];  // earned with timestamps
+  inventory: PurchasedItem[];         // shop purchases with timestamps
   createdAt: number;
   updatedAt: number;
 }
@@ -57,16 +63,49 @@ function migrateAchievements(input: unknown): EarnedAchievement[] {
   return out;
 }
 
+// Same shape as migrateAchievements (string[] -> {id, ts}[]) but for the
+// shop inventory. Legacy profiles without an inventory field get an
+// empty array.
+function migrateInventory(input: unknown): PurchasedItem[] {
+  if (!Array.isArray(input)) return [];
+  const out: PurchasedItem[] = [];
+  const seen = new Set<string>();
+  for (const item of input) {
+    if (typeof item === "string") {
+      if (seen.has(item)) continue;
+      seen.add(item);
+      out.push({ id: item, purchasedAt: 0 });
+    } else if (
+      item &&
+      typeof item === "object" &&
+      typeof (item as { id?: unknown }).id === "string"
+    ) {
+      const obj = item as { id: string; purchasedAt?: number };
+      if (seen.has(obj.id)) continue;
+      seen.add(obj.id);
+      out.push({ id: obj.id, purchasedAt: Number(obj.purchasedAt) || 0 });
+    }
+  }
+  return out;
+}
+
 function ensureLoaded(): void {
   if (loaded) return;
   loaded = true;
   if (existsSync(PROFILE_FILE)) {
     try {
       const raw = JSON.parse(readFileSync(PROFILE_FILE, "utf8")) as Record<string, unknown>;
-      // Migrate legacy string[] achievements to {id, earnedAt}[].
+      // Migrate legacy string[] achievements to {id, earnedAt}[],
+      // and backfill inventory (added later) on existing records.
       for (const key of Object.keys(raw)) {
-        const p = raw[key] as ProfileRecord & { achievements?: unknown };
-        if (p) p.achievements = migrateAchievements(p.achievements);
+        const p = raw[key] as ProfileRecord & {
+          achievements?: unknown;
+          inventory?: unknown;
+        };
+        if (p) {
+          p.achievements = migrateAchievements(p.achievements);
+          p.inventory = migrateInventory(p.inventory);
+        }
       }
       store = raw as ProfileMap;
     } catch (err) {
@@ -123,6 +162,7 @@ export function login(name: unknown, pin: unknown): LoginResult {
     pin,
     points: 0,
     achievements: [],
+    inventory: [],
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -138,6 +178,7 @@ export interface PublicProfile {
   name: string;
   points: number;
   achievements: EarnedAchievement[];
+  inventory: PurchasedItem[];
 }
 export function lookupPublic(name: unknown): { ok: boolean; profile?: PublicProfile; error?: string } {
   ensureLoaded();
@@ -151,6 +192,7 @@ export function lookupPublic(name: unknown): { ok: boolean; profile?: PublicProf
       name: existing.name,
       points: existing.points,
       achievements: existing.achievements ?? [],
+      inventory: existing.inventory ?? [],
     },
   };
 }
@@ -166,7 +208,7 @@ export function lookupPublic(name: unknown): { ok: boolean; profile?: PublicProf
 export function syncProfile(
   name: unknown,
   pin: unknown,
-  payload: { points?: number; achievements?: unknown },
+  payload: { points?: number; achievements?: unknown; inventory?: unknown },
 ): LoginResult {
   ensureLoaded();
   if (!isValidName(name)) return { ok: false, error: "Name must be 1-24 characters" };
@@ -200,6 +242,29 @@ export function syncProfile(
       }
     }
     existing.achievements = [...byId.values()];
+  }
+  if (Array.isArray(payload.inventory)) {
+    // Same union-by-id-with-earliest-timestamp pattern as achievements.
+    // The shop debits points on the client and posts the new totals
+    // here; the server doesn't re-charge — it just records ownership.
+    const incoming = migrateInventory(payload.inventory);
+    const byId = new Map<string, PurchasedItem>();
+    for (const a of existing.inventory ?? []) byId.set(a.id, a);
+    for (const a of incoming) {
+      const prev = byId.get(a.id);
+      if (!prev) {
+        byId.set(a.id, a);
+      } else {
+        const earliest =
+          prev.purchasedAt === 0
+            ? a.purchasedAt
+            : a.purchasedAt === 0
+              ? prev.purchasedAt
+              : Math.min(prev.purchasedAt, a.purchasedAt);
+        byId.set(a.id, { id: a.id, purchasedAt: earliest });
+      }
+    }
+    existing.inventory = [...byId.values()];
   }
   existing.updatedAt = Date.now();
   save();

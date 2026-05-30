@@ -25,6 +25,13 @@ import {
   drawAchievementTile,
   formatEarnedDate,
 } from "./achievements/catalog";
+import {
+  SHOP_CATALOG,
+  drawShopItemIcon,
+  shopItemsByKind,
+  shopKindLabel,
+} from "./shop/catalog";
+import type { ShopItem, ShopItemKind } from "./shop/catalog";
 import type { Camera } from "./render/renderer";
 import { HuntMode } from "./modes/hunt";
 import { FOREST_ARENA_CONFIG, buildForest } from "./arenas/forest";
@@ -156,6 +163,7 @@ interface ProfileResponse {
     name: string;
     points: number;
     achievements?: (string | { id: string; earnedAt?: number })[];
+    inventory?: (string | { id: string; purchasedAt?: number })[];
   };
   error?: string;
 }
@@ -183,6 +191,15 @@ async function tryLogin(name: string, pin: string): Promise<boolean> {
           typeof a === "string"
             ? { id: a, earnedAt: 0 }
             : { id: a.id, earnedAt: Number(a.earnedAt) || 0 },
+        ),
+      );
+    }
+    if (Array.isArray(body.profile.inventory)) {
+      saveInventory(
+        body.profile.inventory.map((p) =>
+          typeof p === "string"
+            ? { id: p, purchasedAt: 0 }
+            : { id: p.id, purchasedAt: Number(p.purchasedAt) || 0 },
         ),
       );
     }
@@ -224,6 +241,7 @@ function scheduleProfileSync(): void {
           pin,
           points: getPoints(),
           achievements: getEarnedAchievements(),
+          inventory: getInventory(),
         }),
       });
       const body = (await r.json()) as ProfileResponse;
@@ -239,6 +257,16 @@ function scheduleProfileSync(): void {
               typeof a === "string"
                 ? { id: a, earnedAt: 0 }
                 : { id: a.id, earnedAt: Number(a.earnedAt) || 0 },
+            ),
+          );
+        }
+        // Inventory — same union-by-id discipline.
+        if (Array.isArray(body.profile.inventory)) {
+          saveInventory(
+            body.profile.inventory.map((p) =>
+              typeof p === "string"
+                ? { id: p, purchasedAt: 0 }
+                : { id: p.id, purchasedAt: Number(p.purchasedAt) || 0 },
             ),
           );
         }
@@ -390,14 +418,20 @@ touchControls.bind(canvas, logicalSize, {
 // --- Title screen + back-button input ---
 // Title hit zones (only when !started). Back-button hit zone (only when
 // started) is stored separately and computed each draw from logical size.
-let titleButtons: { single: Rect; two: Rect; ffa: Rect } | null = null;
+let titleButtons: { single: Rect; two: Rect; ffa: Rect; shop: Rect } | null = null;
 let titleLoginBtn: Rect | null = null;
 let titleLogoutBtn: Rect | null = null;
 let titleProfileBtn: Rect | null = null;
 let titleProfileBackBtn: Rect | null = null;
-type TitleSubScene = "main" | "profile";
+type TitleSubScene = "main" | "profile" | "shop";
 let titleSubScene: TitleSubScene = "main";
 const backBtnRect: Rect = { x: 20, y: 20, w: 96, h: 36 };
+
+// Shop sub-scene hit zones (re-built each draw).
+let shopBackBtn: Rect | null = null;
+let shopTabBtns: { kind: ShopItemKind; rect: Rect }[] = [];
+let shopBuyBtns: { id: string; rect: Rect }[] = [];
+let shopActiveTab: ShopItemKind = "character";
 
 function handleTitleTap(p: { x: number; y: number }): void {
   // Audio gesture unlock on any title tap — works even before chooseMode.
@@ -408,6 +442,39 @@ function handleTitleTap(p: { x: number; y: number }): void {
     if (titleProfileBackBtn && inRect(p, titleProfileBackBtn)) {
       playSound("ui_back");
       titleSubScene = "main";
+    }
+    return;
+  }
+  // Shop sub-scene: BACK, tab buttons, and per-item BUY buttons.
+  if (titleSubScene === "shop") {
+    if (shopBackBtn && inRect(p, shopBackBtn)) {
+      playSound("ui_back");
+      titleSubScene = "main";
+      return;
+    }
+    for (const tab of shopTabBtns) {
+      if (inRect(p, tab.rect)) {
+        if (shopActiveTab !== tab.kind) {
+          playSound("ui_pick");
+          shopActiveTab = tab.kind;
+        }
+        return;
+      }
+    }
+    for (const buy of shopBuyBtns) {
+      if (inRect(p, buy.rect)) {
+        const result = purchaseItem(buy.id);
+        if (result === "ok") {
+          // purchaseItem already plays the achievement chime + banner.
+        } else if (result === "owned") {
+          playSound("ui_denied");
+        } else if (result === "not_logged_in") {
+          playSound("ui_denied");
+        } else if (result === "broke") {
+          playSound("ui_denied");
+        }
+        return;
+      }
     }
     return;
   }
@@ -441,6 +508,9 @@ function handleTitleTap(p: { x: number; y: number }): void {
     // Grayed out — give audible feedback that the click registered but
     // nothing's behind it yet.
     playSound("ui_denied");
+  } else if (inRect(p, titleButtons.shop)) {
+    playSound("ui_click");
+    titleSubScene = "shop";
   }
 }
 
@@ -1109,6 +1179,10 @@ function frameTitle(dims: { w: number; h: number }): void {
     frameProfile(dims);
     return;
   }
+  if (titleSubScene === "shop") {
+    frameShop(dims);
+    return;
+  }
 
   const cw = dims.w;
   const ch = dims.h;
@@ -1151,20 +1225,22 @@ function frameTitle(dims: { w: number; h: number }): void {
     drawLoginForm(dims, profileTop);
   }
 
-  // ---- Mode buttons (three; FFA grayed) ----
+  // ---- Mode buttons (three play modes + SHOP) ----
   const bw = 320;
-  const bh = 60;
-  const gap = 14;
+  const bh = 56;
+  const gap = 12;
   const bx = cw / 2 - bw / 2;
   const by = ch * 0.58;
   const single: Rect = { x: bx, y: by, w: bw, h: bh };
   const two: Rect = { x: bx, y: by + bh + gap, w: bw, h: bh };
   const ffa: Rect = { x: bx, y: by + 2 * (bh + gap), w: bw, h: bh };
-  titleButtons = { single, two, ffa };
+  const shop: Rect = { x: bx, y: by + 3 * (bh + gap), w: bw, h: bh };
+  titleButtons = { single, two, ffa, shop };
 
   drawModeButton(single, "SINGLE PLAYER", "1 vs Computer", true, true);
   drawModeButton(two, "MULTIPLAYER", "1 vs Many (over your network)", true, true);
   drawModeButton(ffa, "FREE FOR ALL", "N vs N · with players + computers · COMING SOON", false, false);
+  drawModeButton(shop, "SHOP", "Characters · Outfits · Upgrades", false, true);
 }
 
 function drawLoginForm(dims: { w: number; h: number }, top: number): void {
@@ -1431,6 +1507,276 @@ function frameProfile(dims: { w: number; h: number }): void {
   ctx.fillText("← BACK", bx + bw / 2, by + bh / 2);
   ctx.textBaseline = "alphabetic";
   ctx.textAlign = "left";
+}
+
+// ---- Shop sub-scene ----
+// Header (title + player's point balance), three tabs (Characters /
+// Outfits / Upgrades), a card grid for the active tab, and a BACK
+// button. Click handlers in handleTitleTap read the shopBackBtn /
+// shopTabBtns / shopBuyBtns this function repopulates each frame.
+function frameShop(dims: { w: number; h: number }): void {
+  const cw = dims.w;
+  const ch = dims.h;
+  ctx.fillStyle = "#1a2421";
+  ctx.fillRect(0, 0, cw, ch);
+  nameInput.style.display = "none";
+  pinInput.style.display = "none";
+
+  // Reset hit-test arrays — repopulated below.
+  shopTabBtns = [];
+  shopBuyBtns = [];
+
+  // ---- Header ----
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 36px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText("SHOP", cw / 2, ch * 0.08);
+
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.font = "13px system-ui, sans-serif";
+  ctx.fillText(
+    loggedIn
+      ? "Spend your points on characters, outfits, and upgrades."
+      : "Log in on the title screen to buy — you can still browse.",
+    cw / 2,
+    ch * 0.08 + 22,
+  );
+
+  // Point balance in the top-right.
+  const points = getPoints();
+  ctx.fillStyle = "#ffd84a";
+  ctx.font = "bold 18px system-ui, sans-serif";
+  ctx.textAlign = "right";
+  ctx.fillText(
+    points === 1 ? "1 point" : `${points} points`,
+    cw - 24,
+    ch * 0.08,
+  );
+
+  // ---- Tabs ----
+  const tabKinds: ShopItemKind[] = ["character", "outfit", "upgrade"];
+  const tabY = ch * 0.08 + 44;
+  const tabH = 34;
+  const tabGap = 8;
+  const tabW = 130;
+  const tabsTotalW = tabW * tabKinds.length + tabGap * (tabKinds.length - 1);
+  let tx = (cw - tabsTotalW) / 2;
+  for (const kind of tabKinds) {
+    const r: Rect = { x: tx, y: tabY, w: tabW, h: tabH };
+    const active = kind === shopActiveTab;
+    ctx.fillStyle = active ? "#ffd84a" : "rgba(40, 52, 48, 0.95)";
+    roundRect(r, 8);
+    ctx.fill();
+    if (!active) {
+      ctx.strokeStyle = "rgba(255,255,255,0.18)";
+      ctx.lineWidth = 1;
+      roundRect(r, 8);
+      ctx.stroke();
+    }
+    ctx.fillStyle = active ? "#1a2421" : "#fff";
+    ctx.font = "bold 13px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(shopKindLabel(kind).toUpperCase(), tx + tabW / 2, tabY + tabH / 2);
+    shopTabBtns.push({ kind, rect: r });
+    tx += tabW + tabGap;
+  }
+  ctx.textBaseline = "alphabetic";
+
+  // ---- Card grid for the active tab ----
+  const items = shopItemsByKind(shopActiveTab);
+  const gridTop = tabY + tabH + 20;
+  const gridBottom = ch - 80; // leave room for BACK button
+  const gridLeft = Math.max(40, (cw - 880) / 2);
+  const gridRight = cw - gridLeft;
+  const gridW = gridRight - gridLeft;
+
+  if (items.length === 0) {
+    // Empty state — shop chrome stays, body says "nothing here yet."
+    ctx.fillStyle = "rgba(255,255,255,0.5)";
+    ctx.font = "italic 14px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(
+      `No ${shopKindLabel(shopActiveTab).toLowerCase()} yet — check back soon.`,
+      cw / 2,
+      gridTop + 80,
+    );
+  } else {
+    const cardW = 200;
+    const cardH = 220;
+    const cardGap = 16;
+    const cols = Math.max(1, Math.min(items.length, Math.floor((gridW + cardGap) / (cardW + cardGap))));
+    const rowW = cols * cardW + (cols - 1) * cardGap;
+    const startX = (cw - rowW) / 2;
+    for (let i = 0; i < items.length; i++) {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const cx = startX + col * (cardW + cardGap);
+      const cy = gridTop + row * (cardH + cardGap);
+      if (cy + cardH > gridBottom) break; // clip overflow (paging later)
+      drawShopCard(items[i]!, { x: cx, y: cy, w: cardW, h: cardH });
+    }
+  }
+
+  // ---- BACK button ----
+  const bbw = 160;
+  const bbh = 40;
+  const bbx = (cw - bbw) / 2;
+  const bby = ch - 56;
+  shopBackBtn = { x: bbx, y: bby, w: bbw, h: bbh };
+  ctx.fillStyle = "rgba(40, 52, 48, 0.95)";
+  roundRect(shopBackBtn, 8);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.2)";
+  ctx.lineWidth = 1;
+  roundRect(shopBackBtn, 8);
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("← BACK", bbx + bbw / 2, bby + bbh / 2);
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
+}
+
+// Single item card: icon, name, description, price, and BUY/OWNED
+// state. Pushes the BUY rect into shopBuyBtns so handleTitleTap can
+// route clicks back to purchaseItem.
+function drawShopCard(item: ShopItem, r: Rect): void {
+  const owned = isItemOwned(item.id);
+  const affordable = getPoints() >= item.price;
+  const canBuy = loggedIn && !owned && affordable;
+
+  // Card body.
+  ctx.fillStyle = "rgba(28, 40, 36, 0.92)";
+  roundRect(r, 12);
+  ctx.fill();
+  ctx.strokeStyle = owned
+    ? "rgba(72, 208, 160, 0.55)"
+    : "rgba(255,255,255,0.08)";
+  ctx.lineWidth = owned ? 2 : 1;
+  roundRect(r, 12);
+  ctx.stroke();
+
+  // Icon centered near the top.
+  const iconSize = 64;
+  const iconX = r.x + r.w / 2 - iconSize / 2;
+  const iconY = r.y + 16;
+  drawShopItemIcon(ctx, item, iconX, iconY, iconSize, owned);
+
+  // Name.
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 14px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(item.name, r.x + r.w / 2, iconY + iconSize + 22);
+
+  // Description — wrap to two lines if needed.
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.font = "11px system-ui, sans-serif";
+  const desc = item.description;
+  const lines = wrapText(desc, r.w - 24, "11px system-ui, sans-serif", 2);
+  let dy = iconY + iconSize + 42;
+  for (const line of lines) {
+    ctx.fillText(line, r.x + r.w / 2, dy);
+    dy += 14;
+  }
+
+  // For outfits, append the scope ("All characters" / "Slagy only").
+  if (item.kind === "outfit") {
+    ctx.fillStyle = "rgba(255,255,255,0.4)";
+    ctx.font = "italic 10px system-ui, sans-serif";
+    const scope = item.characterId === "any"
+      ? "All characters"
+      : `${item.characterId ?? "?"} only`;
+    ctx.fillText(scope, r.x + r.w / 2, dy + 2);
+  }
+
+  // Buy / Owned button at the bottom.
+  const bw = r.w - 24;
+  const bh = 34;
+  const bx = r.x + 12;
+  const by = r.y + r.h - bh - 12;
+  const btn: Rect = { x: bx, y: by, w: bw, h: bh };
+
+  if (owned) {
+    ctx.fillStyle = "rgba(72, 208, 160, 0.18)";
+    roundRect(btn, 8);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(72, 208, 160, 0.6)";
+    ctx.lineWidth = 1;
+    roundRect(btn, 8);
+    ctx.stroke();
+    ctx.fillStyle = "#48d0a0";
+    ctx.font = "bold 12px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("OWNED ✓", bx + bw / 2, by + bh / 2);
+  } else {
+    // Visual: bright yellow when actionable, dim slate when not.
+    ctx.fillStyle = canBuy ? "#ffd84a" : "rgba(40, 52, 48, 0.7)";
+    roundRect(btn, 8);
+    ctx.fill();
+    if (!canBuy) {
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      ctx.lineWidth = 1;
+      roundRect(btn, 8);
+      ctx.stroke();
+    }
+    ctx.fillStyle = canBuy ? "#1a2421" : "rgba(255,255,255,0.5)";
+    ctx.font = "bold 12px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const label = !loggedIn
+      ? `LOG IN TO BUY · ${item.price}`
+      : !affordable
+        ? `NEED ${item.price - getPoints()} MORE`
+        : `BUY · ${item.price} PTS`;
+    ctx.fillText(label, bx + bw / 2, by + bh / 2);
+  }
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
+  // Always register the rect — handler routes by purchaseItem result.
+  shopBuyBtns.push({ id: item.id, rect: btn });
+}
+
+// Word-wrap helper used by the shop card description. Truncates after
+// maxLines with an ellipsis. Saves/restores font state.
+function wrapText(text: string, maxWidth: number, font: string, maxLines: number): string[] {
+  ctx.save();
+  ctx.font = font;
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let current = "";
+  let wordIndex = 0;
+  while (wordIndex < words.length && lines.length < maxLines) {
+    const w = words[wordIndex]!;
+    const test = current ? `${current} ${w}` : w;
+    if (ctx.measureText(test).width <= maxWidth) {
+      current = test;
+      wordIndex++;
+    } else if (current) {
+      lines.push(current);
+      current = "";
+    } else {
+      // Single word too long — accept it anyway and advance.
+      lines.push(w);
+      wordIndex++;
+    }
+  }
+  if (current && lines.length < maxLines) lines.push(current);
+  // Truncate with ellipsis if there are leftover words.
+  if (wordIndex < words.length && lines.length > 0) {
+    let last = lines[lines.length - 1]!;
+    while (last.length > 0 && ctx.measureText(last + "…").width > maxWidth) {
+      last = last.slice(0, -1);
+    }
+    lines[lines.length - 1] = last + "…";
+  }
+  ctx.restore();
+  return lines;
 }
 
 // Mode button: bigger, two-line (title + subtitle), with an enabled/disabled
@@ -1756,6 +2102,70 @@ function getRecentAchievements(limit: number): EarnedAchievement[] {
   return [...getEarnedAchievements()]
     .sort((a, b) => b.earnedAt - a.earnedAt)
     .slice(0, limit);
+}
+
+// ---- Shop inventory storage (localStorage; synced when logged in) ----
+// Same shape as achievements: array of {id, ts}. Buying debits points
+// locally and adds to this list; scheduleProfileSync ships to the
+// server which merges using the earliest-known timestamp.
+const INVENTORY_KEY = "brambletooth.inventory";
+interface PurchasedItem { id: string; purchasedAt: number; }
+
+function getInventory(): PurchasedItem[] {
+  try {
+    const raw = localStorage.getItem(INVENTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const out: PurchasedItem[] = [];
+    const seen = new Set<string>();
+    for (const item of parsed) {
+      if (typeof item === "string") {
+        if (seen.has(item)) continue;
+        seen.add(item);
+        out.push({ id: item, purchasedAt: 0 });
+      } else if (
+        item && typeof item === "object" &&
+        typeof (item as { id?: unknown }).id === "string"
+      ) {
+        const obj = item as { id: string; purchasedAt?: number };
+        if (seen.has(obj.id)) continue;
+        seen.add(obj.id);
+        out.push({ id: obj.id, purchasedAt: Number(obj.purchasedAt) || 0 });
+      }
+    }
+    return out;
+  } catch { return []; }
+}
+function saveInventory(list: PurchasedItem[]): void {
+  try { localStorage.setItem(INVENTORY_KEY, JSON.stringify(list)); }
+  catch { /* ignore */ }
+}
+function isItemOwned(id: string): boolean {
+  return getInventory().some((p) => p.id === id);
+}
+
+// Try to purchase the given item. Returns:
+//   "ok"           — purchased, points debited, sync scheduled
+//   "owned"        — already owned (no-op)
+//   "not_logged_in"— login required to buy (browse is allowed)
+//   "broke"        — not enough points
+//   "unknown"      — item id not in catalog
+type PurchaseResult = "ok" | "owned" | "not_logged_in" | "broke" | "unknown";
+function purchaseItem(id: string): PurchaseResult {
+  const item = SHOP_CATALOG[id];
+  if (!item) return "unknown";
+  if (isItemOwned(id)) return "owned";
+  if (!loggedIn) return "not_logged_in";
+  if (getPoints() < item.price) return "broke";
+  addPoints(-item.price);
+  const inv = getInventory();
+  inv.push({ id, purchasedAt: Date.now() });
+  saveInventory(inv);
+  scheduleProfileSync();
+  playSound("achievement"); // re-use the triumphant arpeggio for buys
+  fireAchievementBanner(`Purchased ${item.name}!`);
+  return "ok";
 }
 
 interface ActiveBanner { text: string; bornAt: number; }
