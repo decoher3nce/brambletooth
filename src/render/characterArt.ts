@@ -26,6 +26,7 @@ export type CharacterArtFn = (
   cx: number,
   cy: number,
   radius: number,
+  facing: number, // radians; 0 = right, π/2 = down, used for eye aim
 ) => CharacterArtResult;
 
 // ---- Generic gumdrop fallback ----
@@ -99,6 +100,7 @@ function drawMagnek(
   cx: number,
   cy: number,
   radius: number,
+  facing: number,
 ): CharacterArtResult {
   const r = radius;
 
@@ -125,9 +127,10 @@ function drawMagnek(
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
-  // Black outline (full U path traced thicker, sits behind colored halves).
+  // Black outline (thin — was thick + 4, now thick + 2 for ~1px
+  // visible border on each side of the colored stroke).
   ctx.strokeStyle = "#1a1a1a";
-  ctx.lineWidth = thick + 4;
+  ctx.lineWidth = thick + 2;
   ctx.beginPath();
   ctx.moveTo(xL, prongTopY);
   ctx.lineTo(xL, curveCenterY);
@@ -154,10 +157,15 @@ function drawMagnek(
   ctx.lineTo(xR, prongTopY);
   ctx.stroke();
 
-  // Eyes at the prong tips (the magnetic poles).
+  // Eyes at the prong tips (the magnetic poles). Symbols shift inside
+  // the white toward the facing direction so the eyes track the aim
+  // cursor (same input as the gumdrop facing — engine updates
+  // c.facing to atan2 of aim vector).
   const eyeR = thick * 0.36;
-  drawPoleEye(ctx, xL, prongTopY, eyeR, "-");
-  drawPoleEye(ctx, xR, prongTopY, eyeR, "+");
+  const lookX = Math.cos(facing);
+  const lookY = Math.sin(facing);
+  drawPoleEye(ctx, xL, prongTopY, eyeR, "-", lookX, lookY);
+  drawPoleEye(ctx, xR, prongTopY, eyeR, "+", lookX, lookY);
 
   // Smile at the base of the U where blue and red meet. Centered on
   // the curve's bottom centerline; drawn after the colored halves so
@@ -171,18 +179,19 @@ function drawMagnek(
   ctx.stroke();
 
   // ---- Stranded copper-wire body ----
-  // Strands SPIRAL like real twisted cable (sine-wave paths with
-  // 360°/N phase offsets). Each strand drawn as a dark-brown shadow
-  // followed by a copper highlight so crossings read as woven wire,
-  // not pinstripes.
+  // Strands SPIRAL gently like real twisted cable — low amplitude and
+  // few twists so the weave reads at a glance instead of looking like
+  // bandages. Each strand draws as a dark-brown shadow followed by a
+  // copper highlight so crossings layer naturally.
   const copper = "#c97a3a";
   const copperShadow = "#5a3315"; // deep umber for strand shadow + outlines
-  const copperDark = "#7c4a1f";   // mid-brown for terminator fills
 
   const torsoStrands = 4;
   const torsoStrandThick = Math.max(1.7, r * 0.085);
   const torsoBundleW = Math.max(10, r * 0.55);
-  const torsoAmp = (torsoBundleW - torsoStrandThick) / 2;
+  // Gentler than v4: amplitude halved, ~1.2 twists across torso length.
+  const torsoAmp = ((torsoBundleW - torsoStrandThick) / 2) * 0.5;
+  const torsoTwists = 1.2;
 
   const torsoTopY = headBaseY + r * 0.05;
   const torsoBottomY = cy - r * 0.5;
@@ -192,7 +201,7 @@ function drawMagnek(
     cx, torsoTopY,
     cx, torsoBottomY,
     torsoStrands, torsoStrandThick,
-    torsoAmp, 2.5,
+    torsoAmp, torsoTwists,
     copper, copperShadow,
   );
 
@@ -204,7 +213,6 @@ function drawMagnek(
   ctx.font = `bold ${fontSize}px system-ui, sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  // Left half: blue
   ctx.save();
   ctx.beginPath();
   ctx.rect(cx - fontSize, mY - fontSize, fontSize, fontSize * 2);
@@ -212,7 +220,6 @@ function drawMagnek(
   ctx.fillStyle = "#3a72c8";
   ctx.fillText("M", cx, mY);
   ctx.restore();
-  // Right half: red
   ctx.save();
   ctx.beginPath();
   ctx.rect(cx, mY - fontSize, fontSize, fontSize * 2);
@@ -221,62 +228,56 @@ function drawMagnek(
   ctx.fillText("M", cx, mY);
   ctx.restore();
 
-  // ---- Arms (3-strand, spiraled) ----
+  // ---- Arms (3-strand bundle that tapers to 2-strand hand) ----
   const limbStrands = 3;
   const limbStrandThick = Math.max(1.4, r * 0.07);
   const limbBundleW = Math.max(5, r * 0.28);
-  const limbAmp = (limbBundleW - limbStrandThick) / 2;
-  const handR = Math.max(3, r * 0.18);
-  const footR = Math.max(3.2, r * 0.2);
+  const limbAmp = ((limbBundleW - limbStrandThick) / 2) * 0.55;
+  const limbTwists = 1.0;
 
   const shoulderY = torsoTopY + (torsoBottomY - torsoTopY) * 0.18;
   const handReach = r * 0.95;
   const handRise = r * 0.42;
+  // Wrist sits 70% of the way from shoulder to hand tip; the bundle
+  // ends here and the 2 hand strands continue to the tip.
+  const wristFrac = 0.7;
 
-  // Arms emerge from the OUTER torso edges and rise outward.
-  drawSpiraledStrands(
+  // Left arm
+  drawWireLimb(
     ctx,
     cx - torsoBundleW / 2, shoulderY,
     cx - handReach, shoulderY - handRise,
-    limbStrands, limbStrandThick, limbAmp, 2,
-    copper, copperShadow,
+    limbStrands, limbStrandThick, limbAmp, limbTwists,
+    wristFrac, copper, copperShadow,
   );
-  drawSpiraledStrands(
+  // Right arm
+  drawWireLimb(
     ctx,
     cx + torsoBundleW / 2, shoulderY,
     cx + handReach, shoulderY - handRise,
-    limbStrands, limbStrandThick, limbAmp, 2,
-    copper, copperShadow,
+    limbStrands, limbStrandThick, limbAmp, limbTwists,
+    wristFrac, copper, copperShadow,
   );
 
-  // Hands — copper-dark blobs at the strand-bundle ends. Sized to
-  // cover the strand cluster so the limb visibly converges into them.
-  drawTerminator(ctx, cx - handReach, shoulderY - handRise, handR, copperDark, copperShadow);
-  drawTerminator(ctx, cx + handReach, shoulderY - handRise, handR, copperDark, copperShadow);
-
-  // ---- Legs (3-strand, spiraled) ----
+  // ---- Legs (same treatment, 2-strand foot) ----
   const legSplay = r * 0.55;
-  // Legs emerge from inner torso positions for visual continuity.
   const legTopXLeft = cx - torsoBundleW / 4;
   const legTopXRight = cx + torsoBundleW / 4;
-  drawSpiraledStrands(
+
+  drawWireLimb(
     ctx,
     legTopXLeft, torsoBottomY,
     cx - legSplay, feetY,
-    limbStrands, limbStrandThick, limbAmp, 2,
-    copper, copperShadow,
+    limbStrands, limbStrandThick, limbAmp, limbTwists,
+    wristFrac, copper, copperShadow,
   );
-  drawSpiraledStrands(
+  drawWireLimb(
     ctx,
     legTopXRight, torsoBottomY,
     cx + legSplay, feetY,
-    limbStrands, limbStrandThick, limbAmp, 2,
-    copper, copperShadow,
+    limbStrands, limbStrandThick, limbAmp, limbTwists,
+    wristFrac, copper, copperShadow,
   );
-
-  // Feet — same blob treatment as hands.
-  drawTerminator(ctx, cx - legSplay, feetY, footR, copperDark, copperShadow);
-  drawTerminator(ctx, cx + legSplay, feetY, footR, copperDark, copperShadow);
 
   ctx.restore();
 
@@ -349,34 +350,82 @@ function drawSpiraledStrands(
   }
 }
 
-// Hand / foot termination — a filled circle with a thin dark-brown
-// outline, drawn ON TOP of the strand-bundle endpoint so the limb
-// visually converges into it.
-function drawTerminator(
+// A full wire limb: spiraled N-strand bundle from (x1, y1) to a
+// "wrist" point at fraction `wristFrac` along the way, then 2 straight
+// strands continuing the rest of the way to (x2, y2) with a slight
+// outward splay. Used for both arms and legs — the 2 terminal strands
+// ARE the hand or foot (no separate ball terminator).
+function drawWireLimb(
   ctx: CanvasRenderingContext2D,
-  cx: number, cy: number, r: number,
-  fill: string,
-  outline: string,
+  x1: number, y1: number, x2: number, y2: number,
+  bundleStrands: number, strandThick: number,
+  bundleAmp: number, bundleTwists: number,
+  wristFrac: number,
+  copperColor: string, shadowColor: string,
 ): void {
-  ctx.fillStyle = fill;
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = outline;
-  ctx.lineWidth = 0.9;
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.stroke();
+  // Wrist (where the bundle ends and the 2 hand strands begin).
+  const wristX = x1 + (x2 - x1) * wristFrac;
+  const wristY = y1 + (y2 - y1) * wristFrac;
+
+  // Spiraled bundle: shoulder/hip → wrist/ankle.
+  drawSpiraledStrands(
+    ctx,
+    x1, y1, wristX, wristY,
+    bundleStrands, strandThick,
+    bundleAmp, bundleTwists,
+    copperColor, shadowColor,
+  );
+
+  // The 2 hand/foot strands: from wrist to (x2, y2), splayed slightly
+  // perpendicular to the limb axis. Slightly thicker than bundle
+  // strands so the hand/foot has visible weight.
+  const dx = x2 - wristX;
+  const dy = y2 - wristY;
+  const segLen = Math.hypot(dx, dy);
+  if (segLen < 0.01) return;
+  const px = -dy / segLen;
+  const py = dx / segLen;
+  // Splay grows from 0 at wrist to `splayMax` at the tip — strands
+  // converge at the wrist and fan outward at the hand/foot end.
+  const splayMax = strandThick * 1.4;
+  const tipThick = strandThick * 1.15;
+
+  for (const sign of [-1, 1]) {
+    const sx = wristX + px * splayMax * 0.15 * sign;
+    const sy = wristY + py * splayMax * 0.15 * sign;
+    const ex = x2 + px * splayMax * sign;
+    const ey = y2 + py * splayMax * sign;
+    // Shadow.
+    ctx.strokeStyle = shadowColor;
+    ctx.lineWidth = tipThick + 0.8;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.lineTo(ex, ey);
+    ctx.stroke();
+    // Copper highlight.
+    ctx.strokeStyle = copperColor;
+    ctx.lineWidth = tipThick;
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.lineTo(ex, ey);
+    ctx.stroke();
+  }
 }
 
-// Single eye on a magnet pole. "+" gets cross marks, "-" gets just
-// the horizontal bar.
+// Single eye on a magnet pole. White circle stays anchored to the
+// prong tip; the polarity symbol shifts inside the white toward the
+// look direction (lookX, lookY = cos/sin of facing). Gives Magnek
+// cursor-tracking eyes without dislodging them from the prongs.
+// "+" gets cross marks, "-" gets just the horizontal bar.
 function drawPoleEye(
   ctx: CanvasRenderingContext2D,
   cx: number,
   cy: number,
   r: number,
   symbol: "+" | "-",
+  lookX: number,
+  lookY: number,
 ): void {
   ctx.fillStyle = "#fff";
   ctx.beginPath();
@@ -385,15 +434,21 @@ function drawPoleEye(
   ctx.strokeStyle = "#1a1a1a";
   ctx.lineWidth = 1.2;
   ctx.stroke();
-  // Polarity glyph in the pupil position.
+  // Symbol shifts inside the white toward the aim direction.
+  // Vertical shift dampened to feel right against the iso ground plane.
+  const shift = r * 0.32;
+  const sx = cx + lookX * shift;
+  const sy = cy + lookY * shift * 0.6;
+  // Symbol bars sized so even at max shift they stay inside the white.
+  const barHalf = r * 0.45;
   ctx.lineWidth = Math.max(1.6, r * 0.32);
   ctx.lineCap = "round";
   ctx.beginPath();
-  ctx.moveTo(cx - r * 0.55, cy);
-  ctx.lineTo(cx + r * 0.55, cy);
+  ctx.moveTo(sx - barHalf, sy);
+  ctx.lineTo(sx + barHalf, sy);
   if (symbol === "+") {
-    ctx.moveTo(cx, cy - r * 0.55);
-    ctx.lineTo(cx, cy + r * 0.55);
+    ctx.moveTo(sx, sy - barHalf);
+    ctx.lineTo(sx, sy + barHalf);
   }
   ctx.stroke();
 }

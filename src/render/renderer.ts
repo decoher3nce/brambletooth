@@ -392,7 +392,7 @@ export class Renderer {
     // position correctly regardless of head size.
     const art = CHARACTER_ART[e.characterId];
     const { topY, centerY } = art
-      ? art(ctx, s.x, s.y, e.radius)
+      ? art(ctx, s.x, s.y, e.radius, e.facing)
       : drawGumdropBody(ctx, s.x, s.y, e.radius, def.color, def.colorDark, e.facing);
 
     // Channel windup: pulsing ring that shrinks toward completion.

@@ -804,7 +804,9 @@ export class SelectScreen {
     // and forward-facing, so facing = 0 for the gumdrop path.
     const art = CHARACTER_ART[def.id];
     if (art) {
-      art(ctx, cx, cy, r);
+      // Static portrait — forward-facing (facing = 0 = right). The
+      // in-world renderer passes e.facing here for cursor tracking.
+      art(ctx, cx, cy, r, 0);
     } else {
       drawGumdropBody(ctx, cx, cy, r, def.color, def.colorDark, 0);
     }
