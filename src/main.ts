@@ -1231,22 +1231,29 @@ function frameTitle(dims: { w: number; h: number }): void {
     drawLoginForm(dims, profileTop);
   }
 
-  // ---- Mode buttons (three play modes + SHOP) ----
-  const bw = 320;
+  // ---- Two-column button layout ----
+  // Left column (yellow): play modes — SINGLE / MULTI / FFA.
+  // Right column (purple): non-play buttons — SHOP, with room for
+  // future utility buttons (profile shortcuts, settings, etc.).
   const bh = 56;
   const gap = 12;
-  const bx = cw / 2 - bw / 2;
+  const colGap = 24;
+  // Responsive sizing — shrink columns on narrow viewports.
+  const totalW = Math.min(584, cw - 80);
+  const colW = (totalW - colGap) / 2;
+  const leftX = cw / 2 - totalW / 2;
+  const rightX = leftX + colW + colGap;
   const by = ch * 0.58;
-  const single: Rect = { x: bx, y: by, w: bw, h: bh };
-  const two: Rect = { x: bx, y: by + bh + gap, w: bw, h: bh };
-  const ffa: Rect = { x: bx, y: by + 2 * (bh + gap), w: bw, h: bh };
-  const shop: Rect = { x: bx, y: by + 3 * (bh + gap), w: bw, h: bh };
+  const single: Rect = { x: leftX, y: by, w: colW, h: bh };
+  const two: Rect = { x: leftX, y: by + bh + gap, w: colW, h: bh };
+  const ffa: Rect = { x: leftX, y: by + 2 * (bh + gap), w: colW, h: bh };
+  const shop: Rect = { x: rightX, y: by, w: colW, h: bh };
   titleButtons = { single, two, ffa, shop };
 
-  drawModeButton(single, "SINGLE PLAYER", "1 vs Computer", true, true);
-  drawModeButton(two, "MULTIPLAYER", "1 vs Many (over your network)", true, true);
-  drawModeButton(ffa, "FREE FOR ALL", "N vs N · with players + computers · COMING SOON", false, false);
-  drawModeButton(shop, "SHOP", "Characters · Outfits · Upgrades", false, true);
+  drawModeButton(single, "SINGLE PLAYER", "1 vs Computer", true, "yellow");
+  drawModeButton(two, "MULTIPLAYER", "1 vs Many (over your network)", true, "yellow");
+  drawModeButton(ffa, "FREE FOR ALL", "N vs N · with players + computers · COMING SOON", false, "yellow");
+  drawModeButton(shop, "SHOP", "Characters · Outfits · Upgrades", true, "purple");
 }
 
 function drawLoginForm(dims: { w: number; h: number }, top: number): void {
@@ -1785,46 +1792,54 @@ function wrapText(text: string, maxWidth: number, font: string, maxLines: number
   return lines;
 }
 
-// Mode button: bigger, two-line (title + subtitle), with an enabled/disabled
-// look. Disabled is rendered dim and non-interactive.
+// Title button: two-line (title + subtitle), with an enabled/disabled
+// look. Palette controls the fill family — "yellow" for game modes,
+// "purple" for shop and other utility buttons. Disabled renders dim
+// in the slate family regardless of palette.
+type ButtonPalette = "yellow" | "purple";
+const PALETTES: Record<ButtonPalette, { fill: string; title: string; sub: string }> = {
+  yellow: { fill: "#ffd84a", title: "#1a2421", sub: "rgba(26,36,33,0.7)" },
+  purple: { fill: "#7c4a8b", title: "#fff", sub: "rgba(255,255,255,0.72)" },
+};
 function drawModeButton(
   r: Rect,
   title: string,
   subtitle: string,
-  primary: boolean,
   enabled: boolean,
+  palette: ButtonPalette,
 ): void {
-  const fill = enabled
-    ? primary
-      ? "#ffd84a"
-      : "rgba(40,52,48,0.9)"
-    : "rgba(40,52,48,0.5)";
-  const titleColor = enabled ? (primary ? "#1a2421" : "#fff") : "rgba(255,255,255,0.35)";
-  const subColor = enabled
-    ? primary
-      ? "rgba(26,36,33,0.7)"
-      : "rgba(255,255,255,0.55)"
-    : "rgba(255,255,255,0.25)";
-
-  ctx.fillStyle = fill;
-  roundRect(r, 12);
-  ctx.fill();
-  if (!enabled) {
+  if (enabled) {
+    const p = PALETTES[palette];
+    ctx.fillStyle = p.fill;
+    roundRect(r, 12);
+    ctx.fill();
+    ctx.fillStyle = p.title;
+    ctx.font = "bold 19px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(title, r.x + r.w / 2, r.y + r.h / 2 - 2);
+    ctx.fillStyle = p.sub;
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText(subtitle, r.x + r.w / 2, r.y + r.h / 2 + 16);
+  } else {
+    // Disabled: dim slate with a subtle outline. Palette-agnostic so
+    // disabled buttons in either column look consistent.
+    ctx.fillStyle = "rgba(40,52,48,0.5)";
+    roundRect(r, 12);
+    ctx.fill();
     ctx.strokeStyle = "rgba(255,255,255,0.08)";
     ctx.lineWidth = 1;
     roundRect(r, 12);
     ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,0.35)";
+    ctx.font = "bold 19px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(title, r.x + r.w / 2, r.y + r.h / 2 - 2);
+    ctx.fillStyle = "rgba(255,255,255,0.25)";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText(subtitle, r.x + r.w / 2, r.y + r.h / 2 + 16);
   }
-
-  ctx.fillStyle = titleColor;
-  ctx.font = "bold 19px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "alphabetic";
-  ctx.fillText(title, r.x + r.w / 2, r.y + r.h / 2 - 2);
-
-  ctx.fillStyle = subColor;
-  ctx.font = "12px system-ui, sans-serif";
-  ctx.fillText(subtitle, r.x + r.w / 2, r.y + r.h / 2 + 16);
 }
 
 // Small "← BACK" pill in the top-left, drawn over every non-title scene.
