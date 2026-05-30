@@ -100,9 +100,12 @@ const TILE_W = 96;
 const TILE_H = 96;
 const TILE_GAP = 10;
 const ROW_WIDTH = SLOTS_PER_ROLE * TILE_W + (SLOTS_PER_ROLE - 1) * TILE_GAP;
-const DETAIL_W = 340;
-const DETAIL_H = 540;
+const DETAIL_W = 380;
+const DETAIL_H = 580;
 const DETAIL_GAP = 32;
+// Height reserved for the detail-card portrait. Sized to fit a
+// 2× character (radius 56, ~2.6× tall = ~145px) with margin.
+const DETAIL_PORTRAIT_H = 180;
 const SECTION_GAP = 28;
 
 const BG_COLOR = "#1a2421";
@@ -612,12 +615,14 @@ export class SelectScreen {
       return;
     }
 
-    // Filled tile: mini portrait + name.
+    // Filled tile: mini portrait + name. Anchor the portrait so its
+    // FEET (= cy) sit near the bottom of the tile — characters draw
+    // upward from cy, so this puts the body in the visible area and
+    // leaves room for the name label below.
     const cx = tile.x + tile.w / 2;
-    // Lift the portrait slightly if we have pick tags to render below.
-    const portraitOffset = picks.length > 0 ? -10 : -6;
-    const cy = tile.y + tile.h / 2 + portraitOffset;
-    this.drawPortrait(ctx, def!, cx, cy, picks.length > 0 ? 0.78 : 0.9);
+    const feetFromBottom = picks.length > 0 ? 26 : 18;
+    const cy = tile.y + tile.h - feetFromBottom;
+    this.drawPortrait(ctx, def!, cx, cy, picks.length > 0 ? 0.7 : 0.8);
 
     ctx.fillStyle = TEXT;
     ctx.font = "bold 11px system-ui, sans-serif";
@@ -699,10 +704,12 @@ export class SelectScreen {
     const pad = 18;
     let cy = y + pad;
 
-    // Portrait (large).
-    const portraitY = cy + 70;
+    // Portrait (large). Anchor feet near the bottom of the reserved
+    // portrait area so the body draws upward into the available space.
+    // 16px gap below the feet leaves room for the shadow.
+    const portraitY = cy + DETAIL_PORTRAIT_H - 16;
     this.drawPortrait(ctx, def, x + w / 2, portraitY, 2.0);
-    cy = cy + 150;
+    cy = cy + DETAIL_PORTRAIT_H;
 
     // Name + role.
     ctx.fillStyle = TEXT;

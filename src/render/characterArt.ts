@@ -77,9 +77,10 @@ export function drawGumdropBody(
 }
 
 // ---- Magnek ----
-// Horseshoe-magnet head, red (right, "+") + blue (left, "-") halves
-// with eyes on the prong tips, smile in the gap of the U, and a
-// thin copper-wire body with "M" chest emblem, arms-up, and feet.
+// Horseshoe-magnet head shaped like the letter U (opens upward).
+// Left prong blue with a "-" eye; right prong red with a "+" eye;
+// smile sits at the base of the U where the two halves meet.
+// Copper-wire body with chunky limbs and an "M" chest emblem.
 function drawMagnek(
   ctx: CanvasRenderingContext2D,
   cx: number,
@@ -88,103 +89,109 @@ function drawMagnek(
 ): CharacterArtResult {
   const r = radius;
 
-  // ---- Head geometry ----
-  // Oversized cartoon head — outer span ~3.4× collision radius. The
-  // U opens downward; eyes sit at the prong tips.
-  const headW = r * 3.4;
-  const thick = r * 0.95;
+  // Compact cartoon proportions. Total visible height ≈ 2.6r, split
+  // ~50/50 between magnet head (top half) and copper-wire body
+  // (bottom half). Feet sit at cy; the art extends UPWARD.
+  const totalH = r * 2.6;
+  const feetY = cy;
+  const headTopY = cy - totalH;
+  const headBaseY = cy - totalH * 0.5; // head/body split line
+
+  // U geometry. Prongs go UP from the curved base.
+  const headW = r * 1.6;
+  const thick = r * 0.42;
   const halfW = (headW - thick) / 2;
-  // Where the prong tips end. The body starts just below this.
-  const bottomY = cy - r * 0.15;
-  // Center of the curved top of the U.
-  const topCenterY = bottomY - halfW - r * 0.4;
-  const topY = topCenterY - halfW - thick / 2;
   const xL = cx - halfW;
   const xR = cx + halfW;
+  // Center of the curved base; arc radius = halfW. Pull the curve
+  // upward enough that its outer-bottom kisses the head/body line.
+  const curveCenterY = headBaseY - halfW;
+  const curveBottomY = curveCenterY + halfW;
+  const prongTopY = headTopY + thick * 0.5;
 
   ctx.save();
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
-  // Black outline (thicker, full U path).
+  // Black outline (full U path traced once thicker than the colored
+  // halves, so it sits behind them as a border).
   ctx.strokeStyle = "#1a1a1a";
   ctx.lineWidth = thick + 4;
   ctx.beginPath();
-  ctx.moveTo(xL, bottomY);
-  ctx.lineTo(xL, topCenterY);
-  ctx.arc(cx, topCenterY, halfW, Math.PI, 2 * Math.PI);
-  ctx.lineTo(xR, bottomY);
+  ctx.moveTo(xL, prongTopY);
+  ctx.lineTo(xL, curveCenterY);
+  // Lower semicircle: π → 2π traverses left, down through bottom, right.
+  ctx.arc(cx, curveCenterY, halfW, Math.PI, 2 * Math.PI);
+  ctx.lineTo(xR, prongTopY);
   ctx.stroke();
 
-  // Blue half — bottom-left up + over the top-left quadrant to top
-  // dead center. Drawn after the outline so the colored fill sits
-  // inside the black border.
+  // Blue left half: from top-left tip down + lower-left curve quadrant
+  // to center-bottom.
   ctx.strokeStyle = "#3a72c8";
   ctx.lineWidth = thick;
   ctx.beginPath();
-  ctx.moveTo(xL, bottomY);
-  ctx.lineTo(xL, topCenterY);
-  ctx.arc(cx, topCenterY, halfW, Math.PI, 1.5 * Math.PI);
+  ctx.moveTo(xL, prongTopY);
+  ctx.lineTo(xL, curveCenterY);
+  ctx.arc(cx, curveCenterY, halfW, Math.PI, 1.5 * Math.PI);
   ctx.stroke();
 
-  // Red half — top dead center down + over the top-right quadrant to
-  // bottom-right prong tip.
+  // Red right half: from center-bottom + lower-right curve quadrant up
+  // to top-right tip.
   ctx.strokeStyle = "#d04848";
   ctx.beginPath();
-  ctx.arc(cx, topCenterY, halfW, 1.5 * Math.PI, 2 * Math.PI);
-  ctx.lineTo(xR, bottomY);
+  ctx.arc(cx, curveCenterY, halfW, 1.5 * Math.PI, 2 * Math.PI);
+  ctx.lineTo(xR, prongTopY);
   ctx.stroke();
 
-  // Eyes on the prong tips. Blue side gets "-", red side gets "+".
-  const eyeR = thick * 0.34;
-  const eyeY = bottomY - thick * 0.5;
-  drawPoleEye(ctx, xL, eyeY, eyeR, "-");
-  drawPoleEye(ctx, xR, eyeY, eyeR, "+");
+  // Eyes at the prong tips (the magnetic poles).
+  const eyeR = thick * 0.36;
+  drawPoleEye(ctx, xL, prongTopY, eyeR, "-");
+  drawPoleEye(ctx, xR, prongTopY, eyeR, "+");
 
-  // Smile floating inside the U gap, centered horizontally between
-  // the prongs and tucked just above the body connection so it sits
-  // below the eyes without clipping the chest.
-  const smileR = r * 0.35;
-  const smileCy = bottomY - smileR * 1.1;
+  // Smile at the base of the U where the blue and red halves meet.
+  // Sits centered inside the curve band so it reads as the magnet's
+  // mouth, drawn AFTER the colors so it's not painted over.
+  const smileR = thick * 0.55;
+  const smileCy = curveBottomY - thick * 0.5 - smileR * 0.35;
   ctx.strokeStyle = "#1a1a1a";
   ctx.lineWidth = 1.8;
-  ctx.lineCap = "round";
   ctx.beginPath();
   ctx.arc(cx, smileCy, smileR, 0.18 * Math.PI, 0.82 * Math.PI);
   ctx.stroke();
 
   // ---- Copper-wire body ----
+  // Chunkier than v1 so torso/arms/legs read at gameplay scale.
   const copper = "#c97a3a";
   const copperDark = "#7c4a1f";
+  const torsoThick = Math.max(3.2, r * 0.22);
+  const limbThick = Math.max(2.8, r * 0.19);
+  const handR = Math.max(2.6, r * 0.16);
+  const footR = Math.max(2.8, r * 0.18);
 
-  // Torso runs from just below the head down to about r below center.
-  const bodyTopY = bottomY + r * 0.15;
-  const bodyBottomY = cy + r * 0.55;
+  const torsoTopY = headBaseY + r * 0.05;
+  const torsoBottomY = cy - r * 0.55;
   const bodyW = r * 0.95;
 
   // Vertical torso wire.
   ctx.strokeStyle = copper;
-  ctx.lineWidth = 3.2;
-  ctx.lineCap = "round";
+  ctx.lineWidth = torsoThick;
   ctx.beginPath();
-  ctx.moveTo(cx, bodyTopY);
-  ctx.lineTo(cx, bodyBottomY);
+  ctx.moveTo(cx, torsoTopY);
+  ctx.lineTo(cx, torsoBottomY);
   ctx.stroke();
 
-  // "M" emblem on the chest. Sized to read at gameplay scale and
-  // legible on the select-screen portrait too.
+  // M emblem on the chest.
   ctx.fillStyle = "#1a1a1a";
-  ctx.font = `bold ${Math.max(9, Math.floor(r * 0.7))}px system-ui, sans-serif`;
+  ctx.font = `bold ${Math.max(10, Math.floor(r * 0.62))}px system-ui, sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText("M", cx, (bodyTopY + bodyBottomY) / 2);
+  ctx.fillText("M", cx, (torsoTopY + torsoBottomY) / 2);
 
-  // Arms — splayed outward and slightly up like the sketch's raised
-  // hands. Wire-thin with small darker hand dots.
-  const armY = bodyTopY + (bodyBottomY - bodyTopY) * 0.22;
-  const armHandY = armY - bodyW * 0.7;
+  // Arms — out and slightly up (cartoon raised pose).
+  const armY = torsoTopY + (torsoBottomY - torsoTopY) * 0.22;
+  const armHandY = armY - bodyW * 0.4;
   ctx.strokeStyle = copper;
-  ctx.lineWidth = 2.6;
+  ctx.lineWidth = limbThick;
   ctx.beginPath();
   ctx.moveTo(cx, armY);
   ctx.lineTo(cx - bodyW, armHandY);
@@ -193,33 +200,33 @@ function drawMagnek(
   ctx.stroke();
   ctx.fillStyle = copperDark;
   ctx.beginPath();
-  ctx.arc(cx - bodyW, armHandY, 2.6, 0, Math.PI * 2);
-  ctx.arc(cx + bodyW, armHandY, 2.6, 0, Math.PI * 2);
+  ctx.arc(cx - bodyW, armHandY, handR, 0, Math.PI * 2);
+  ctx.arc(cx + bodyW, armHandY, handR, 0, Math.PI * 2);
   ctx.fill();
 
-  // Legs — splay outward to small feet at the ground plane.
-  const legX = bodyW * 0.6;
-  const feetY = cy + r * 1.05;
+  // Legs — splay outward to feet on the ground line (cy).
+  const legX = bodyW * 0.55;
   ctx.strokeStyle = copper;
-  ctx.lineWidth = 2.8;
+  ctx.lineWidth = limbThick;
   ctx.beginPath();
-  ctx.moveTo(cx, bodyBottomY);
+  ctx.moveTo(cx, torsoBottomY);
   ctx.lineTo(cx - legX, feetY);
-  ctx.moveTo(cx, bodyBottomY);
+  ctx.moveTo(cx, torsoBottomY);
   ctx.lineTo(cx + legX, feetY);
   ctx.stroke();
   ctx.fillStyle = copperDark;
   ctx.beginPath();
-  ctx.arc(cx - legX, feetY, 2.8, 0, Math.PI * 2);
-  ctx.arc(cx + legX, feetY, 2.8, 0, Math.PI * 2);
+  ctx.arc(cx - legX, feetY, footR, 0, Math.PI * 2);
+  ctx.arc(cx + legX, feetY, footR, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.restore();
 
+  // Visible top of the art (account for the eye/prong round-cap).
   return {
-    topY: topY - 4,
-    // Status rings hug the head — that's where Magnek "channels".
-    centerY: topCenterY + r * 0.1,
+    topY: prongTopY - eyeR - 4,
+    // Status rings hug the head — Magnek channels through the magnet.
+    centerY: curveCenterY,
   };
 }
 
