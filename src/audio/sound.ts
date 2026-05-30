@@ -118,6 +118,7 @@ function envNoise(
   dur: number,
   vol: number,
   lp = 4000,
+  startOffset = 0,
 ): void {
   const buf = c.createBuffer(
     1,
@@ -132,7 +133,7 @@ function envNoise(
   filt.type = "lowpass";
   filt.frequency.value = lp;
   const g = c.createGain();
-  const t = c.currentTime;
+  const t = c.currentTime + startOffset;
   g.gain.setValueAtTime(vol, t);
   g.gain.exponentialRampToValueAtTime(0.001, t + dur);
   src.connect(filt).connect(g).connect(dest);
@@ -141,10 +142,22 @@ function envNoise(
 }
 
 const SOUND_DEFS: Record<SoundId, SoundDef> = {
-  // Low double-thump used by the heartbeat looper.
+  // Low double-thump used by the heartbeat looper. Sub-bass fundamental
+  // with a triangle overtone for body and a low-passed noise burst for
+  // a wet organic thud, plus a faint breath rumble after the dub.
+  // Designed to be felt more than heard — creepy in the slow form,
+  // panic-inducing in the fast form.
   heartbeat: (c, dest) => {
-    envOsc(c, dest, "sine", 90, 38, 0.12, 0.55);
-    envOsc(c, dest, "sine", 70, 30, 0.18, 0.4, 0.15);
+    // Lub — primary thud.
+    envOsc(c, dest, "sine", 60, 22, 0.20, 0.7);          // sub-bass body
+    envOsc(c, dest, "triangle", 120, 44, 0.14, 0.24);    // overtone for definition
+    envNoise(c, dest, 0.09, 0.18, 220);                  // wet thud noise
+    // Dub — slightly softer, delayed second beat, slower decay.
+    envOsc(c, dest, "sine", 46, 18, 0.30, 0.55, 0.17);
+    envOsc(c, dest, "triangle", 92, 36, 0.22, 0.20, 0.17);
+    envNoise(c, dest, 0.12, 0.13, 200, 0.17);
+    // Faint breath rumble tail.
+    envNoise(c, dest, 0.32, 0.07, 130, 0.30);
   },
   // Magnek dropping a plate: metallic clank that bounces.
   place_plate: (c, dest) => {
@@ -254,7 +267,7 @@ export function setHeartbeat(distanceToHunter: number | null): void {
   const nearD = 100;
   const t = Math.max(0, Math.min(1, (farD - distanceToHunter) / (farD - nearD)));
   heartbeatTargetBpm = minBpm + (maxBpm - minBpm) * t;
-  heartbeatTargetVolume = 0.06 + (0.42 - 0.06) * t;
+  heartbeatTargetVolume = 0.1 + (0.65 - 0.1) * t;
   if (!heartbeatActive) startHeartbeat();
 }
 
