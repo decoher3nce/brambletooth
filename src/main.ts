@@ -228,7 +228,9 @@ function scheduleProfileSync(): void {
       });
       const body = (await r.json()) as ProfileResponse;
       if (body.ok && body.profile) {
-        // Server may report a higher number (synced from another device).
+        // Echo back the server's normalized value (clamped to >= 0).
+        // The client is the authoritative source for its own total;
+        // cross-device sync happens at login, not on every sync.
         setPointsLocal(body.profile.points);
         // And achievements (with timestamps) — merge wins on server.
         if (Array.isArray(body.profile.achievements)) {

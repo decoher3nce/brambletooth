@@ -155,8 +155,12 @@ export function lookupPublic(name: unknown): { ok: boolean; profile?: PublicProf
   };
 }
 
-// Update points (and any future profile fields). Defensive: we take the
-// max of client and server points so a stale client can't roll us back.
+// Update points (and any future profile fields). The client is the
+// authoritative source for its current points total — it pulls the
+// canonical value from the server at login, then we trust whatever
+// it sends back. This is required so intentional decrements (e.g.,
+// the leave-game penalty) actually stick; an earlier Math.max guard
+// here silently reverted those.
 // Accepts achievements in either the legacy string[] or new
 // {id, earnedAt}[] form — migrateAchievements normalizes.
 export function syncProfile(
@@ -172,7 +176,7 @@ export function syncProfile(
   if (!existing) return { ok: false, error: "Profile not found" };
   if (existing.pin !== pin) return { ok: false, error: "Wrong PIN" };
   if (typeof payload.points === "number" && Number.isFinite(payload.points)) {
-    existing.points = Math.max(existing.points, Math.floor(payload.points));
+    existing.points = Math.max(0, Math.floor(payload.points));
   }
   if (Array.isArray(payload.achievements)) {
     // Union of server + client achievements (client can't remove). Merge
