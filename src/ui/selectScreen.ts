@@ -17,6 +17,7 @@
 import { CHARACTERS } from "../characters/characters";
 import type { CharacterDef, CharacterRole } from "../characters/characters";
 import { ABILITIES } from "../abilities/abilities";
+import { CHARACTER_ART, drawGumdropBody } from "../render/characterArt";
 import { playSound } from "../audio/sound";
 
 export interface SelectHooks {
@@ -772,9 +773,11 @@ export class SelectScreen {
     }
   }
 
-  // Draw a character body for display only — simplified version of
-  // renderer.drawCharacter (no facing, no statuses, no HP bar). Reuses the
-  // same flat-shaded dome language so portraits feel native.
+  // Draw a character body for display only — no facing, no statuses,
+  // no HP bar. Dispatches through CHARACTER_ART so characters with
+  // bespoke designs (Magnek's magnet head, etc.) appear consistently
+  // here and in-world. Characters without a registered art function
+  // fall back to the original gumdrop body.
   private drawPortrait(
     ctx: CanvasRenderingContext2D,
     def: CharacterDef,
@@ -783,49 +786,21 @@ export class SelectScreen {
     scale: number,
   ): void {
     const r = Math.round(28 * scale);
-    const h = r * 1.6;
 
-    // Shadow.
+    // Shadow (universal).
     ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
     ctx.beginPath();
     ctx.ellipse(cx, cy + 4, r * 0.9, r * 0.35, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Dark base.
-    ctx.fillStyle = def.colorDark;
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, r, r * 0.45, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Body dome.
-    ctx.fillStyle = def.color;
-    ctx.beginPath();
-    ctx.arc(cx, cy - h * 0.4, r, Math.PI, 0);
-    ctx.lineTo(cx + r, cy);
-    ctx.lineTo(cx - r, cy);
-    ctx.closePath();
-    ctx.fill();
-
-    // Highlight blob.
-    ctx.fillStyle = "rgba(255, 255, 255, 0.18)";
-    ctx.beginPath();
-    ctx.arc(cx - r * 0.4, cy - h * 0.5, r * 0.35, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Eyes (forward-facing).
-    const eyeR = Math.max(2, Math.round(r * 0.13));
-    const eyeOff = r * 0.28;
-    ctx.fillStyle = "#fff";
-    ctx.beginPath();
-    ctx.arc(cx - eyeOff, cy - h * 0.55, eyeR, 0, Math.PI * 2);
-    ctx.arc(cx + eyeOff, cy - h * 0.55, eyeR, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#000";
-    const pupilR = Math.max(1, Math.round(eyeR * 0.5));
-    ctx.beginPath();
-    ctx.arc(cx - eyeOff, cy - h * 0.55, pupilR, 0, Math.PI * 2);
-    ctx.arc(cx + eyeOff, cy - h * 0.55, pupilR, 0, Math.PI * 2);
-    ctx.fill();
+    // Per-character art or gumdrop fallback. Portraits are static
+    // and forward-facing, so facing = 0 for the gumdrop path.
+    const art = CHARACTER_ART[def.id];
+    if (art) {
+      art(ctx, cx, cy, r);
+    } else {
+      drawGumdropBody(ctx, cx, cy, r, def.color, def.colorDark, 0);
+    }
   }
 
   private drawStartButton(

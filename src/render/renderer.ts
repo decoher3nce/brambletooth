@@ -11,6 +11,7 @@ import { isCharacter, isProjectile, isTrap, isObjective, isProp, isPlate } from 
 import type { Vec2 } from "../core/math";
 import { CHARACTERS } from "../characters/characters";
 import { ABILITIES } from "../abilities/abilities";
+import { CHARACTER_ART, drawGumdropBody } from "./characterArt";
 
 // Isometric tile scale. Each world unit = 1px at the ground, then projected.
 const ISO_W = 1.0; // x-axis world->screen scaling factor base
@@ -369,65 +370,36 @@ export class Renderer {
     const def = CHARACTERS[e.characterId];
     const ctx = this.ctx;
 
-    // Shadow
+    // Shadow (universal — characters cast the same iso ellipse shadow).
     ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
     ctx.beginPath();
     ctx.ellipse(s.x, s.y + 2, e.radius * 0.9, e.radius * 0.35, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Body (drawn as a stacked dome — top circle + dark base)
-    const h = e.radius * 1.6;
-    ctx.fillStyle = def.colorDark;
-    ctx.beginPath();
-    ctx.ellipse(s.x, s.y, e.radius, e.radius * 0.45, 0, 0, Math.PI * 2);
-    ctx.fill();
+    // Body + face: dispatched per character. The art function returns
+    // top/center Y values so overlays (charging ring, status, HP bar)
+    // position correctly regardless of head size.
+    const art = CHARACTER_ART[e.characterId];
+    const { topY, centerY } = art
+      ? art(ctx, s.x, s.y, e.radius)
+      : drawGumdropBody(ctx, s.x, s.y, e.radius, def.color, def.colorDark, e.facing);
 
-    ctx.fillStyle = def.color;
-    ctx.beginPath();
-    ctx.arc(s.x, s.y - h * 0.4, e.radius, Math.PI, 0);
-    ctx.lineTo(s.x + e.radius, s.y);
-    ctx.lineTo(s.x - e.radius, s.y);
-    ctx.closePath();
-    ctx.fill();
-
-    // Highlight side
-    ctx.fillStyle = "rgba(255, 255, 255, 0.18)";
-    ctx.beginPath();
-    ctx.arc(s.x - e.radius * 0.4, s.y - h * 0.5, e.radius * 0.35, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Eyes (white dots) — face the facing direction
-    const fx = Math.cos(e.facing) * 4;
-    const fy = Math.sin(e.facing) * 2;
-    ctx.fillStyle = "#fff";
-    ctx.beginPath();
-    ctx.arc(s.x - 5 + fx, s.y - h * 0.55 + fy, 3, 0, Math.PI * 2);
-    ctx.arc(s.x + 5 + fx, s.y - h * 0.55 + fy, 3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#000";
-    ctx.beginPath();
-    ctx.arc(s.x - 5 + fx * 1.4, s.y - h * 0.55 + fy * 1.4, 1.5, 0, Math.PI * 2);
-    ctx.arc(s.x + 5 + fx * 1.4, s.y - h * 0.55 + fy * 1.4, 1.5, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Channel windup: pulsing ring that shrinks toward completion. Also
-    // draw faint lines to plates owned by the caster while channeling
-    // Magnesis so the player can see the candidate destinations.
+    // Channel windup: pulsing ring that shrinks toward completion.
+    // Anchored at the body center returned by the art function.
     if (e.charging) {
       const pct = 1 - e.charging.remaining / e.charging.total;
       const ringR = e.radius + 10 + (1 - pct) * 18;
       ctx.strokeStyle = `rgba(180, 220, 255, ${0.5 + 0.4 * pct})`;
       ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.arc(s.x, s.y - h * 0.4, ringR, 0, Math.PI * 2);
+      ctx.arc(s.x, centerY, ringR, 0, Math.PI * 2);
       ctx.stroke();
-      // Inner thin progress ring.
       ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(
         s.x,
-        s.y - h * 0.4,
+        centerY,
         e.radius + 5,
         -Math.PI / 2,
         -Math.PI / 2 + pct * Math.PI * 2,
@@ -435,12 +407,12 @@ export class Renderer {
       ctx.stroke();
     }
 
-    // Status effect indicators
+    // Status effect indicators.
     if (e.statuses["overdrive"] > 0) {
       ctx.strokeStyle = "rgba(255, 200, 80, 0.7)";
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(s.x, s.y - h * 0.4, e.radius + 4, 0, Math.PI * 2);
+      ctx.arc(s.x, centerY, e.radius + 4, 0, Math.PI * 2);
       ctx.stroke();
     }
     if (e.statuses["slowed"] > 0) {
@@ -448,7 +420,7 @@ export class Renderer {
       ctx.lineWidth = 2;
       ctx.setLineDash([3, 3]);
       ctx.beginPath();
-      ctx.arc(s.x, s.y - h * 0.4, e.radius + 4, 0, Math.PI * 2);
+      ctx.arc(s.x, centerY, e.radius + 4, 0, Math.PI * 2);
       ctx.stroke();
       ctx.setLineDash([]);
     }
@@ -456,12 +428,12 @@ export class Renderer {
       ctx.globalAlpha = 0.5;
     }
 
-    // HP bar
+    // HP bar.
     ctx.globalAlpha = 1;
     const barW = e.radius * 2.2;
     const barH = 4;
     const barX = s.x - barW / 2;
-    const barY = s.y - h - 8;
+    const barY = topY - 8;
     ctx.fillStyle = "rgba(0,0,0,0.6)";
     ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
     ctx.fillStyle = "#333";
@@ -469,7 +441,7 @@ export class Renderer {
     ctx.fillStyle = e.team === "hunter" ? "#d04848" : "#48d0a0";
     ctx.fillRect(barX, barY, barW * (e.hp / e.maxHp), barH);
 
-    // Name tag (small)
+    // Name tag (small).
     ctx.fillStyle = "#fff";
     ctx.font = "11px system-ui, sans-serif";
     ctx.textAlign = "center";
