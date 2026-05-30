@@ -53,6 +53,7 @@ export interface PlayOpts {
 export type SoundId =
   | "place_plate"
   | "magnesis"
+  | "magnesis_travel"
   | "overdrive"
   | "glitch"
   | "slash"
@@ -164,8 +165,8 @@ const SOUND_DEFS: Record<SoundId, SoundDef> = {
     envOsc(c, dest, "square", 520, 110, 0.22, 0.28);
     envOsc(c, dest, "sine", 110, 70, 0.3, 0.18);
   },
-  // Magnesis: Doppler sweep (up if approaching, down if receding) with a
-  // breath of noise for "magnetic transport" texture.
+  // Magnesis cast: short rising charge sound at the moment Magnek
+  // starts the channel windup.
   magnesis: (c, dest, opts) => {
     const dop = opts.doppler ?? -1;
     if (dop >= 0) {
@@ -174,6 +175,14 @@ const SOUND_DEFS: Record<SoundId, SoundDef> = {
       envOsc(c, dest, "sine", 880, 220, 0.55, 0.32);
     }
     envNoise(c, dest, 0.4, 0.08, 1800);
+  },
+  // Magnesis travel: subtle airy whoosh that runs through the ~1.4s
+  // transport arc. Long low-passed noise tail + a soft rising sine
+  // sweep, both at modest volume — meant to be felt, not announced.
+  magnesis_travel: (c, dest) => {
+    envNoise(c, dest, 1.3, 0.09, 900);
+    envOsc(c, dest, "sine", 260, 520, 1.3, 0.07);
+    envOsc(c, dest, "sine", 130, 260, 1.3, 0.05);
   },
   // Match speed boost: rising whoosh.
   overdrive: (c, dest) => {

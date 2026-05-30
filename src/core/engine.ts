@@ -28,6 +28,13 @@ export interface EngineConfig {
   controllers: Map<number, Controller>;
 }
 
+// Cubic ease-in-out (smoothstep-like) — accelerates, cruises near the
+// middle, decelerates to 0 derivative at t=1. Used to drive Magnesis
+// transport for that "feel the snap, then ease in" motion.
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
 export class Engine {
   outcome: RoundOutcome = "ongoing";
   paused: boolean = false;
@@ -68,6 +75,36 @@ export class Engine {
         if (c.cooldowns[k] <= 0) delete c.cooldowns[k];
       }
 
+      // ---- Transport (e.g. Magnesis) ----
+      // While transporting, the character is on a scripted arc: input
+      // is ignored, obstacle collision is skipped, but damage still
+      // applies. Position eases from fromPos to toPos via a cubic
+      // accel/cruise/decel curve.
+      if (c.transport) {
+        c.transport.elapsed += dt;
+        const t = Math.min(1, c.transport.elapsed / c.transport.duration);
+        const eased = easeInOutCubic(t);
+        const fx = c.transport.fromPos.x;
+        const fy = c.transport.fromPos.y;
+        const tx = c.transport.toPos.x;
+        const ty = c.transport.toPos.y;
+        const newX = fx + (tx - fx) * eased;
+        const newY = fy + (ty - fy) * eased;
+        // Velocity is the derivative of position (eased) so the renderer
+        // can read len(vel) and tell the character is moving fast.
+        c.vel = { x: (newX - c.pos.x) / Math.max(dt, 1e-6), y: (newY - c.pos.y) / Math.max(dt, 1e-6) };
+        c.pos = { x: newX, y: newY };
+        // Face the destination throughout the arc.
+        c.facing = Math.atan2(ty - fy, tx - fx);
+        if (c.transport.elapsed >= c.transport.duration) {
+          // Snap to exact destination then clear.
+          c.pos = { x: tx, y: ty };
+          c.transport = undefined;
+          c.vel = { x: 0, y: 0 };
+        }
+        continue; // skip normal movement + collision below
+      }
+
       // Effective speed: base, plus overdrive, minus slow.
       let speedMult = 1;
       if (c.statuses["overdrive"] > 0) speedMult *= 1.6;
@@ -105,8 +142,9 @@ export class Engine {
         if (!ability) continue;
         // Cooldown check
         if ((c.cooldowns[abilityId] ?? 0) > 0) continue;
-        // Don't start a new cast while already channeling something.
-        if (c.charging) continue;
+        // Don't start a new cast while already channeling something or
+        // mid-transport (Magnesis arc, etc.).
+        if (c.charging || c.transport) continue;
         const ctx = { world, caster: c, aim: intent.aim };
         // Optional pre-condition gate. If it refuses, no cd, no channel.
         if (ability.canCast && !ability.canCast(ctx)) continue;

@@ -218,10 +218,17 @@ registerAbility({
   },
 });
 
+// Total time of the Magnesis transport arc, in seconds. Used by both
+// the engine (drives the position lerp) and the renderer (controls the
+// dotted-line trail fade). Long enough to be a tactical commitment;
+// short enough to feel snappy.
+export const MAGNESIS_TRANSPORT_DURATION = 1.4;
+
 registerAbility({
   id: "magnesis",
   name: "Magnesis",
-  description: "Channel 1.2s, then yank yourself to a random placed plate.",
+  description:
+    "Channel 1.2s to lock onto a random plate, then hurtle there on a 1.4s eased arc. Vulnerable in flight.",
   cooldown: 5.0,
   chargeTime: 1.2,
   // Refuse the cast if Magnek has no plates placed. No cd applied,
@@ -235,9 +242,15 @@ registerAbility({
     const plates = platesOwnedBy(world, caster.id);
     if (plates.length === 0) return; // all plates somehow evicted mid-channel
     const target = plates[Math.floor(Math.random() * plates.length)];
-    caster.pos = { ...target.pos };
-    // Brief i-frame on arrival so a hunter waiting on the destination plate
-    // doesn't insta-shred Magnek the moment he materializes.
-    caster.statuses["phased"] = 0.3;
+    // Start a transport arc instead of teleporting. The engine
+    // drives the lerp + clears caster.transport when it completes.
+    // No i-frame: per design, Magnek is vulnerable in flight.
+    caster.transport = {
+      fromPos: { ...caster.pos },
+      toPos: { ...target.pos },
+      elapsed: 0,
+      duration: MAGNESIS_TRANSPORT_DURATION,
+      source: "magnesis",
+    };
   },
 });

@@ -1944,6 +1944,10 @@ interface PrevCharSnap {
   cooldowns: Record<string, number>;
   characterId: string;
   team: "hunter" | "survivor";
+  // True if the character was mid-transport (e.g. Magnesis) last
+  // frame. Used to detect the undefined → set transition so we can
+  // fire the "magnesis_travel" whoosh exactly once per transport.
+  transporting: boolean;
 }
 const prevCharSnap = new Map<number, PrevCharSnap>();
 const prevObjectivePicked = new Set<number>();
@@ -1957,49 +1961,32 @@ function abilitySoundFor(abilityId: string): SoundId | null {
     case "slime_shot": return "slime_shot";
     case "slime_trap": return "slime_trap";
     case "relocate": return "relocate";
-    // magnesis is channeled — the cooldown sets at cast START, not at
-    // teleport. We trigger its sound off the position-jump detection
-    // below so it plays exactly when Magnek vanishes.
+    // Magnesis: rising charge sound at the moment the channel starts
+    // (cooldown 0 -> >0). The transport-launch sound fires separately
+    // when the transport state appears on the entity.
+    case "magnesis": return "magnesis";
     default: return null;
   }
 }
 
-// Client-side visual effects (non-authoritative — purely cosmetic). The
-// magnesis trail is the only one for now.
+// Client-side visual effects (non-authoritative — purely cosmetic).
+// The Magnesis trail used to live here as a "magnesis_trail" effect
+// triggered by a detected position jump. Now that Magnesis is a real
+// transport arc (entity.transport on the character), the renderer
+// reads it directly and draws the trail itself — no client-side
+// effect state needed. Kept as an empty scaffold so future cosmetic
+// effects have an obvious home.
 interface ClientEffect {
-  kind: "magnesis_trail";
-  from: { x: number; y: number };
-  to: { x: number; y: number };
-  ttl: number;
-  age: number;
+  kind: never;
 }
 const clientEffects: ClientEffect[] = [];
 
-function updateClientEffects(dt: number): void {
-  for (let i = clientEffects.length - 1; i >= 0; i--) {
-    clientEffects[i].age += dt;
-    if (clientEffects[i].age >= clientEffects[i].ttl) clientEffects.splice(i, 1);
-  }
+function updateClientEffects(_dt: number): void {
+  // Reserved for future cosmetic effects.
 }
 
-function drawClientEffects(cam: { target: { x: number; y: number }; zoom: number }): void {
-  for (const e of clientEffects) {
-    if (e.kind === "magnesis_trail") {
-      const t = 1 - e.age / e.ttl;
-      const a = worldToScreen(e.from, cam, renderer.cw, renderer.ch);
-      const b = worldToScreen(e.to, cam, renderer.cw, renderer.ch);
-      ctx.save();
-      ctx.strokeStyle = `rgba(160, 200, 255, ${0.85 * t})`;
-      ctx.lineWidth = 3;
-      ctx.setLineDash([10, 8]);
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.restore();
-    }
-  }
+function drawClientEffects(_cam: { target: { x: number; y: number }; zoom: number }): void {
+  // Reserved for future cosmetic effects.
 }
 
 function detectSoundAndVisualEvents(world: World, viewer: CharacterEntity | null): void {
@@ -2022,25 +2009,19 @@ function detectSoundAndVisualEvents(world: World, viewer: CharacterEntity | null
             if (sId) playSound(sId, { distance: dist(e.pos) });
           }
         }
-        // Large position delta on Magnek = Magnesis teleport completed.
-        const dx = e.pos.x - prev.pos.x;
-        const dy = e.pos.y - prev.pos.y;
-        const moved = Math.hypot(dx, dy);
-        if (moved > 100 && e.characterId === "magnek") {
-          clientEffects.push({
-            kind: "magnesis_trail",
-            from: { x: prev.pos.x, y: prev.pos.y },
-            to: { x: e.pos.x, y: e.pos.y },
-            ttl: 1.2,
-            age: 0,
-          });
+        // Transport (e.g. Magnesis) just began: prev.transporting was
+        // false and the entity now has a transport state. Fire the
+        // subtle whoosh once, with doppler hint based on whether the
+        // destination is closer to the viewer than the launch point.
+        const transportingNow = e.transport != null;
+        if (!prev.transporting && transportingNow && e.transport) {
           let dop = 0;
           if (vp) {
-            const before = Math.hypot(prev.pos.x - vp.x, prev.pos.y - vp.y);
-            const after = Math.hypot(e.pos.x - vp.x, e.pos.y - vp.y);
-            dop = before > after ? 1 : -1; // approaching vs receding
+            const fromD = Math.hypot(e.transport.fromPos.x - vp.x, e.transport.fromPos.y - vp.y);
+            const toD = Math.hypot(e.transport.toPos.x - vp.x, e.transport.toPos.y - vp.y);
+            dop = fromD > toD ? 1 : -1; // approaching if destination is closer
           }
-          playSound("magnesis", { distance: dist(e.pos), doppler: dop });
+          playSound("magnesis_travel", { distance: dist(e.pos), doppler: dop });
         }
       }
       prevCharSnap.set(e.id, {
@@ -2048,6 +2029,7 @@ function detectSoundAndVisualEvents(world: World, viewer: CharacterEntity | null
         cooldowns: { ...e.cooldowns },
         characterId: e.characterId,
         team: e.team,
+        transporting: e.transport != null,
       });
     } else if (e.kind === "objective") {
       if (e.collected && !prevObjectivePicked.has(e.id)) {

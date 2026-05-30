@@ -12,6 +12,7 @@ import type { Vec2 } from "../core/math";
 import { CHARACTERS } from "../characters/characters";
 import { ABILITIES } from "../abilities/abilities";
 import { CHARACTER_ART, drawGumdropBody } from "./characterArt";
+import type { CharacterAnim } from "./characterArt";
 
 // Isometric tile scale. Each world unit = 1px at the ground, then projected.
 const ISO_W = 1.0; // x-axis world->screen scaling factor base
@@ -370,6 +371,12 @@ export class Renderer {
     const def = CHARACTERS[e.characterId];
     const ctx = this.ctx;
 
+    // Ability-driven transport trail (e.g. Magnesis). Draw before the
+    // shadow so the dots sit on the ground but under everything else.
+    if (e.transport) {
+      this.drawTransportTrail(e, cam);
+    }
+
     // Shadow (universal). Radial gradient — darkest directly under the
     // character, fading to transparent at the edge. Drawn via a
     // scaled circle so the radial falloff is also elliptical and
@@ -387,12 +394,46 @@ export class Renderer {
     ctx.fill();
     ctx.restore();
 
+    // While transporting, render a head-only "ghost" — bright white
+    // glow with the character's silhouette inside, no arms/legs. The
+    // body returns when transport completes.
+    if (e.transport) {
+      const tt = Math.min(1, e.transport.elapsed / e.transport.duration);
+      // Glow brightest at the midpoint of the arc, easing in/out.
+      const glow = 1 - Math.abs(0.5 - tt) * 2; // 0 at ends, 1 at midpoint
+      this.drawTransportGhost(s.x, s.y, e.radius, glow);
+      // Skip body art + overlays this frame; HP bar still drawn below
+      // so other players can see if Magnek's being chipped in flight.
+      const topY = s.y - e.radius * 2.8 - 4;
+      this.drawCharacterHud(e, s.x, topY, def);
+      return;
+    }
+
+    // Compute per-frame animation state from the entity. Walk speed
+    // is normalized against the character's base speed so the cadence
+    // looks the same whether the character is fast or slow. Charge
+    // glow only fires for Magnesis (red→yellow→white). Kneel pose
+    // fires briefly after place_plate (cooldown just set).
+    const speed = Math.hypot(e.vel.x, e.vel.y);
+    const walkSpeed = Math.max(0, Math.min(1, speed / Math.max(1, e.speed)));
+    const phase = performance.now() / 1000;
+    let chargeGlow: number | undefined;
+    if (e.charging?.abilityId === "magnesis") {
+      chargeGlow = 1 - e.charging.remaining / e.charging.total;
+    }
+    let pose: "kneel" | undefined;
+    // place_plate has a 2.0s cooldown; show kneel for the first 0.25s
+    // after the cast (i.e. while cooldown is between 1.75 and 2.0).
+    const ppCd = e.cooldowns["place_plate"];
+    if (ppCd != null && ppCd > 1.75) pose = "kneel";
+    const anim: CharacterAnim = { walkSpeed, phase, chargeGlow, pose };
+
     // Body + face: dispatched per character. The art function returns
     // top/center Y values so overlays (charging ring, status, HP bar)
     // position correctly regardless of head size.
     const art = CHARACTER_ART[e.characterId];
     const { topY, centerY } = art
-      ? art(ctx, s.x, s.y, e.radius, e.facing)
+      ? art(ctx, s.x, s.y, e.radius, e.facing, anim)
       : drawGumdropBody(ctx, s.x, s.y, e.radius, def.color, def.colorDark, e.facing);
 
     // Channel windup: pulsing ring that shrinks toward completion.
@@ -439,11 +480,23 @@ export class Renderer {
       ctx.globalAlpha = 0.5;
     }
 
-    // HP bar.
+    // HP bar + name tag.
     ctx.globalAlpha = 1;
+    this.drawCharacterHud(e, s.x, topY, def);
+  }
+
+  // HP bar + name tag drawn above the character's top edge. Extracted
+  // so the transport-ghost code path can reuse it.
+  private drawCharacterHud(
+    e: Extract<Entity, { kind: "character" }>,
+    sx: number,
+    topY: number,
+    def: { name: string },
+  ): void {
+    const ctx = this.ctx;
     const barW = e.radius * 2.2;
     const barH = 4;
-    const barX = s.x - barW / 2;
+    const barX = sx - barW / 2;
     const barY = topY - 8;
     ctx.fillStyle = "rgba(0,0,0,0.6)";
     ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
@@ -451,11 +504,88 @@ export class Renderer {
     ctx.fillRect(barX, barY, barW, barH);
     ctx.fillStyle = e.team === "hunter" ? "#d04848" : "#48d0a0";
     ctx.fillRect(barX, barY, barW * (e.hp / e.maxHp), barH);
-
-    // Name tag (small).
     ctx.fillStyle = "#fff";
     ctx.font = "11px system-ui, sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText(def.name, s.x, barY - 4);
+    ctx.fillText(def.name, sx, barY - 4);
+  }
+
+  // Dotted-line trail showing the character's transport arc. Behind
+  // the character it fades out (showing where they were); ahead it
+  // fades in (showing where they're headed). Drawn in screen space
+  // along the projected from/to line, dot by dot, with per-dot alpha.
+  private drawTransportTrail(
+    e: Extract<Entity, { kind: "character" }>,
+    cam: Camera,
+  ): void {
+    if (!e.transport) return;
+    const t = e.transport.elapsed / e.transport.duration;
+    const a = worldToScreen(e.transport.fromPos, cam, this.cw, this.ch);
+    const b = worldToScreen(e.transport.toPos, cam, this.cw, this.ch);
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const totalLen = Math.hypot(dx, dy);
+    if (totalLen < 1) return;
+    const ux = dx / totalLen;
+    const uy = dy / totalLen;
+    const dotSpacing = 9;
+    const dotLen = 4;
+    const fadeAhead = 1.6;  // softer fade — destination stays previewed
+    const fadeBehind = 2.8; // sharper fade — trail wipes away after pass
+
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineWidth = 2.5;
+    for (let p = 0; p <= totalLen; p += dotSpacing) {
+      const frac = p / totalLen;
+      const d = frac - t;
+      let alpha: number;
+      if (d >= 0) {
+        // Ahead of character — visible, fading at the far end.
+        alpha = Math.max(0, 1 - d * fadeAhead) * 0.85;
+      } else {
+        // Behind — fades faster so the trail dissipates.
+        alpha = Math.max(0, 1 - (-d) * fadeBehind) * 0.7;
+      }
+      if (alpha < 0.02) continue;
+      ctx.strokeStyle = `rgba(200, 230, 255, ${alpha})`;
+      ctx.beginPath();
+      ctx.moveTo(a.x + ux * p, a.y + uy * p);
+      ctx.lineTo(a.x + ux * (p + dotLen), a.y + uy * (p + dotLen));
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // While in transport, render a white-glowing "ghost" of the
+  // character's head — no body, no arms, no legs. `intensity` is 0..1
+  // (brightest at the midpoint of the arc).
+  private drawTransportGhost(
+    sx: number,
+    sy: number,
+    radius: number,
+    intensity: number,
+  ): void {
+    const ctx = this.ctx;
+    // Head sits where Magnek's head sits — roughly r*2 above the feet.
+    const headY = sy - radius * 2;
+    const glowR = radius * 2.2;
+    // Outer halo (radial gradient, white to transparent).
+    ctx.save();
+    const halo = ctx.createRadialGradient(sx, headY, 0, sx, headY, glowR);
+    halo.addColorStop(0, `rgba(255, 255, 255, ${0.6 * intensity + 0.25})`);
+    halo.addColorStop(0.5, `rgba(220, 235, 255, ${0.3 * intensity})`);
+    halo.addColorStop(1, "rgba(220, 235, 255, 0)");
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(sx, headY, glowR, 0, Math.PI * 2);
+    ctx.fill();
+    // Bright core — small circle of near-white at the head position.
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.8 + 0.2 * intensity})`;
+    ctx.beginPath();
+    ctx.arc(sx, headY, radius * 0.55, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 }

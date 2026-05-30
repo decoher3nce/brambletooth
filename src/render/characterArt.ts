@@ -21,17 +21,41 @@ export interface CharacterArtResult {
   centerY: number;
 }
 
+// Per-frame animation state passed from the renderer / portrait.
+// Computed by the caller from entity fields + a wall-clock phase so
+// the art function stays a pure function of these inputs.
+export interface CharacterAnim {
+  // Walking speed, 0..1. 0 = idle, 1 = moving at the character's
+  // configured speed. Drives walk-cycle phase amplitude.
+  walkSpeed: number;
+  // Seconds since some shared origin. Used to compute walk-cycle
+  // phase (sin/cos of a multiple of this). Wall-clock based, not
+  // tied to snapshot ticks, so the animation runs smoothly between
+  // server updates.
+  phase: number;
+  // Magnesis-style charge progress, 0..1, when this character is
+  // channeling a long ability that should visualize energy buildup.
+  // Used to drive the red→yellow→white glow.
+  chargeGlow?: number;
+  // Pose override: when "kneel", the character bends a leg to
+  // visualize dropping a plate. Lasts a short time after the cast.
+  pose?: "kneel";
+}
+
 export type CharacterArtFn = (
   ctx: CanvasRenderingContext2D,
   cx: number,
   cy: number,
   radius: number,
   facing: number, // radians; 0 = right, π/2 = down, used for eye aim
+  anim: CharacterAnim,
 ) => CharacterArtResult;
 
 // ---- Generic gumdrop fallback ----
 // Mirrors the original renderer body + face. facing is in radians,
-// 0 = right; portraits pass 0 for static forward-facing.
+// 0 = right; portraits pass 0 for static forward-facing. Gumdrop
+// ignores animation state for now (idle posed) — characters that
+// want walk cycles should ship bespoke art (e.g. drawMagnek).
 export function drawGumdropBody(
   ctx: CanvasRenderingContext2D,
   cx: number,
@@ -101,6 +125,7 @@ function drawMagnek(
   cy: number,
   radius: number,
   facing: number,
+  anim: CharacterAnim,
 ): CharacterArtResult {
   const r = radius;
 
@@ -228,7 +253,7 @@ function drawMagnek(
   ctx.fillText("M", cx, mY);
   ctx.restore();
 
-  // ---- Arms (3-strand bundle that tapers to 2-strand hand) ----
+  // ---- Arms + legs ----
   const limbStrands = 3;
   const limbStrandThick = Math.max(1.4, r * 0.07);
   const limbBundleW = Math.max(5, r * 0.28);
@@ -236,48 +261,91 @@ function drawMagnek(
   const limbTwists = 1.0;
 
   const shoulderY = torsoTopY + (torsoBottomY - torsoTopY) * 0.18;
-  const handReach = r * 0.95;
-  const handRise = r * 0.42;
   // Wrist sits 70% of the way from shoulder to hand tip; the bundle
   // ends here and the 2 hand strands continue to the tip.
   const wristFrac = 0.7;
 
-  // Left arm
+  // ---- Animation-driven limb endpoints ----
+  // Walk cycle: arms swing forward/back, legs stride opposite. Phase
+  // frequency rises with walk speed so faster movement = faster steps.
+  // At idle (walkSpeed == 0), arms hang straight down at the sides and
+  // legs go straight to feet with no splay.
+  const walkSpeed = Math.max(0, Math.min(1, anim.walkSpeed));
+  const swing = Math.sin(anim.phase * 8) * walkSpeed; // -1..1, eased by walkSpeed
+  const oppSwing = -swing; // arms and legs mirror each other (opposite limb pairs)
+
+  // Idle arms hang down close to the body; walking arms swing
+  // forward/back. Arm "reach" lerps with walkSpeed.
+  const idleHandX = r * 0.45;             // close to torso when idle
+  const idleHandY = r * 0.45;             // below shoulder (hanging)
+  const walkHandX = r * 0.75;
+  const walkHandY = r * 0.05;              // higher (swinging forward) when moving
+  const handReachBase = idleHandX + (walkHandX - idleHandX) * walkSpeed;
+  const handRiseBase = idleHandY + (walkHandY - idleHandY) * walkSpeed;
+  // Per-arm swing: left arm leads with +swing, right arm with oppSwing.
+  // Swing shifts both forward/back (along facing-ignorant body axis) and
+  // up/down a touch for natural cadence.
+  const armForward = r * 0.35 * walkSpeed; // how far swing pushes each arm fwd/back
+  const armBob = r * 0.12 * walkSpeed;
+
+  // Left arm (driven by swing)
   drawWireLimb(
     ctx,
     cx - torsoBundleW / 2, shoulderY,
-    cx - handReach, shoulderY - handRise,
+    cx - handReachBase + swing * armForward,
+    shoulderY + handRiseBase - Math.abs(swing) * armBob,
     limbStrands, limbStrandThick, limbAmp, limbTwists,
     wristFrac, copper, copperShadow,
   );
-  // Right arm
+  // Right arm (driven by oppSwing)
   drawWireLimb(
     ctx,
     cx + torsoBundleW / 2, shoulderY,
-    cx + handReach, shoulderY - handRise,
+    cx + handReachBase + oppSwing * armForward,
+    shoulderY + handRiseBase - Math.abs(oppSwing) * armBob,
     limbStrands, limbStrandThick, limbAmp, limbTwists,
     wristFrac, copper, copperShadow,
   );
 
-  // ---- Legs (same treatment, 2-strand foot) ----
-  const legSplay = r * 0.55;
+  // Legs: stride opposite to the arm on the same side. Idle = legs
+  // straight down (no splay). Walking = alternating stride forward/back.
+  const idleLegSplay = r * 0.0;
+  const walkLegSplay = r * 0.55;
+  const legSplay = idleLegSplay + (walkLegSplay - idleLegSplay) * walkSpeed;
   const legTopXLeft = cx - torsoBundleW / 4;
   const legTopXRight = cx + torsoBundleW / 4;
+  // Kneel pose: left knee bent forward, right leg planted under hip.
+  // Replaces walk-cycle stride for the short kneel window.
+  const kneeling = anim.pose === "kneel";
+  const leftLegEndX = kneeling
+    ? cx - r * 0.2
+    : cx - legSplay + oppSwing * r * 0.35 * walkSpeed;
+  const leftLegEndY = kneeling ? cy - r * 0.05 : feetY;
+  const rightLegEndX = kneeling
+    ? cx + r * 0.55
+    : cx + legSplay + swing * r * 0.35 * walkSpeed;
+  const rightLegEndY = feetY;
 
   drawWireLimb(
     ctx,
     legTopXLeft, torsoBottomY,
-    cx - legSplay, feetY,
+    leftLegEndX, leftLegEndY,
     limbStrands, limbStrandThick, limbAmp, limbTwists,
     wristFrac, copper, copperShadow,
   );
   drawWireLimb(
     ctx,
     legTopXRight, torsoBottomY,
-    cx + legSplay, feetY,
+    rightLegEndX, rightLegEndY,
     limbStrands, limbStrandThick, limbAmp, limbTwists,
     wristFrac, copper, copperShadow,
   );
+
+  // Magnesis charging glow — red → yellow → white as progress climbs.
+  // Drawn LAST so it sits on top of the head as a coronal halo.
+  if (anim.chargeGlow !== undefined && anim.chargeGlow > 0) {
+    drawChargeGlow(ctx, cx, curveCenterY, headW * 0.9, anim.chargeGlow);
+  }
 
   ctx.restore();
 
@@ -285,6 +353,43 @@ function drawMagnek(
     topY: prongTopY - eyeR - 4,
     centerY: curveCenterY,
   };
+}
+
+// Halo that climbs red → yellow → white as progress goes 0 → 1.
+// Used for the Magnesis windup so the audience can read how close
+// Magnek is to launching.
+function drawChargeGlow(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number, baseR: number, progress: number,
+): void {
+  // Hue progression: 0=red, 0.5=yellow, 1=white-hot.
+  const t = Math.max(0, Math.min(1, progress));
+  let r1: number, g1: number, b1: number;
+  if (t < 0.5) {
+    // Red → yellow
+    const k = t * 2;
+    r1 = 255;
+    g1 = Math.round(100 + (220 - 100) * k);
+    b1 = Math.round(40 + (60 - 40) * k);
+  } else {
+    // Yellow → white
+    const k = (t - 0.5) * 2;
+    r1 = 255;
+    g1 = Math.round(220 + (255 - 220) * k);
+    b1 = Math.round(60 + (255 - 60) * k);
+  }
+  const glowR = baseR * (1.0 + 0.4 * t);
+  ctx.save();
+  const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, glowR);
+  const innerA = 0.35 + 0.45 * t;
+  grad.addColorStop(0, `rgba(${r1}, ${g1}, ${b1}, ${innerA})`);
+  grad.addColorStop(0.55, `rgba(${r1}, ${g1}, ${b1}, ${innerA * 0.35})`);
+  grad.addColorStop(1, `rgba(${r1}, ${g1}, ${b1}, 0)`);
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, glowR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 // Spiraled stranded copper wire from (x1, y1) to (x2, y2). Each strand

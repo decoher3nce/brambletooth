@@ -35,6 +35,20 @@ export interface ChannelState {
   aim: Vec2; // aim at cast-start (some channels read this on completion)
 }
 
+// An in-flight ability-driven travel arc. While present, the engine
+// drives the character's position along the path from fromPos -> toPos
+// over `duration` seconds using a cubic ease (accelerate + decelerate),
+// ignoring normal movement input and obstacle collision. Damage still
+// applies — the character is vulnerable in transit. Cleared when
+// elapsed >= duration. Used by Magnek's Magnesis.
+export interface TransportState {
+  fromPos: Vec2;
+  toPos: Vec2;
+  elapsed: number;  // seconds since transport began
+  duration: number; // total travel time
+  source: string;   // ability id that started the transport (for fx)
+}
+
 export interface CharacterEntity extends BaseEntity {
   kind: "character";
   team: Team;
@@ -51,6 +65,10 @@ export interface CharacterEntity extends BaseEntity {
   isPlayer: boolean;
   // Active channeled-ability state (undefined when not channeling).
   charging?: ChannelState;
+  // Active ability-driven transport (e.g. Magnesis). When set, the
+  // engine steers this character along an eased arc, ignoring move
+  // input + obstacle collision; damage still applies.
+  transport?: TransportState;
   // Survivor-only counter: how many objectives this survivor has collected
   // this round. Win condition = any survivor's count reaching the target.
   // Always 0 for hunters; kept on every character for protocol simplicity.
