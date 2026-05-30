@@ -12,11 +12,16 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+export interface EarnedAchievement {
+  id: string;
+  earnedAt: number; // unix ms; 0 = unknown (migrated from legacy string[])
+}
+
 export interface ProfileRecord {
-  name: string;           // canonical (player-typed) form for display
-  pin: string;            // 4-digit, plaintext (see security note above)
+  name: string;                       // canonical (player-typed) form
+  pin: string;                        // plaintext (see security note)
   points: number;
-  achievements: string[]; // earned achievement ids (empty for now)
+  achievements: EarnedAchievement[];  // earned with timestamps
   createdAt: number;
   updatedAt: number;
 }
@@ -29,12 +34,41 @@ const PROFILE_FILE = join(process.cwd(), "data", "profiles.json");
 let store: ProfileMap = {};
 let loaded = false;
 
+function migrateAchievements(input: unknown): EarnedAchievement[] {
+  if (!Array.isArray(input)) return [];
+  const out: EarnedAchievement[] = [];
+  const seen = new Set<string>();
+  for (const item of input) {
+    if (typeof item === "string") {
+      if (seen.has(item)) continue;
+      seen.add(item);
+      out.push({ id: item, earnedAt: 0 });
+    } else if (
+      item &&
+      typeof item === "object" &&
+      typeof (item as { id?: unknown }).id === "string"
+    ) {
+      const obj = item as { id: string; earnedAt?: number };
+      if (seen.has(obj.id)) continue;
+      seen.add(obj.id);
+      out.push({ id: obj.id, earnedAt: Number(obj.earnedAt) || 0 });
+    }
+  }
+  return out;
+}
+
 function ensureLoaded(): void {
   if (loaded) return;
   loaded = true;
   if (existsSync(PROFILE_FILE)) {
     try {
-      store = JSON.parse(readFileSync(PROFILE_FILE, "utf8")) as ProfileMap;
+      const raw = JSON.parse(readFileSync(PROFILE_FILE, "utf8")) as Record<string, unknown>;
+      // Migrate legacy string[] achievements to {id, earnedAt}[].
+      for (const key of Object.keys(raw)) {
+        const p = raw[key] as ProfileRecord & { achievements?: unknown };
+        if (p) p.achievements = migrateAchievements(p.achievements);
+      }
+      store = raw as ProfileMap;
     } catch (err) {
       console.warn(`[profiles] failed to read ${PROFILE_FILE}:`, err);
       store = {};
@@ -103,7 +137,7 @@ export function login(name: unknown, pin: unknown): LoginResult {
 export interface PublicProfile {
   name: string;
   points: number;
-  achievements: string[];
+  achievements: EarnedAchievement[];
 }
 export function lookupPublic(name: unknown): { ok: boolean; profile?: PublicProfile; error?: string } {
   ensureLoaded();
@@ -123,10 +157,12 @@ export function lookupPublic(name: unknown): { ok: boolean; profile?: PublicProf
 
 // Update points (and any future profile fields). Defensive: we take the
 // max of client and server points so a stale client can't roll us back.
+// Accepts achievements in either the legacy string[] or new
+// {id, earnedAt}[] form — migrateAchievements normalizes.
 export function syncProfile(
   name: unknown,
   pin: unknown,
-  payload: { points?: number; achievements?: string[] },
+  payload: { points?: number; achievements?: unknown },
 ): LoginResult {
   ensureLoaded();
   if (!isValidName(name)) return { ok: false, error: "Name must be 1-24 characters" };
@@ -139,9 +175,27 @@ export function syncProfile(
     existing.points = Math.max(existing.points, Math.floor(payload.points));
   }
   if (Array.isArray(payload.achievements)) {
-    // Union of server + client achievements (client can't remove).
-    const set = new Set([...(existing.achievements ?? []), ...payload.achievements]);
-    existing.achievements = [...set];
+    // Union of server + client achievements (client can't remove). Merge
+    // by id, preserving the EARLIEST known earnedAt (server is canonical
+    // first-earn-time).
+    const incoming = migrateAchievements(payload.achievements);
+    const byId = new Map<string, EarnedAchievement>();
+    for (const a of existing.achievements ?? []) byId.set(a.id, a);
+    for (const a of incoming) {
+      const prev = byId.get(a.id);
+      if (!prev) {
+        byId.set(a.id, a);
+      } else {
+        const earliest =
+          prev.earnedAt === 0
+            ? a.earnedAt
+            : a.earnedAt === 0
+              ? prev.earnedAt
+              : Math.min(prev.earnedAt, a.earnedAt);
+        byId.set(a.id, { id: a.id, earnedAt: earliest });
+      }
+    }
+    existing.achievements = [...byId.values()];
   }
   existing.updatedAt = Date.now();
   save();

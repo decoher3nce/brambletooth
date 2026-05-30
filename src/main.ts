@@ -19,6 +19,12 @@ import { distToSegment } from "./core/math";
 import { playSound, unlockAudio, setHeartbeat } from "./audio/sound";
 import type { SoundId } from "./audio/sound";
 import { worldToScreen } from "./render/renderer";
+import {
+  ACHIEVEMENT_CATALOG,
+  ACHIEVEMENT_ORDER,
+  drawAchievementTile,
+  formatEarnedDate,
+} from "./achievements/catalog";
 import type { Camera } from "./render/renderer";
 import { HuntMode } from "./modes/hunt";
 import { FOREST_ARENA_CONFIG, buildForest } from "./arenas/forest";
@@ -110,6 +116,8 @@ function addPoints(n: number): void {
   const after = before + n;
   setPointsLocal(after);
   scheduleProfileSync();
+  // Noob: very first positive point. Earnable only once per profile.
+  if (n > 0 && before === 0) earnAchievement("noob");
   // Veteran: reach 100 lifetime points. Idempotent inside earnAchievement.
   if (before < 100 && after >= 100) earnAchievement("veteran");
 }
@@ -144,7 +152,11 @@ function setPin(p: string): void {
 
 interface ProfileResponse {
   ok: boolean;
-  profile?: { name: string; points: number; achievements?: string[] };
+  profile?: {
+    name: string;
+    points: number;
+    achievements?: (string | { id: string; earnedAt?: number })[];
+  };
   error?: string;
 }
 
@@ -165,6 +177,15 @@ async function tryLogin(name: string, pin: string): Promise<boolean> {
     setName(body.profile.name);
     setPin(pin);
     setPointsLocal(body.profile.points);
+    if (Array.isArray(body.profile.achievements)) {
+      saveEarnedAchievements(
+        body.profile.achievements.map((a) =>
+          typeof a === "string"
+            ? { id: a, earnedAt: 0 }
+            : { id: a.id, earnedAt: Number(a.earnedAt) || 0 },
+        ),
+      );
+    }
     loggedIn = true;
     try { localStorage.setItem(LOGGEDIN_KEY, "1"); } catch { /* ignore */ }
     nameInput.value = body.profile.name;
@@ -198,12 +219,27 @@ function scheduleProfileSync(): void {
       const r = await fetch(PROFILE_API_SYNC(), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, pin, points: getPoints() }),
+        body: JSON.stringify({
+          name,
+          pin,
+          points: getPoints(),
+          achievements: getEarnedAchievements(),
+        }),
       });
       const body = (await r.json()) as ProfileResponse;
       if (body.ok && body.profile) {
         // Server may report a higher number (synced from another device).
         setPointsLocal(body.profile.points);
+        // And achievements (with timestamps) — merge wins on server.
+        if (Array.isArray(body.profile.achievements)) {
+          saveEarnedAchievements(
+            body.profile.achievements.map((a) =>
+              typeof a === "string"
+                ? { id: a, earnedAt: 0 }
+                : { id: a.id, earnedAt: Number(a.earnedAt) || 0 },
+            ),
+          );
+        }
       }
     } catch { /* swallow — local is the source of truth until next sync */ }
   }, 800);
@@ -1187,22 +1223,56 @@ function drawLoggedInProfilePanel(dims: { w: number; h: number }, top: number): 
   const cw = dims.w;
   const name = getName() || "Player";
   const points = getPoints();
-  ctx.fillStyle = "rgba(255,255,255,0.55)";
-  ctx.font = "12px system-ui, sans-serif";
+
+  // Atmospheric label (was "LOGGED IN" / "Welcome back").
+  ctx.fillStyle = "rgba(208, 72, 72, 0.75)";
+  ctx.font = "italic bold 12px system-ui, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText("LOGGED IN", cw / 2, top - 6);
+  ctx.fillText("THE BRAMBLES REMEMBER", cw / 2, top - 4);
 
+  // Player name (the dramatic identifier).
   ctx.fillStyle = "#fff";
-  ctx.font = "bold 22px system-ui, sans-serif";
-  ctx.fillText(`Welcome back, ${name}`, cw / 2, top + 20);
+  ctx.font = "bold 24px system-ui, sans-serif";
+  ctx.fillText(name, cw / 2, top + 22);
 
+  // Points — no decorative star anymore.
   ctx.fillStyle = "#ffd84a";
-  ctx.font = "bold 16px system-ui, sans-serif";
+  ctx.font = "bold 15px system-ui, sans-serif";
   ctx.fillText(
-    points === 1 ? "★ 1 point" : `★ ${points} points`,
+    points === 1 ? "1 point" : `${points} points`,
     cw / 2,
-    top + 46,
+    top + 44,
   );
+
+  // Recent achievements row — up to 3 most recent. Always reserves the
+  // space so the panel layout doesn't jump when you earn one.
+  const recent = getRecentAchievements(3);
+  const iconSize = 36;
+  const iconGap = 14;
+  const recentY = top + 64;
+  ctx.fillStyle = "rgba(255,255,255,0.45)";
+  ctx.font = "bold 10px system-ui, sans-serif";
+  ctx.fillText("RECENT", cw / 2, recentY);
+  if (recent.length === 0) {
+    ctx.fillStyle = "rgba(255,255,255,0.35)";
+    ctx.font = "italic 11px system-ui, sans-serif";
+    ctx.fillText("No achievements yet — play to earn them.", cw / 2, recentY + 26);
+  } else {
+    const rowW = recent.length * iconSize + (recent.length - 1) * iconGap;
+    let rx = (cw - rowW) / 2;
+    for (const earn of recent) {
+      const def = ACHIEVEMENT_CATALOG[earn.id];
+      if (!def) { rx += iconSize + iconGap; continue; }
+      drawAchievementTile(ctx, rx, recentY + 6, iconSize, false);
+      def.draw(ctx, rx, recentY + 6, iconSize, false);
+      // Tiny name under the icon.
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      ctx.font = "10px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(def.name, rx + iconSize / 2, recentY + iconSize + 18);
+      rx += iconSize + iconGap;
+    }
+  }
 
   // Profile + Logout buttons side-by-side.
   const bw = 140;
@@ -1210,7 +1280,7 @@ function drawLoggedInProfilePanel(dims: { w: number; h: number }, top: number): 
   const gap = 12;
   const groupW = 2 * bw + gap;
   const startX = (cw - groupW) / 2;
-  const by = top + 64;
+  const by = recentY + 78;
   titleProfileBtn = { x: startX, y: by, w: bw, h: bh };
   titleLogoutBtn = { x: startX + bw + gap, y: by, w: bw, h: bh };
 
@@ -1253,26 +1323,32 @@ function frameProfile(dims: { w: number; h: number }): void {
   ctx.font = "bold 36px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "alphabetic";
-  ctx.fillText("PROFILE", cw / 2, ch * 0.14);
+  ctx.fillText("PROFILE", cw / 2, ch * 0.1);
 
   const name = getName() || "Player";
   const points = getPoints();
   ctx.fillStyle = "rgba(255,255,255,0.7)";
   ctx.font = "16px system-ui, sans-serif";
-  ctx.fillText(name, cw / 2, ch * 0.14 + 28);
+  ctx.fillText(name, cw / 2, ch * 0.1 + 26);
   ctx.fillStyle = "#ffd84a";
   ctx.font = "bold 18px system-ui, sans-serif";
   ctx.fillText(
-    points === 1 ? "★ 1 point" : `★ ${points} points`,
+    points === 1 ? "1 point" : `${points} points`,
     cw / 2,
-    ch * 0.14 + 54,
+    ch * 0.1 + 50,
   );
 
-  // Achievements panel — placeholder for future dev.
-  const panelW = Math.min(540, cw - 80);
+  // Achievements panel — render the whole catalog with earned dates,
+  // locked entries dimmed so the player sees what's left to chase.
+  const earned = new Map<string, number>();
+  for (const a of getEarnedAchievements()) earned.set(a.id, a.earnedAt);
+
+  const rowH = 56;
+  const panelW = Math.min(560, cw - 80);
   const panelX = (cw - panelW) / 2;
-  const panelY = ch * 0.32;
-  const panelH = 260;
+  const panelY = ch * 0.22;
+  const panelH = ACHIEVEMENT_ORDER.length * rowH + 50;
+
   ctx.fillStyle = "rgba(20, 30, 28, 0.85)";
   roundRect({ x: panelX, y: panelY, w: panelW, h: panelH }, 12);
   ctx.fill();
@@ -1284,41 +1360,60 @@ function frameProfile(dims: { w: number; h: number }): void {
   ctx.fillStyle = "#ffd84a";
   ctx.font = "bold 13px system-ui, sans-serif";
   ctx.textAlign = "left";
-  ctx.fillText("ACHIEVEMENTS", panelX + 16, panelY + 22);
-
-  const achievements: { title: string; desc: string }[] = [
-    { title: "First Blood", desc: "Catch your first survivor as the hunter" },
-    { title: "Collector", desc: "Collect 5 objectives in one round" },
-    { title: "Untouchable", desc: "Survive a full round without dropping below half HP" },
-    { title: "Ghost", desc: "Win a round as the hunter without being seen" },
-    { title: "Veteran", desc: "Reach 100 lifetime points" },
-  ];
-  ctx.fillStyle = "rgba(255,255,255,0.6)";
-  ctx.font = "12px system-ui, sans-serif";
-  let ay = panelY + 50;
-  for (const a of achievements) {
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 13px system-ui, sans-serif";
-    ctx.fillText(`☐ ${a.title}`, panelX + 16, ay);
-    ctx.fillStyle = "rgba(255,255,255,0.5)";
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText(a.desc, panelX + 16, ay + 16);
-    ay += 38;
-  }
-  ctx.fillStyle = "rgba(255,255,255,0.4)";
-  ctx.font = "italic 11px system-ui, sans-serif";
-  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
   ctx.fillText(
-    "Achievement tracking is coming soon.",
-    cw / 2,
-    panelY + panelH - 14,
+    `ACHIEVEMENTS  ${earned.size} / ${ACHIEVEMENT_ORDER.length}`,
+    panelX + 16,
+    panelY + 22,
   );
 
-  // BACK button bottom center.
+  const iconSize = 38;
+  let ry = panelY + 38;
+  for (const id of ACHIEVEMENT_ORDER) {
+    const def = ACHIEVEMENT_CATALOG[id];
+    if (!def) continue;
+    const earnedAt = earned.get(id);
+    const locked = earnedAt === undefined;
+    const ix = panelX + 16;
+    const iy = ry + 6;
+    drawAchievementTile(ctx, ix, iy, iconSize, locked);
+    def.draw(ctx, ix, iy, iconSize, locked);
+    // Title
+    ctx.fillStyle = locked ? "rgba(255,255,255,0.4)" : "#fff";
+    ctx.font = "bold 14px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(def.name, ix + iconSize + 14, ry + 18);
+    // Description
+    ctx.fillStyle = locked ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.62)";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText(def.description, ix + iconSize + 14, ry + 34);
+    // Right-aligned status
+    ctx.textAlign = "right";
+    if (locked) {
+      ctx.fillStyle = "rgba(255,255,255,0.35)";
+      ctx.font = "italic 11px system-ui, sans-serif";
+      ctx.fillText("Locked", panelX + panelW - 16, ry + 26);
+    } else {
+      ctx.fillStyle = "#48d0a0";
+      ctx.font = "bold 11px system-ui, sans-serif";
+      ctx.fillText("Earned ✓", panelX + panelW - 16, ry + 18);
+      ctx.fillStyle = "rgba(255,255,255,0.55)";
+      ctx.font = "11px system-ui, sans-serif";
+      ctx.fillText(
+        formatEarnedDate(earnedAt ?? 0).replace(/^Earned\s*/, ""),
+        panelX + panelW - 16,
+        ry + 34,
+      );
+    }
+    ry += rowH;
+  }
+
+  // BACK button below the panel.
   const bw = 160;
   const bh = 40;
   const bx = (cw - bw) / 2;
-  const by = panelY + panelH + 24;
+  const by = panelY + panelH + 20;
   titleProfileBackBtn = { x: bx, y: by, w: bw, h: bh };
   ctx.fillStyle = "rgba(40, 52, 48, 0.95)";
   roundRect(titleProfileBackBtn, 8);
@@ -1329,9 +1424,11 @@ function frameProfile(dims: { w: number; h: number }): void {
   ctx.stroke();
   ctx.fillStyle = "#fff";
   ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText("← BACK", bx + bw / 2, by + bh / 2);
   ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
 }
 
 // Mode button: bigger, two-line (title + subtitle), with an enabled/disabled
@@ -1612,22 +1709,52 @@ function updateHeartbeatFor(world: World, viewerEntityId: number | null): void {
 
 // ---- Achievement banner + earn logic ----
 const ACHIEVEMENTS_KEY = "brambletooth.achievements";
-function getEarnedAchievements(): string[] {
-  try {
-    const raw = localStorage.getItem(ACHIEVEMENTS_KEY);
-    return raw ? (JSON.parse(raw) as string[]) : [];
-  } catch { return []; }
-}
-function saveEarnedAchievements(list: string[]): void {
-  try { localStorage.setItem(ACHIEVEMENTS_KEY, JSON.stringify(list)); } catch { /* ignore */ }
+
+interface EarnedAchievement {
+  id: string;
+  earnedAt: number; // unix ms; 0 = legacy / unknown
 }
 
-interface AchievementDef { id: string; name: string; }
-const ACHIEVEMENTS: Record<string, AchievementDef> = {
-  first_blood: { id: "first_blood", name: "First Blood" },
-  collector: { id: "collector", name: "Collector" },
-  veteran: { id: "veteran", name: "Veteran" },
-};
+function getEarnedAchievements(): EarnedAchievement[] {
+  try {
+    const raw = localStorage.getItem(ACHIEVEMENTS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const out: EarnedAchievement[] = [];
+    const seen = new Set<string>();
+    for (const item of parsed) {
+      if (typeof item === "string") {
+        // Legacy format from before timestamps existed.
+        if (seen.has(item)) continue;
+        seen.add(item);
+        out.push({ id: item, earnedAt: 0 });
+      } else if (item && typeof item === "object" && typeof (item as { id?: unknown }).id === "string") {
+        const obj = item as { id: string; earnedAt?: number };
+        if (seen.has(obj.id)) continue;
+        seen.add(obj.id);
+        out.push({ id: obj.id, earnedAt: Number(obj.earnedAt) || 0 });
+      }
+    }
+    return out;
+  } catch { return []; }
+}
+
+function saveEarnedAchievements(list: EarnedAchievement[]): void {
+  try { localStorage.setItem(ACHIEVEMENTS_KEY, JSON.stringify(list)); }
+  catch { /* ignore */ }
+}
+
+function isAchievementEarned(id: string): boolean {
+  return getEarnedAchievements().some((a) => a.id === id);
+}
+
+// Sorted by earnedAt descending — most recent first.
+function getRecentAchievements(limit: number): EarnedAchievement[] {
+  return [...getEarnedAchievements()]
+    .sort((a, b) => b.earnedAt - a.earnedAt)
+    .slice(0, limit);
+}
 
 interface ActiveBanner { text: string; bornAt: number; }
 let activeBanner: ActiveBanner | null = null;
@@ -1639,11 +1766,11 @@ function fireAchievementBanner(text: string): void {
 }
 
 function earnAchievement(id: string): void {
-  const def = ACHIEVEMENTS[id];
+  const def = ACHIEVEMENT_CATALOG[id];
   if (!def) return;
   const earned = getEarnedAchievements();
-  if (earned.includes(id)) return;
-  earned.push(id);
+  if (earned.some((a) => a.id === id)) return;
+  earned.push({ id, earnedAt: Date.now() });
   saveEarnedAchievements(earned);
   scheduleProfileSync();
   const who = getName() || "Player";
@@ -1720,6 +1847,9 @@ interface RoundAwardState {
   collectedIds: Set<number>;
   endAwarded: boolean;
   lastSeenTeam: "hunter" | "survivor" | null;
+  // Lowest hp/maxHp ratio observed for "me" this round — used to detect
+  // Untouchable (never dropped below half HP and survived to round end).
+  lowestHpRatio: number;
 }
 function newAwardState(): RoundAwardState {
   return {
@@ -1727,6 +1857,7 @@ function newAwardState(): RoundAwardState {
     collectedIds: new Set(),
     endAwarded: false,
     lastSeenTeam: null,
+    lowestHpRatio: 1,
   };
 }
 let localAwards = newAwardState();
@@ -1746,14 +1877,17 @@ function processAwards(
     state.prevSurvivorIds = new Set();
     state.collectedIds = new Set();
     state.endAwarded = false;
+    state.lowestHpRatio = 1;
   }
 
   // Find / refresh my own entity + team.
-  let me: { team: "hunter" | "survivor"; hp: number } | null = null;
+  let me: { team: "hunter" | "survivor"; hp: number; maxHp: number } | null = null;
   for (const e of world.entities) {
     if (e.kind === "character" && e.id === viewerEntityId) {
       me = e;
       state.lastSeenTeam = e.team;
+      const ratio = e.hp / e.maxHp;
+      if (ratio < state.lowestHpRatio) state.lowestHpRatio = ratio;
       break;
     }
   }
@@ -1807,6 +1941,9 @@ function processAwards(
     }
     if (state.lastSeenTeam === "survivor" && me && me.hp > 0) {
       addPoints(POINTS_SURVIVE);
+      // Untouchable: survivor finished alive AND never dropped below half
+      // HP during the round.
+      if (state.lowestHpRatio >= 0.5) earnAchievement("untouchable");
     }
   }
 }
