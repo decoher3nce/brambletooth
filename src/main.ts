@@ -37,7 +37,7 @@ import { HuntMode } from "./modes/hunt";
 import { FOREST_ARENA_CONFIG, buildForest } from "./arenas/forest";
 import { createAIController } from "./ai/ai";
 import { HumanController } from "./core/humanController";
-import { drawHUD } from "./ui/hud";
+import { drawHUD, survivorListHeight, SURVIVOR_LIST_TOP } from "./ui/hud";
 import { TouchControls } from "./ui/touchControls";
 import { SelectScreen, slotColor } from "./ui/selectScreen";
 import type { LobbyView } from "./ui/selectScreen";
@@ -768,6 +768,9 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
       isTouchMode: input.isTouchMode,
       points: getPoints(),
       objectivesRequired: OBJECTIVES_REQUIRED,
+      // Single-player has only one survivor — the top-left card
+      // already shows them, so the mini list would be redundant.
+      showSurvivorList: false,
     });
     if (input.isTouchMode) {
       touchControls.draw(ctx, dims, p.world, p.engine.outcome, p.engine.paused);
@@ -961,6 +964,9 @@ function drawNetGameScene(dt: number, dims: { w: number; h: number }, n: NetClie
     isTouchMode: input.isTouchMode,
     points: getPoints(),
     objectivesRequired: OBJECTIVES_REQUIRED,
+    // Multiplayer: show every survivor's HP so hunters and survivors
+    // alike have visibility into team status.
+    showSurvivorList: true,
   });
   if (input.isTouchMode) {
     touchControls.draw(ctx, dims, netViewWorld, n.outcome, false);
@@ -2208,6 +2214,9 @@ function checkAchievementNotices(): void {
   }
 }
 
+// Top-right banner that pops for ~3.5s when an achievement is earned or
+// a shop item is purchased. Small (320x56), single-line, anchored below
+// the multiplayer survivor list when one is visible.
 function drawAchievementBanner(dims: { w: number; h: number }): void {
   if (!activeBanner) return;
   const age = performance.now() - activeBanner.bornAt;
@@ -2215,25 +2224,32 @@ function drawAchievementBanner(dims: { w: number; h: number }): void {
   const alpha = age < 250 ? age / 250 : age > 3000 ? (3500 - age) / 500 : 1;
   const pulse = 0.85 + 0.15 * Math.sin(age / 90);
   const cw = dims.w;
-  const ch = dims.h;
-  const bw = Math.min(640, cw - 80);
-  const bh = 96;
-  const bx = (cw - bw) / 2;
-  const by = ch * 0.28;
+  const bw = Math.min(320, cw - 32);
+  const bh = 56;
+  const bx = cw - 16 - bw;
+  // Position below the survivor list when it's on-screen, else at the
+  // standard top margin. Survivor list is gameplay-only and we know it
+  // sits at SURVIVOR_LIST_TOP with survivorListHeight().
+  const activeWorld = play?.world ?? netViewWorld;
+  const survivorCount = appMode === "net" && activeWorld
+    ? activeWorld.charactersOnTeam("survivor").length
+    : 0;
+  const listH = survivorListHeight(survivorCount);
+  const by = listH > 0 ? SURVIVOR_LIST_TOP + listH + 8 : 14;
   ctx.save();
   ctx.fillStyle = `rgba(20, 30, 28, ${0.92 * alpha})`;
   ctx.fillRect(bx, by, bw, bh);
   ctx.strokeStyle = `rgba(255, 216, 74, ${alpha * pulse})`;
-  ctx.lineWidth = 3;
+  ctx.lineWidth = 2;
   ctx.strokeRect(bx, by, bw, bh);
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillStyle = `rgba(255, 216, 74, ${alpha * pulse})`;
-  ctx.font = "bold 18px system-ui, sans-serif";
-  ctx.fillText("★ ACHIEVEMENT UNLOCKED ★", cw / 2, by + 28);
+  ctx.font = "bold 10px system-ui, sans-serif";
+  ctx.fillText("★ ACHIEVEMENT UNLOCKED ★", bx + bw / 2, by + 14);
   ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-  ctx.font = "bold 22px system-ui, sans-serif";
-  ctx.fillText(activeBanner.text, cw / 2, by + 64);
+  ctx.font = "bold 14px system-ui, sans-serif";
+  ctx.fillText(activeBanner.text, bx + bw / 2, by + 36);
   ctx.restore();
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";

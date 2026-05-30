@@ -1,7 +1,14 @@
-// Heads-up display: timer, HP bar, ability cooldowns, objective counter,
-// points, and pause/outcome banner. All live across the top now —
-// gameplay reads cleaner without info competing with the player's
-// character at the bottom of the screen.
+// Heads-up display: timer, HP, ability cooldowns, objective counter,
+// score, optional all-survivors mini-list, and the pause/outcome overlay.
+//
+// Layout (all "top" so it doesn't compete with the player at the bottom
+// of the screen):
+//   Top-left, stacked:  [player card]  [ability bar (desktop)]  [points]
+//   Top-center:         [timer]  [objective progress]
+//   Top-right:          [mini-survivor HP list]  (multiplayer only)
+//
+// The achievement banner is drawn separately in main.ts and lives in
+// the top-right column below this mini-list when present.
 
 import type { World } from "../core/world";
 import { CHARACTERS } from "../characters/characters";
@@ -15,11 +22,25 @@ export interface HUDOptions {
   paused: boolean;
   dimensions: { w: number; h: number };
   isTouchMode: boolean;
-  // Lifetime points display (top-right).
+  // Lifetime points display (top-left, under the ability bar).
   points: number;
   // Per-survivor target (5) — used to render objective progress.
   objectivesRequired: number;
+  // When true, render the all-survivors mini HP list in the top-right.
+  // Caller passes true in multiplayer modes; single-player keeps it off
+  // since the top-left card already shows the only survivor.
+  showSurvivorList: boolean;
 }
+
+// Layout constants shared so callers can mirror our top-left stack
+// height (for positioning anything below it). Heights include the
+// 6px gap that follows each row.
+const PLAYER_CARD_H = 50;
+const ABILITY_BAR_H = 50;
+const POINTS_H = 32;
+const ROW_GAP = 6;
+const STACK_X = 20;
+const STACK_TOP = 14;
 
 export function drawHUD(
   ctx: CanvasRenderingContext2D,
@@ -27,15 +48,24 @@ export function drawHUD(
   world: World,
   opts: HUDOptions,
 ): void {
-  const { dimensions: dims, isTouchMode, points, outcome, paused, objectivesRequired } = opts;
+  const { dimensions: dims, isTouchMode, points, outcome, paused, objectivesRequired, showSurvivorList } = opts;
   const cw = dims.w;
   const ch = dims.h;
   const player = world.playerCharacter();
 
-  // ---- Top-left: name + HP ----
+  // ---- Top-left vertical stack: player card → ability bar → points ----
+  let stackY = STACK_TOP;
   if (player) {
-    drawNameAndHp(ctx, player);
+    drawNameAndHp(ctx, player, STACK_X, stackY);
+    stackY += PLAYER_CARD_H + ROW_GAP;
   }
+  // Ability bar is desktop-only — touch mode shows cooldowns on the
+  // bottom-right touch buttons, no need to draw it twice.
+  if (!isTouchMode && player) {
+    drawAbilityBar(ctx, player, STACK_X, stackY);
+    stackY += ABILITY_BAR_H + ROW_GAP;
+  }
+  drawPoints(ctx, points, STACK_X, stackY);
 
   // ---- Top-center: timer + objective progress ----
   const remaining = Math.max(0, world.timeLimit - world.elapsed);
@@ -69,15 +99,10 @@ export function drawHUD(
   ctx.fillStyle = "#ffd84a";
   ctx.fillText(objLine, cw / 2, 72);
 
-  // ---- Top-right: points + (desktop) ability bar ----
-  // Ability bar lives at the top-right on desktop. On touch the big
-  // bottom-right touch buttons cover this, so we skip it and just show
-  // points.
-  let topRightX = cw - 16;
-  if (!isTouchMode && player) {
-    topRightX = drawAbilityBar(ctx, player, cw);
+  // ---- Top-right: mini all-survivors HP list (multiplayer) ----
+  if (showSurvivorList && survivors.length > 0) {
+    drawSurvivorList(ctx, survivors, player?.id ?? null, cw);
   }
-  drawPoints(ctx, points, topRightX - 12);
 
   // ---- Pause / outcome overlay ----
   if (paused || outcome !== "ongoing") {
@@ -85,17 +110,30 @@ export function drawHUD(
   }
 }
 
-function drawNameAndHp(ctx: CanvasRenderingContext2D, p: ReturnType<World["playerCharacter"]> & {}): void {
+// Height of the top-right mini-survivors list given a survivor count.
+// Exported so main.ts can position the achievement banner below it.
+export function survivorListHeight(survivorCount: number): number {
+  if (survivorCount <= 0) return 0;
+  const padding = 6;
+  const rowH = 18;
+  return padding * 2 + survivorCount * rowH;
+}
+export const SURVIVOR_LIST_TOP = STACK_TOP;
+
+function drawNameAndHp(
+  ctx: CanvasRenderingContext2D,
+  p: ReturnType<World["playerCharacter"]> & {},
+  x: number,
+  y: number,
+): void {
   const def = CHARACTERS[(p as { characterId: string }).characterId];
   const character = p as {
     team: "hunter" | "survivor";
     hp: number;
     maxHp: number;
   };
-  const x = 20;
-  const y = 14;
   const w = 220;
-  const h = 50;
+  const h = PLAYER_CARD_H;
   ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
   ctx.fillRect(x, y, w, h);
   ctx.fillStyle = "#fff";
@@ -122,14 +160,15 @@ function drawNameAndHp(ctx: CanvasRenderingContext2D, p: ReturnType<World["playe
   );
 }
 
-// Draws four ability slots in a horizontal row anchored to the top-right.
-// Returns the X coordinate of the bar's LEFT edge so the points display
-// can sit just left of it without overlapping.
+// Four ability slots in a horizontal row, left-anchored at (x, y).
+// Used to live in the top-right; moved to the top-left stack so the
+// player's cooldowns sit next to their HP and score.
 function drawAbilityBar(
   ctx: CanvasRenderingContext2D,
   p: ReturnType<World["playerCharacter"]> & {},
-  cw: number,
-): number {
+  x0: number,
+  y: number,
+): void {
   const player = p as {
     characterId: string;
     cooldowns: Record<string, number>;
@@ -138,10 +177,6 @@ function drawAbilityBar(
   const def = CHARACTERS[player.characterId];
   const slot = 50;
   const gap = 6;
-  const padding = 16;
-  const rowW = 4 * slot + 3 * gap;
-  const x0 = cw - padding - rowW;
-  const y = 14;
   for (let i = 0; i < 4; i++) {
     const x = x0 + i * (slot + gap);
     ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
@@ -185,22 +220,73 @@ function drawAbilityBar(
     ctx.textAlign = "right";
     ctx.fillText(ABILITY_KEYS[i], x + slot - 4, y + slot - 4);
   }
-  return x0;
 }
 
-function drawPoints(ctx: CanvasRenderingContext2D, points: number, rightEdgeX: number): void {
+// Score pill, left-anchored at (x, y). Used to live top-right; moved to
+// the top-left stack at the player's request.
+function drawPoints(ctx: CanvasRenderingContext2D, points: number, x: number, y: number): void {
   const label = points === 1 ? "★ 1" : `★ ${points}`;
+  const h = POINTS_H;
   ctx.font = "bold 16px system-ui, sans-serif";
   ctx.textBaseline = "alphabetic";
-  ctx.textAlign = "right";
-  const w = ctx.measureText(label).width + 24;
-  const h = 36;
-  const x = rightEdgeX - w;
-  const y = 14;
+  const measured = ctx.measureText(label).width;
+  const w = Math.max(80, measured + 24);
   ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
   ctx.fillRect(x, y, w, h);
   ctx.fillStyle = "#ffd84a";
-  ctx.fillText(label, x + w - 12, y + 24);
+  ctx.textAlign = "left";
+  ctx.fillText(label, x + 12, y + 22);
+}
+
+// Compact list of every survivor's HP, top-right anchored. Shown in
+// multiplayer so hunters can see who's wounded and survivors can see
+// their teammates' status. Local player's row is bolded.
+function drawSurvivorList(
+  ctx: CanvasRenderingContext2D,
+  survivors: ReturnType<World["charactersOnTeam"]>,
+  currentPlayerId: number | null,
+  cw: number,
+): void {
+  const w = 200;
+  const padding = 6;
+  const rowH = 18;
+  const h = survivorListHeight(survivors.length);
+  const x = cw - 16 - w;
+  const y = SURVIVOR_LIST_TOP;
+  ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+  ctx.fillRect(x, y, w, h);
+
+  let ry = y + padding;
+  for (const s of survivors) {
+    const character = s as { id: number; hp: number; maxHp: number; characterId: string };
+    const isMe = currentPlayerId != null && character.id === currentPlayerId;
+    const def = CHARACTERS[character.characterId];
+    const name = def?.name ?? "Survivor";
+    // Name (left, truncated to fit ~64px).
+    ctx.fillStyle = isMe ? "#fff" : "rgba(255,255,255,0.85)";
+    ctx.font = isMe ? "bold 11px system-ui, sans-serif" : "11px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(name.slice(0, 10), x + 8, ry + rowH / 2);
+    // Thin HP bar (middle).
+    const barX = x + 78;
+    const barW = 80;
+    const barH = 8;
+    const barY = ry + (rowH - barH) / 2;
+    ctx.fillStyle = "#333";
+    ctx.fillRect(barX, barY, barW, barH);
+    const ratio = Math.max(0, Math.min(1, character.hp / character.maxHp));
+    ctx.fillStyle = "#48d0a0";
+    ctx.fillRect(barX, barY, barW * ratio, barH);
+    // HP number (right-aligned).
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.font = "10px system-ui, sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(Math.ceil(character.hp).toString(), x + w - 8, ry + rowH / 2);
+    ry += rowH;
+  }
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
 }
 
 function drawPauseOrOutcome(
