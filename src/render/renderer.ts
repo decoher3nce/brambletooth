@@ -370,11 +370,22 @@ export class Renderer {
     const def = CHARACTERS[e.characterId];
     const ctx = this.ctx;
 
-    // Shadow (universal — characters cast the same iso ellipse shadow).
-    ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+    // Shadow (universal). Radial gradient — darkest directly under the
+    // character, fading to transparent at the edge. Drawn via a
+    // scaled circle so the radial falloff is also elliptical and
+    // matches the 2:1 iso ground footprint.
+    ctx.save();
+    ctx.translate(s.x, s.y + 2);
+    ctx.scale(1, 0.35);
+    const shadowGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, e.radius * 0.95);
+    shadowGrad.addColorStop(0, "rgba(0, 0, 0, 0.55)");
+    shadowGrad.addColorStop(0.55, "rgba(0, 0, 0, 0.3)");
+    shadowGrad.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = shadowGrad;
     ctx.beginPath();
-    ctx.ellipse(s.x, s.y + 2, e.radius * 0.9, e.radius * 0.35, 0, 0, Math.PI * 2);
+    ctx.arc(0, 0, e.radius * 0.95, 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
 
     // Body + face: dispatched per character. The art function returns
     // top/center Y values so overlays (charging ring, status, HP bar)

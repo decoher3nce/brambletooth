@@ -171,42 +171,61 @@ function drawMagnek(
   ctx.stroke();
 
   // ---- Stranded copper-wire body ----
+  // Strands SPIRAL like real twisted cable (sine-wave paths with
+  // 360°/N phase offsets). Each strand drawn as a dark-brown shadow
+  // followed by a copper highlight so crossings read as woven wire,
+  // not pinstripes.
   const copper = "#c97a3a";
-  const copperDark = "#7c4a1f";
+  const copperShadow = "#5a3315"; // deep umber for strand shadow + outlines
+  const copperDark = "#7c4a1f";   // mid-brown for terminator fills
 
-  // Torso = 4 vertical strands. Strand thickness and gap scale with
-  // r so the bundle reads as a bundle at gameplay scale and shows
-  // individual strands on close inspection.
   const torsoStrands = 4;
   const torsoStrandThick = Math.max(1.7, r * 0.085);
-  const torsoStrandGap = Math.max(2.4, r * 0.12);
-  const torsoW = (torsoStrands - 1) * torsoStrandGap + torsoStrandThick;
+  const torsoBundleW = Math.max(10, r * 0.55);
+  const torsoAmp = (torsoBundleW - torsoStrandThick) / 2;
 
   const torsoTopY = headBaseY + r * 0.05;
   const torsoBottomY = cy - r * 0.5;
 
-  ctx.strokeStyle = copper;
-  ctx.lineWidth = torsoStrandThick;
-  ctx.lineCap = "round";
-  for (let i = 0; i < torsoStrands; i++) {
-    const offset = (i - (torsoStrands - 1) / 2) * torsoStrandGap;
-    ctx.beginPath();
-    ctx.moveTo(cx + offset, torsoTopY);
-    ctx.lineTo(cx + offset, torsoBottomY);
-    ctx.stroke();
-  }
+  drawSpiraledStrands(
+    ctx,
+    cx, torsoTopY,
+    cx, torsoBottomY,
+    torsoStrands, torsoStrandThick,
+    torsoAmp, 2.5,
+    copper, copperShadow,
+  );
 
-  // "M" emblem on the (now wider) chest.
-  ctx.fillStyle = "#1a1a1a";
-  ctx.font = `bold ${Math.max(11, Math.floor(r * 0.7))}px system-ui, sans-serif`;
+  // "M" chest emblem in the magnet's two polarity colors. Sharp split
+  // down the middle — left half blue (matches the left prong), right
+  // half red (matches the right prong).
+  const mY = (torsoTopY + torsoBottomY) / 2;
+  const fontSize = Math.max(11, Math.floor(r * 0.7));
+  ctx.font = `bold ${fontSize}px system-ui, sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText("M", cx, (torsoTopY + torsoBottomY) / 2);
+  // Left half: blue
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(cx - fontSize, mY - fontSize, fontSize, fontSize * 2);
+  ctx.clip();
+  ctx.fillStyle = "#3a72c8";
+  ctx.fillText("M", cx, mY);
+  ctx.restore();
+  // Right half: red
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(cx, mY - fontSize, fontSize, fontSize * 2);
+  ctx.clip();
+  ctx.fillStyle = "#d04848";
+  ctx.fillText("M", cx, mY);
+  ctx.restore();
 
-  // ---- Arms (3-strand) ----
+  // ---- Arms (3-strand, spiraled) ----
   const limbStrands = 3;
   const limbStrandThick = Math.max(1.4, r * 0.07);
-  const limbStrandGap = Math.max(1.8, r * 0.085);
+  const limbBundleW = Math.max(5, r * 0.28);
+  const limbAmp = (limbBundleW - limbStrandThick) / 2;
   const handR = Math.max(3, r * 0.18);
   const footR = Math.max(3.2, r * 0.2);
 
@@ -214,47 +233,50 @@ function drawMagnek(
   const handReach = r * 0.95;
   const handRise = r * 0.42;
 
-  // Arms emerge from the OUTER torso strands and rise outward.
-  drawStrandedLine(
+  // Arms emerge from the OUTER torso edges and rise outward.
+  drawSpiraledStrands(
     ctx,
-    cx - torsoW / 2, shoulderY,
+    cx - torsoBundleW / 2, shoulderY,
     cx - handReach, shoulderY - handRise,
-    limbStrands, limbStrandThick, limbStrandGap, copper,
+    limbStrands, limbStrandThick, limbAmp, 2,
+    copper, copperShadow,
   );
-  drawStrandedLine(
+  drawSpiraledStrands(
     ctx,
-    cx + torsoW / 2, shoulderY,
+    cx + torsoBundleW / 2, shoulderY,
     cx + handReach, shoulderY - handRise,
-    limbStrands, limbStrandThick, limbStrandGap, copper,
+    limbStrands, limbStrandThick, limbAmp, 2,
+    copper, copperShadow,
   );
 
-  // Hands — copper-dark blobs at the strand-bundle ends, with thin
-  // outline. Sized to cover the strand cluster so the limbs visibly
-  // converge into them.
-  drawTerminator(ctx, cx - handReach, shoulderY - handRise, handR, copperDark);
-  drawTerminator(ctx, cx + handReach, shoulderY - handRise, handR, copperDark);
+  // Hands — copper-dark blobs at the strand-bundle ends. Sized to
+  // cover the strand cluster so the limb visibly converges into them.
+  drawTerminator(ctx, cx - handReach, shoulderY - handRise, handR, copperDark, copperShadow);
+  drawTerminator(ctx, cx + handReach, shoulderY - handRise, handR, copperDark, copperShadow);
 
-  // ---- Legs (3-strand) ----
+  // ---- Legs (3-strand, spiraled) ----
   const legSplay = r * 0.55;
-  // Legs emerge from the inner torso strands for visual continuity.
-  const legTopXLeft = cx - torsoW / 2 + torsoStrandThick / 2 + torsoStrandGap * 0.5;
-  const legTopXRight = cx + torsoW / 2 - torsoStrandThick / 2 - torsoStrandGap * 0.5;
-  drawStrandedLine(
+  // Legs emerge from inner torso positions for visual continuity.
+  const legTopXLeft = cx - torsoBundleW / 4;
+  const legTopXRight = cx + torsoBundleW / 4;
+  drawSpiraledStrands(
     ctx,
     legTopXLeft, torsoBottomY,
     cx - legSplay, feetY,
-    limbStrands, limbStrandThick, limbStrandGap, copper,
+    limbStrands, limbStrandThick, limbAmp, 2,
+    copper, copperShadow,
   );
-  drawStrandedLine(
+  drawSpiraledStrands(
     ctx,
     legTopXRight, torsoBottomY,
     cx + legSplay, feetY,
-    limbStrands, limbStrandThick, limbStrandGap, copper,
+    limbStrands, limbStrandThick, limbAmp, 2,
+    copper, copperShadow,
   );
 
   // Feet — same blob treatment as hands.
-  drawTerminator(ctx, cx - legSplay, feetY, footR, copperDark);
-  drawTerminator(ctx, cx + legSplay, feetY, footR, copperDark);
+  drawTerminator(ctx, cx - legSplay, feetY, footR, copperDark, copperShadow);
+  drawTerminator(ctx, cx + legSplay, feetY, footR, copperDark, copperShadow);
 
   ctx.restore();
 
@@ -264,14 +286,17 @@ function drawMagnek(
   };
 }
 
-// Draw a stranded copper wire as N parallel strokes from (x1, y1) to
-// (x2, y2). Strands are offset perpendicular to the wire's direction
-// by `strandGap`, centered on the wire's centerline.
-function drawStrandedLine(
+// Spiraled stranded copper wire from (x1, y1) to (x2, y2). Each strand
+// follows a sinusoidal path along the wire's axis with a 360°/N phase
+// shift, so the bundle reads as a twisted cable (like real stranded
+// wire) rather than a pinstripe of parallel lines. Each strand draws
+// as a dark-brown shadow stroke followed by a copper highlight on top.
+function drawSpiraledStrands(
   ctx: CanvasRenderingContext2D,
   x1: number, y1: number, x2: number, y2: number,
-  strands: number, strandThick: number, strandGap: number,
-  color: string,
+  strands: number, strandThick: number,
+  amplitude: number, twists: number,
+  copperColor: string, shadowColor: string,
 ): void {
   const dx = x2 - x1;
   const dy = y2 - y1;
@@ -280,34 +305,65 @@ function drawStrandedLine(
   // Unit perpendicular (rotate direction 90° CCW).
   const px = -dy / len;
   const py = dx / len;
-  ctx.strokeStyle = color;
-  ctx.lineWidth = strandThick;
-  ctx.lineCap = "round";
+  // Segment count scales with length so the curve stays smooth.
+  const segs = Math.max(24, Math.floor(len * 1.6));
+
+  // Pre-compute each strand's path. Pairs of (x, y) floats interleaved.
+  const paths: number[][] = [];
   for (let i = 0; i < strands; i++) {
-    const offset = (i - (strands - 1) / 2) * strandGap;
-    const ox = px * offset;
-    const oy = py * offset;
+    const phase = (i / strands) * 2 * Math.PI;
+    const pts: number[] = [];
+    for (let s = 0; s <= segs; s++) {
+      const t = s / segs;
+      const lx = x1 + dx * t;
+      const ly = y1 + dy * t;
+      const o = amplitude * Math.sin(t * 2 * Math.PI * twists + phase);
+      pts.push(lx + px * o, ly + py * o);
+    }
+    paths.push(pts);
+  }
+
+  ctx.lineCap = "round";
+
+  // Draw per-strand (shadow + highlight) so each strand's z-order is
+  // consistent at crossings. The later-drawn strand sits on top.
+  for (const pts of paths) {
+    // Shadow base.
+    ctx.strokeStyle = shadowColor;
+    ctx.lineWidth = strandThick + 0.8;
     ctx.beginPath();
-    ctx.moveTo(x1 + ox, y1 + oy);
-    ctx.lineTo(x2 + ox, y2 + oy);
+    ctx.moveTo(pts[0]!, pts[1]!);
+    for (let i = 2; i < pts.length; i += 2) {
+      ctx.lineTo(pts[i]!, pts[i + 1]!);
+    }
+    ctx.stroke();
+    // Copper highlight.
+    ctx.strokeStyle = copperColor;
+    ctx.lineWidth = strandThick;
+    ctx.beginPath();
+    ctx.moveTo(pts[0]!, pts[1]!);
+    for (let i = 2; i < pts.length; i += 2) {
+      ctx.lineTo(pts[i]!, pts[i + 1]!);
+    }
     ctx.stroke();
   }
 }
 
-// Hand / foot termination — a filled circle with a thin dark outline,
-// drawn ON TOP of the strand-bundle endpoint so the limb visually
-// converges into it.
+// Hand / foot termination — a filled circle with a thin dark-brown
+// outline, drawn ON TOP of the strand-bundle endpoint so the limb
+// visually converges into it.
 function drawTerminator(
   ctx: CanvasRenderingContext2D,
   cx: number, cy: number, r: number,
   fill: string,
+  outline: string,
 ): void {
   ctx.fillStyle = fill;
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
   ctx.fill();
-  ctx.strokeStyle = "#1a1a1a";
-  ctx.lineWidth = 0.8;
+  ctx.strokeStyle = outline;
+  ctx.lineWidth = 0.9;
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
   ctx.stroke();
