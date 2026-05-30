@@ -246,12 +246,22 @@ function handleMessage(conn: ClientConn, raw: string): void {
       break;
 
     case "pause":
-      // Only meaningful during an active round (after countdown).
       if (!session || countdownRemaining > 0) break;
       if (serverPaused !== msg.paused) {
         serverPaused = msg.paused;
         console.log(`[round] ${serverPaused ? "paused" : "resumed"} by slot ${conn.slot}`);
       }
+      break;
+
+    case "achievement":
+      // Forward to everyone (including the originator) as a notice.
+      // Trust: kids' game on private network; no validation needed.
+      broadcast({
+        type: "notice",
+        kind: "achievement",
+        text: msg.text.slice(0, 120),
+        slot: conn.slot,
+      });
       break;
   }
 }

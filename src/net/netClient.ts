@@ -35,7 +35,7 @@ const RETRY_DELAYS_MS = [400, 800, 1600, 3200, 6400]; // give up after the last
 
 export interface NoticeEntry {
   id: number;
-  kind: "drop" | "rejoin" | "info";
+  kind: "drop" | "rejoin" | "info" | "achievement";
   text: string;
   slot?: PlayerSlot;
   bornAt: number;
@@ -231,6 +231,10 @@ export class NetClient {
   // Toggle the server-wide pause. Any player can pause OR resume.
   setPaused(paused: boolean): void {
     this.send({ type: "pause", paused });
+  }
+  // Ask the server to broadcast an achievement notice to everyone.
+  sendAchievement(text: string): void {
+    this.send({ type: "achievement", text });
   }
 
   // ---- In-round ----

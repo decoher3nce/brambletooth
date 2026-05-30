@@ -16,6 +16,9 @@ import { Renderer, createCamera, screenToWorld } from "./render/renderer";
 import type { Entity, CharacterEntity } from "./core/entity";
 import { isProp } from "./core/entity";
 import { distToSegment } from "./core/math";
+import { playSound, unlockAudio, setHeartbeat } from "./audio/sound";
+import type { SoundId } from "./audio/sound";
+import { worldToScreen } from "./render/renderer";
 import type { Camera } from "./render/renderer";
 import { HuntMode } from "./modes/hunt";
 import { FOREST_ARENA_CONFIG, buildForest } from "./arenas/forest";
@@ -77,6 +80,8 @@ let net: NetClient | null = null;
 function chooseMode(mode: AppMode): void {
   appMode = mode;
   started = true;
+  // First user gesture — Safari requires this to start audio.
+  unlockAudio();
   if (mode === "net" && !net) net = new NetClient(resolveServerUrl(), getName());
 }
 
@@ -101,8 +106,12 @@ function setPointsLocal(n: number): void {
   try { localStorage.setItem(POINTS_KEY, String(Math.max(0, Math.floor(n)))); } catch { /* ignore */ }
 }
 function addPoints(n: number): void {
-  setPointsLocal(getPoints() + n);
+  const before = getPoints();
+  const after = before + n;
+  setPointsLocal(after);
   scheduleProfileSync();
+  // Veteran: reach 100 lifetime points. Idempotent inside earnAchievement.
+  if (before < 100 && after >= 100) earnAchievement("veteran");
 }
 
 // ---- Server-backed profile (login + sync) ----
@@ -510,6 +519,11 @@ function goToTitle(): void {
   // Reset per-round point-award trackers so a fresh round starts clean.
   localAwards = newAwardState();
   netAwards = newAwardState();
+  // Reset sound/visual event detection state.
+  prevCharSnap.clear();
+  prevObjectivePicked.clear();
+  clientEffects.length = 0;
+  setHeartbeat(null);
   // Reset name input visibility — frameTitle will re-show it next frame.
 }
 
@@ -608,10 +622,16 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
       p.cam.target.y += (player.pos.y - p.cam.target.y) * Math.min(1, dt * 6);
     }
 
+    // Sound + visual events + heartbeat (local mode).
+    const localMe = p.world.playerCharacter() ?? null;
+    detectSoundAndVisualEvents(p.world, localMe);
+    updateHeartbeatFor(p.world, localMe?.id ?? null);
+
     renderer.clear("#1a2421");
     renderer.drawArena(p.world, p.cam);
     const localVis = visibilityFilter(p.world, p.world.playerCharacter()?.id);
     renderer.drawEntities(p.world, p.cam, localVis);
+    drawClientEffects(p.cam);
     drawHUD(ctx, canvas, p.world, {
       outcome: p.engine.outcome,
       paused: p.engine.paused,
@@ -794,10 +814,17 @@ function drawNetGameScene(dt: number, dims: { w: number; h: number }, n: NetClie
   if (n.phase === "playing") n.sendInput(input);
   input.pressedAbilities.clear();
 
+  // Sound + visual events + heartbeat (net mode). Use the smoothed view
+  // world's "me" so sounds anchor to the same character the camera sees.
+  const netMe = netViewWorld.playerCharacter() ?? null;
+  detectSoundAndVisualEvents(netViewWorld, netMe);
+  updateHeartbeatFor(netViewWorld, n.yourEntityId);
+
   renderer.clear("#1a2421");
   renderer.drawArena(netViewWorld, netCam);
   const netVis = visibilityFilter(netViewWorld, n.yourEntityId);
   renderer.drawEntities(netViewWorld, netCam, netVis);
+  drawClientEffects(netCam);
   drawHUD(ctx, canvas, netViewWorld, {
     outcome: n.outcome,
     paused: n.paused,
@@ -1419,6 +1446,239 @@ function visibilityFilter(world: World, viewerEntityId: number | null | undefine
   };
 }
 
+// ---- Sound event detection (cooldown transitions, position jumps, picks) ----
+// Each frame we diff the current snapshot against last frame's per-entity
+// state. Newly-set cooldowns mean an ability just fired; large Magnek pos
+// jumps are Magnesis teleports (visual trail + Doppler-aware sound);
+// objective transitions trigger a chime.
+
+interface PrevCharSnap {
+  pos: { x: number; y: number };
+  cooldowns: Record<string, number>;
+  characterId: string;
+  team: "hunter" | "survivor";
+}
+const prevCharSnap = new Map<number, PrevCharSnap>();
+const prevObjectivePicked = new Set<number>();
+
+function abilitySoundFor(abilityId: string): SoundId | null {
+  switch (abilityId) {
+    case "place_plate": return "place_plate";
+    case "overdrive": return "overdrive";
+    case "glitch": return "glitch";
+    case "slash": return "slash";
+    case "slime_shot": return "slime_shot";
+    case "slime_trap": return "slime_trap";
+    case "relocate": return "relocate";
+    // magnesis is channeled — the cooldown sets at cast START, not at
+    // teleport. We trigger its sound off the position-jump detection
+    // below so it plays exactly when Magnek vanishes.
+    default: return null;
+  }
+}
+
+// Client-side visual effects (non-authoritative — purely cosmetic). The
+// magnesis trail is the only one for now.
+interface ClientEffect {
+  kind: "magnesis_trail";
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+  ttl: number;
+  age: number;
+}
+const clientEffects: ClientEffect[] = [];
+
+function updateClientEffects(dt: number): void {
+  for (let i = clientEffects.length - 1; i >= 0; i--) {
+    clientEffects[i].age += dt;
+    if (clientEffects[i].age >= clientEffects[i].ttl) clientEffects.splice(i, 1);
+  }
+}
+
+function drawClientEffects(cam: { target: { x: number; y: number }; zoom: number }): void {
+  for (const e of clientEffects) {
+    if (e.kind === "magnesis_trail") {
+      const t = 1 - e.age / e.ttl;
+      const a = worldToScreen(e.from, cam, renderer.cw, renderer.ch);
+      const b = worldToScreen(e.to, cam, renderer.cw, renderer.ch);
+      ctx.save();
+      ctx.strokeStyle = `rgba(160, 200, 255, ${0.85 * t})`;
+      ctx.lineWidth = 3;
+      ctx.setLineDash([10, 8]);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+  }
+}
+
+function detectSoundAndVisualEvents(world: World, viewer: CharacterEntity | null): void {
+  const vp = viewer?.pos ?? null;
+  const dist = (p: { x: number; y: number }): number =>
+    vp ? Math.hypot(p.x - vp.x, p.y - vp.y) : 0;
+
+  const seenIds = new Set<number>();
+  for (const e of world.entities) {
+    if (e.kind === "character") {
+      seenIds.add(e.id);
+      const prev = prevCharSnap.get(e.id);
+      if (prev) {
+        // Cooldown 0 -> >0 means the ability fired this frame.
+        for (const ab of Object.keys(e.cooldowns)) {
+          const before = prev.cooldowns[ab] ?? 0;
+          const after = e.cooldowns[ab] ?? 0;
+          if (before <= 0 && after > 0) {
+            const sId = abilitySoundFor(ab);
+            if (sId) playSound(sId, { distance: dist(e.pos) });
+          }
+        }
+        // Large position delta on Magnek = Magnesis teleport completed.
+        const dx = e.pos.x - prev.pos.x;
+        const dy = e.pos.y - prev.pos.y;
+        const moved = Math.hypot(dx, dy);
+        if (moved > 100 && e.characterId === "magnek") {
+          clientEffects.push({
+            kind: "magnesis_trail",
+            from: { x: prev.pos.x, y: prev.pos.y },
+            to: { x: e.pos.x, y: e.pos.y },
+            ttl: 1.2,
+            age: 0,
+          });
+          let dop = 0;
+          if (vp) {
+            const before = Math.hypot(prev.pos.x - vp.x, prev.pos.y - vp.y);
+            const after = Math.hypot(e.pos.x - vp.x, e.pos.y - vp.y);
+            dop = before > after ? 1 : -1; // approaching vs receding
+          }
+          playSound("magnesis", { distance: dist(e.pos), doppler: dop });
+        }
+      }
+      prevCharSnap.set(e.id, {
+        pos: { x: e.pos.x, y: e.pos.y },
+        cooldowns: { ...e.cooldowns },
+        characterId: e.characterId,
+        team: e.team,
+      });
+    } else if (e.kind === "objective") {
+      if (e.collected && !prevObjectivePicked.has(e.id)) {
+        prevObjectivePicked.add(e.id);
+        playSound("objective_pickup", { distance: dist(e.pos) });
+      }
+    }
+  }
+  for (const id of prevCharSnap.keys()) if (!seenIds.has(id)) prevCharSnap.delete(id);
+}
+
+function updateHeartbeatFor(world: World, viewerEntityId: number | null): void {
+  if (viewerEntityId == null) { setHeartbeat(null); return; }
+  let me: CharacterEntity | null = null;
+  for (const e of world.entities) {
+    if (e.kind === "character" && e.id === viewerEntityId) { me = e; break; }
+  }
+  if (!me || me.team !== "survivor") { setHeartbeat(null); return; }
+  let nearest = Infinity;
+  for (const e of world.entities) {
+    if (e.kind === "character" && e.team === "hunter") {
+      const d = Math.hypot(e.pos.x - me.pos.x, e.pos.y - me.pos.y);
+      if (d < nearest) nearest = d;
+    }
+  }
+  setHeartbeat(nearest === Infinity ? null : nearest);
+}
+
+// ---- Achievement banner + earn logic ----
+const ACHIEVEMENTS_KEY = "brambletooth.achievements";
+function getEarnedAchievements(): string[] {
+  try {
+    const raw = localStorage.getItem(ACHIEVEMENTS_KEY);
+    return raw ? (JSON.parse(raw) as string[]) : [];
+  } catch { return []; }
+}
+function saveEarnedAchievements(list: string[]): void {
+  try { localStorage.setItem(ACHIEVEMENTS_KEY, JSON.stringify(list)); } catch { /* ignore */ }
+}
+
+interface AchievementDef { id: string; name: string; }
+const ACHIEVEMENTS: Record<string, AchievementDef> = {
+  first_blood: { id: "first_blood", name: "First Blood" },
+  collector: { id: "collector", name: "Collector" },
+  veteran: { id: "veteran", name: "Veteran" },
+};
+
+interface ActiveBanner { text: string; bornAt: number; }
+let activeBanner: ActiveBanner | null = null;
+let lastNoticeIdSeen = 0;
+
+function fireAchievementBanner(text: string): void {
+  activeBanner = { text, bornAt: performance.now() };
+  playSound("achievement");
+}
+
+function earnAchievement(id: string): void {
+  const def = ACHIEVEMENTS[id];
+  if (!def) return;
+  const earned = getEarnedAchievements();
+  if (earned.includes(id)) return;
+  earned.push(id);
+  saveEarnedAchievements(earned);
+  scheduleProfileSync();
+  const who = getName() || "Player";
+  const text = `${who} earned ${def.name}!`;
+  if (appMode === "net" && net) {
+    // Server fans out to everyone — we'll render the banner when the
+    // notice round-trips back via net.notices.
+    net.sendAchievement(text);
+  } else {
+    fireAchievementBanner(text);
+  }
+}
+
+// Watches net.notices for new kind="achievement" entries and fires the
+// banner exactly once per notice.
+function checkAchievementNotices(): void {
+  if (!net) return;
+  for (const n of net.notices) {
+    if (n.id > lastNoticeIdSeen) {
+      lastNoticeIdSeen = n.id;
+      if (n.kind === "achievement") fireAchievementBanner(n.text);
+    }
+  }
+}
+
+function drawAchievementBanner(dims: { w: number; h: number }): void {
+  if (!activeBanner) return;
+  const age = performance.now() - activeBanner.bornAt;
+  if (age > 3500) { activeBanner = null; return; }
+  const alpha = age < 250 ? age / 250 : age > 3000 ? (3500 - age) / 500 : 1;
+  const pulse = 0.85 + 0.15 * Math.sin(age / 90);
+  const cw = dims.w;
+  const ch = dims.h;
+  const bw = Math.min(640, cw - 80);
+  const bh = 96;
+  const bx = (cw - bw) / 2;
+  const by = ch * 0.28;
+  ctx.save();
+  ctx.fillStyle = `rgba(20, 30, 28, ${0.92 * alpha})`;
+  ctx.fillRect(bx, by, bw, bh);
+  ctx.strokeStyle = `rgba(255, 216, 74, ${alpha * pulse})`;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(bx, by, bw, bh);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = `rgba(255, 216, 74, ${alpha * pulse})`;
+  ctx.font = "bold 18px system-ui, sans-serif";
+  ctx.fillText("★ ACHIEVEMENT UNLOCKED ★", cw / 2, by + 28);
+  ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+  ctx.font = "bold 22px system-ui, sans-serif";
+  ctx.fillText(activeBanner.text, cw / 2, by + 64);
+  ctx.restore();
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+}
+
 // ---- Multi-event scoring ----
 // Awards across each round, idempotent within the round:
 //   Hunter: +5 per catch (survivor disappears from the world), +20 round win.
@@ -1486,7 +1746,11 @@ function processAwards(
   }
   if (state.lastSeenTeam === "hunter") {
     for (const id of state.prevSurvivorIds) {
-      if (!currentSurvivorIds.has(id)) addPoints(POINTS_CATCH);
+      if (!currentSurvivorIds.has(id)) {
+        addPoints(POINTS_CATCH);
+        // First Blood: any successful catch unlocks it (one-time).
+        earnAchievement("first_blood");
+      }
     }
   }
   state.prevSurvivorIds = currentSurvivorIds;
@@ -1503,6 +1767,8 @@ function processAwards(
       ) {
         state.collectedIds.add(e.id);
         addPoints(POINTS_OBJECTIVE);
+        // Collector: collect 5 in a single round.
+        if (state.collectedIds.size >= 5) earnAchievement("collector");
       }
     }
   }
@@ -1565,6 +1831,16 @@ function frame(now: number) {
   }
   const dims = logicalSize();
 
+  updateClientEffects(dt);
+  // Stop the heartbeat whenever we're not actively rendering a round —
+  // the in-frame draws below will turn it back on with the right BPM.
+  const inGameplay =
+    started &&
+    ((appMode === "local" && scene === "playing" && !!play) ||
+      (appMode === "net" &&
+        (net?.phase === "playing" || net?.phase === "ended")));
+  if (!inGameplay) setHeartbeat(null);
+
   if (!started) frameTitle(dims);
   else if (appMode === "net") frameNet(dt, dims);
   else frameLocal(dt, dims);
@@ -1578,6 +1854,11 @@ function frame(now: number) {
   // Win → points (one-shot per round). Read each frame; transitions to a
   // terminal outcome trigger exactly one increment.
   awardPointsIfWon();
+
+  // Achievement banner system: poll net notices for incoming achievement
+  // broadcasts, then draw the banner.
+  checkAchievementNotices();
+  drawAchievementBanner(dims);
 
   requestAnimationFrame(frame);
 }

@@ -70,7 +70,8 @@ export type ClientMessage =
   | ReadyMessage
   | InputMessage
   | RestartMessage
-  | PauseMessage;
+  | PauseMessage
+  | AchievementMessage;
 
 // ---- Server → Client ----
 
@@ -148,9 +149,19 @@ export interface CountdownMessage {
 // client style by event type.
 export interface NoticeMessage {
   type: "notice";
-  kind: "drop" | "rejoin" | "info";
+  kind: "drop" | "rejoin" | "info" | "achievement";
   text: string;
   slot?: PlayerSlot;
+}
+
+// Client tells the server it earned an achievement; server fans it out to
+// everyone as a Notice (kind="achievement") so the table all flashes the
+// same banner. Server doesn't validate — kids' game on a private network.
+export interface AchievementMessage {
+  type: "achievement";
+  // Display text the server echoes back via the notice (e.g. "Bob earned
+  // First Blood!"). Pre-formatted on the client so the server stays dumb.
+  text: string;
 }
 
 export type ServerMessage =
