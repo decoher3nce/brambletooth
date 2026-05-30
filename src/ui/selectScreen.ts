@@ -17,6 +17,7 @@
 import { CHARACTERS } from "../characters/characters";
 import type { CharacterDef, CharacterRole } from "../characters/characters";
 import { ABILITIES } from "../abilities/abilities";
+import { playSound } from "../audio/sound";
 
 export interface SelectHooks {
   // Fired when the primary button is pressed (START locally; READY toggle
@@ -252,7 +253,10 @@ export class SelectScreen {
         case "Enter":
         case " ":
           ev.preventDefault();
-          if (this.selectedId) hooks.onStart(this.selectedId);
+          if (this.selectedId) {
+            playSound("ui_click");
+            hooks.onStart(this.selectedId);
+          }
           break;
       }
     });
@@ -291,6 +295,7 @@ export class SelectScreen {
     if (target && target.id !== this.selectedId) {
       this.selectedId = target.id;
       this.hoverId = null;
+      playSound("ui_pick");
       this.hooks?.onSelect?.(target.id);
     }
   }
@@ -304,11 +309,12 @@ export class SelectScreen {
     for (const row of this.playerRows) {
       const r = row.rect;
       if (p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h) {
+        playSound("ui_pick");
         this.pinnedPlayer = this.pinnedPlayer === row.name ? null : row.name;
         return;
       }
     }
-    // Tap outside any pinned row clears the pin.
+    // Tap outside any pinned row clears the pin (silently — no sound).
     if (this.pinnedPlayer) this.pinnedPlayer = null;
 
     for (const tile of this.tiles) {
@@ -322,6 +328,7 @@ export class SelectScreen {
         // On touch, we also want the detail panel to show the just-tapped
         // character — clear hover so the displayed character == selected.
         this.hoverId = null;
+        playSound("ui_pick");
         if (changed) hooks.onSelect?.(tile.characterId);
         return;
       }
@@ -329,6 +336,7 @@ export class SelectScreen {
     if (this.startBtn && this.selectedId) {
       const b = this.startBtn;
       if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
+        playSound("ui_click");
         hooks.onStart(this.selectedId);
         return;
       }

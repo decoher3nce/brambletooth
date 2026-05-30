@@ -61,7 +61,12 @@ export type SoundId =
   | "relocate"
   | "objective_pickup"
   | "achievement"
-  | "heartbeat";
+  | "heartbeat"
+  // UI sounds (crisp, short — under ~100ms — so they don't pile up).
+  | "ui_click"
+  | "ui_pick"
+  | "ui_back"
+  | "ui_denied";
 
 export function playSound(id: SoundId, opts: PlayOpts = {}): void {
   const c = ensureContext();
@@ -209,6 +214,22 @@ const SOUND_DEFS: Record<SoundId, SoundDef> = {
     notes.forEach((f, i) => {
       envOsc(c, dest, "triangle", f, f, 0.45, 0.42, i * 0.08);
     });
+  },
+  // UI: bright primary-button click — quick rising tick.
+  ui_click: (c, dest) => {
+    envOsc(c, dest, "sine", 700, 900, 0.07, 0.32);
+  },
+  // UI: lighter pick — tile selection / row hover-pin.
+  ui_pick: (c, dest) => {
+    envOsc(c, dest, "sine", 1100, 1100, 0.05, 0.22);
+  },
+  // UI: back/cancel — short descending blip.
+  ui_back: (c, dest) => {
+    envOsc(c, dest, "sine", 600, 380, 0.09, 0.26);
+  },
+  // UI: disabled — low dull thud, no melodic content.
+  ui_denied: (c, dest) => {
+    envOsc(c, dest, "sawtooth", 180, 90, 0.08, 0.18);
   },
 };
 

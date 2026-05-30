@@ -333,6 +333,7 @@ touchControls.bind(canvas, logicalSize, {
   isPaused: () =>
     appMode === "net" ? (net?.paused ?? false) : (play?.engine.paused ?? false),
   togglePause: () => {
+    playSound("ui_click");
     if (appMode === "net" && net) net.setPaused(!net.paused);
     else if (appMode === "local" && play) play.engine.paused = !play.engine.paused;
   },
@@ -361,15 +362,20 @@ let titleSubScene: TitleSubScene = "main";
 const backBtnRect: Rect = { x: 20, y: 20, w: 96, h: 36 };
 
 function handleTitleTap(p: { x: number; y: number }): void {
+  // Audio gesture unlock on any title tap — works even before chooseMode.
+  unlockAudio();
+
   // Profile sub-scene: only one button to handle (BACK).
   if (titleSubScene === "profile") {
     if (titleProfileBackBtn && inRect(p, titleProfileBackBtn)) {
+      playSound("ui_back");
       titleSubScene = "main";
     }
     return;
   }
   // Login button (when not logged in).
   if (titleLoginBtn && inRect(p, titleLoginBtn)) {
+    playSound("ui_click");
     const name = nameInput.value.trim();
     const pin = pinInput.value.trim();
     void tryLogin(name, pin);
@@ -377,17 +383,27 @@ function handleTitleTap(p: { x: number; y: number }): void {
   }
   // Logged-in actions.
   if (titleLogoutBtn && inRect(p, titleLogoutBtn)) {
+    playSound("ui_back");
     tryLogout();
     return;
   }
   if (titleProfileBtn && inRect(p, titleProfileBtn)) {
+    playSound("ui_click");
     titleSubScene = "profile";
     return;
   }
   if (!titleButtons) return;
-  if (inRect(p, titleButtons.single)) chooseMode("local");
-  else if (inRect(p, titleButtons.two)) chooseMode("net");
-  // FFA is grayed out — coming soon, no handler.
+  if (inRect(p, titleButtons.single)) {
+    playSound("ui_click");
+    chooseMode("local");
+  } else if (inRect(p, titleButtons.two)) {
+    playSound("ui_click");
+    chooseMode("net");
+  } else if (inRect(p, titleButtons.ffa)) {
+    // Grayed out — give audible feedback that the click registered but
+    // nothing's behind it yet.
+    playSound("ui_denied");
+  }
 }
 
 // ---- Pause / Leave Game ----
@@ -438,6 +454,7 @@ function drawLeaveGameButton(dims: { w: number; h: number }): void {
 function handleLeaveGameTap(p: { x: number; y: number }): boolean {
   if (!pauseLeaveBtn) return false;
   if (!inRect(p, pauseLeaveBtn)) return false;
+  playSound("ui_back");
   // Apply the penalty against lifetime points (clamped at 0 to keep the
   // display sane — leaving repeatedly shouldn't drive it negative).
   addPoints(-POINTS_LEAVE_PENALTY);
@@ -467,6 +484,7 @@ function backAllowed(): boolean {
 function handleBackTap(p: { x: number; y: number }): boolean {
   if (!backAllowed()) return false;
   if (!inRect(p, backBtnRect)) return false;
+  playSound("ui_back");
   goToTitle();
   return true;
 }
@@ -533,17 +551,20 @@ window.addEventListener("keydown", (ev) => {
   if (appMode === "net") {
     if (!net) return;
     if (ev.key === "Escape" && (net.phase === "playing" || net.phase === "ended")) {
-      // Multiplayer pause is server-mediated — toggling here pauses everyone.
+      playSound("ui_click");
       net.setPaused(!net.paused);
     } else if (ev.key.toLowerCase() === "r" && net.phase === "ended") {
+      playSound("ui_click");
       net.restart();
     }
     return;
   }
   if (scene !== "playing" || !play) return;
   if (ev.key === "Escape") {
+    playSound("ui_click");
     play.engine.paused = !play.engine.paused;
   } else if (ev.key.toLowerCase() === "r" && play.engine.outcome !== "ongoing") {
+    playSound("ui_click");
     goToSelect();
   }
 });
