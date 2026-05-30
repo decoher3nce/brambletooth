@@ -15,7 +15,7 @@ import type { Controller } from "../src/ai/ai";
 import { CHARACTERS } from "../src/characters/characters";
 import type { PlayerSlot, InputMessage, SnapshotMessage } from "../src/net/protocol";
 
-const TIME_LIMIT_SECONDS = 5 * 60;
+const TIME_LIMIT_SECONDS = 3 * 60 + 30;
 const OBJECTIVES_REQUIRED = 5; // per-survivor target — first to this wins
 
 export interface SessionPick {

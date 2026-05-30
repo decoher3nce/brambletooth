@@ -61,7 +61,7 @@ function logicalSize() {
 }
 
 // --- Round constants ---
-const TIME_LIMIT_SECONDS = 5 * 60;
+const TIME_LIMIT_SECONDS = 3 * 60 + 30;
 // First survivor to collect this many objectives wins for survivors.
 // Objectives spawn one at a time and respawn on collect.
 const OBJECTIVES_REQUIRED = 5;
