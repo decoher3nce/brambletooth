@@ -77,10 +77,23 @@ export function drawGumdropBody(
 }
 
 // ---- Magnek ----
-// Horseshoe-magnet head shaped like the letter U (opens upward).
-// Left prong blue with a "-" eye; right prong red with a "+" eye;
-// smile sits at the base of the U where the two halves meet.
-// Copper-wire body with chunky limbs and an "M" chest emblem.
+// Horseshoe-magnet head shaped like the letter U (opens UPWARD).
+// Curved base at the bottom, prongs going up. Left prong blue with
+// a "-" eye; right prong red with a "+" eye; smile at the base where
+// the two colors meet.
+//
+// Body is a stranded copper-wire skeleton: 4-strand torso wide enough
+// to legibly carry the "M" chest emblem, 3-strand arms and legs that
+// terminate in copper-dark hand and foot blobs sized to overlap the
+// strand-bundle endpoints (so the limbs visibly "come from" the
+// strands).
+//
+// Canvas arc direction note: arc(cx, cy, r, π, 0, anticlockwise=TRUE)
+// traverses angles π → π/2 → 0. At π/2, sin = +1 → y-offset is +halfW
+// (BELOW center on canvas, where +y is down). That's the LOWER
+// semicircle — which is what we want for a letter U. Using
+// anticlockwise=false with the same endpoints would sweep through
+// angle 3π/2 (sin = -1, ABOVE center) and give an upside-down U.
 function drawMagnek(
   ctx: CanvasRenderingContext2D,
   cx: number,
@@ -89,57 +102,55 @@ function drawMagnek(
 ): CharacterArtResult {
   const r = radius;
 
-  // Compact cartoon proportions. Total visible height ≈ 2.6r, split
-  // ~50/50 between magnet head (top half) and copper-wire body
-  // (bottom half). Feet sit at cy; the art extends UPWARD.
-  const totalH = r * 2.6;
+  // Total visible height ≈ 2.8r, split ~50/50 between head (top) and
+  // body (bottom). Feet at cy; art extends upward.
+  const totalH = r * 2.8;
   const feetY = cy;
   const headTopY = cy - totalH;
-  const headBaseY = cy - totalH * 0.5; // head/body split line
+  const headBaseY = cy - totalH * 0.5;
 
-  // U geometry. Prongs go UP from the curved base.
-  const headW = r * 1.6;
-  const thick = r * 0.42;
-  const halfW = (headW - thick) / 2;
+  // ---- U-shaped magnet head (opens UPWARD) ----
+  const headW = r * 1.3;
+  const thick = r * 0.4;
+  const halfW = (headW - thick) / 2; // = r * 0.45
   const xL = cx - halfW;
   const xR = cx + halfW;
-  // Center of the curved base; arc radius = halfW. Pull the curve
-  // upward enough that its outer-bottom kisses the head/body line.
-  const curveCenterY = headBaseY - halfW;
-  const curveBottomY = curveCenterY + halfW;
-  const prongTopY = headTopY + thick * 0.5;
+  // Curve at the bottom of the head. The arc traces the lower
+  // semicircle; its outer-bottom edge sits at headBaseY.
+  const curveCenterY = headBaseY - thick / 2 - halfW;
+  const curveCenterlineBottom = curveCenterY + halfW; // centerline at base
+  const prongTopY = headTopY + thick / 2;
 
   ctx.save();
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
-  // Black outline (full U path traced once thicker than the colored
-  // halves, so it sits behind them as a border).
+  // Black outline (full U path traced thicker, sits behind colored halves).
   ctx.strokeStyle = "#1a1a1a";
   ctx.lineWidth = thick + 4;
   ctx.beginPath();
   ctx.moveTo(xL, prongTopY);
   ctx.lineTo(xL, curveCenterY);
-  // Lower semicircle: π → 2π traverses left, down through bottom, right.
-  ctx.arc(cx, curveCenterY, halfW, Math.PI, 2 * Math.PI);
+  ctx.arc(cx, curveCenterY, halfW, Math.PI, 0, true);
   ctx.lineTo(xR, prongTopY);
   ctx.stroke();
 
-  // Blue left half: from top-left tip down + lower-left curve quadrant
-  // to center-bottom.
+  // Blue half: top-left tip → down left prong → lower-left curve
+  // quadrant → center-bottom. Anticlockwise from π to π/2 (sweeps
+  // through angle 3π/4 = lower-left of arc center).
   ctx.strokeStyle = "#3a72c8";
   ctx.lineWidth = thick;
   ctx.beginPath();
   ctx.moveTo(xL, prongTopY);
   ctx.lineTo(xL, curveCenterY);
-  ctx.arc(cx, curveCenterY, halfW, Math.PI, 1.5 * Math.PI);
+  ctx.arc(cx, curveCenterY, halfW, Math.PI, Math.PI / 2, true);
   ctx.stroke();
 
-  // Red right half: from center-bottom + lower-right curve quadrant up
-  // to top-right tip.
+  // Red half: center-bottom → lower-right curve quadrant → up right
+  // prong → top-right tip. Anticlockwise from π/2 to 0.
   ctx.strokeStyle = "#d04848";
   ctx.beginPath();
-  ctx.arc(cx, curveCenterY, halfW, 1.5 * Math.PI, 2 * Math.PI);
+  ctx.arc(cx, curveCenterY, halfW, Math.PI / 2, 0, true);
   ctx.lineTo(xR, prongTopY);
   ctx.stroke();
 
@@ -148,86 +159,158 @@ function drawMagnek(
   drawPoleEye(ctx, xL, prongTopY, eyeR, "-");
   drawPoleEye(ctx, xR, prongTopY, eyeR, "+");
 
-  // Smile at the base of the U where the blue and red halves meet.
-  // Sits centered inside the curve band so it reads as the magnet's
-  // mouth, drawn AFTER the colors so it's not painted over.
-  const smileR = thick * 0.55;
-  const smileCy = curveBottomY - thick * 0.5 - smileR * 0.35;
+  // Smile at the base of the U where blue and red meet. Centered on
+  // the curve's bottom centerline; drawn after the colored halves so
+  // it sits on top as the magnet's mouth.
+  const smileR = thick * 0.45;
+  const smileCy = curveCenterlineBottom - smileR * 0.15;
   ctx.strokeStyle = "#1a1a1a";
-  ctx.lineWidth = 1.8;
+  ctx.lineWidth = 1.6;
   ctx.beginPath();
   ctx.arc(cx, smileCy, smileR, 0.18 * Math.PI, 0.82 * Math.PI);
   ctx.stroke();
 
-  // ---- Copper-wire body ----
-  // Chunkier than v1 so torso/arms/legs read at gameplay scale.
+  // ---- Stranded copper-wire body ----
   const copper = "#c97a3a";
   const copperDark = "#7c4a1f";
-  const torsoThick = Math.max(3.2, r * 0.22);
-  const limbThick = Math.max(2.8, r * 0.19);
-  const handR = Math.max(2.6, r * 0.16);
-  const footR = Math.max(2.8, r * 0.18);
+
+  // Torso = 4 vertical strands. Strand thickness and gap scale with
+  // r so the bundle reads as a bundle at gameplay scale and shows
+  // individual strands on close inspection.
+  const torsoStrands = 4;
+  const torsoStrandThick = Math.max(1.7, r * 0.085);
+  const torsoStrandGap = Math.max(2.4, r * 0.12);
+  const torsoW = (torsoStrands - 1) * torsoStrandGap + torsoStrandThick;
 
   const torsoTopY = headBaseY + r * 0.05;
-  const torsoBottomY = cy - r * 0.55;
-  const bodyW = r * 0.95;
+  const torsoBottomY = cy - r * 0.5;
 
-  // Vertical torso wire.
   ctx.strokeStyle = copper;
-  ctx.lineWidth = torsoThick;
-  ctx.beginPath();
-  ctx.moveTo(cx, torsoTopY);
-  ctx.lineTo(cx, torsoBottomY);
-  ctx.stroke();
+  ctx.lineWidth = torsoStrandThick;
+  ctx.lineCap = "round";
+  for (let i = 0; i < torsoStrands; i++) {
+    const offset = (i - (torsoStrands - 1) / 2) * torsoStrandGap;
+    ctx.beginPath();
+    ctx.moveTo(cx + offset, torsoTopY);
+    ctx.lineTo(cx + offset, torsoBottomY);
+    ctx.stroke();
+  }
 
-  // M emblem on the chest.
+  // "M" emblem on the (now wider) chest.
   ctx.fillStyle = "#1a1a1a";
-  ctx.font = `bold ${Math.max(10, Math.floor(r * 0.62))}px system-ui, sans-serif`;
+  ctx.font = `bold ${Math.max(11, Math.floor(r * 0.7))}px system-ui, sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText("M", cx, (torsoTopY + torsoBottomY) / 2);
 
-  // Arms — out and slightly up (cartoon raised pose).
-  const armY = torsoTopY + (torsoBottomY - torsoTopY) * 0.22;
-  const armHandY = armY - bodyW * 0.4;
-  ctx.strokeStyle = copper;
-  ctx.lineWidth = limbThick;
-  ctx.beginPath();
-  ctx.moveTo(cx, armY);
-  ctx.lineTo(cx - bodyW, armHandY);
-  ctx.moveTo(cx, armY);
-  ctx.lineTo(cx + bodyW, armHandY);
-  ctx.stroke();
-  ctx.fillStyle = copperDark;
-  ctx.beginPath();
-  ctx.arc(cx - bodyW, armHandY, handR, 0, Math.PI * 2);
-  ctx.arc(cx + bodyW, armHandY, handR, 0, Math.PI * 2);
-  ctx.fill();
+  // ---- Arms (3-strand) ----
+  const limbStrands = 3;
+  const limbStrandThick = Math.max(1.4, r * 0.07);
+  const limbStrandGap = Math.max(1.8, r * 0.085);
+  const handR = Math.max(3, r * 0.18);
+  const footR = Math.max(3.2, r * 0.2);
 
-  // Legs — splay outward to feet on the ground line (cy).
-  const legX = bodyW * 0.55;
-  ctx.strokeStyle = copper;
-  ctx.lineWidth = limbThick;
-  ctx.beginPath();
-  ctx.moveTo(cx, torsoBottomY);
-  ctx.lineTo(cx - legX, feetY);
-  ctx.moveTo(cx, torsoBottomY);
-  ctx.lineTo(cx + legX, feetY);
-  ctx.stroke();
-  ctx.fillStyle = copperDark;
-  ctx.beginPath();
-  ctx.arc(cx - legX, feetY, footR, 0, Math.PI * 2);
-  ctx.arc(cx + legX, feetY, footR, 0, Math.PI * 2);
-  ctx.fill();
+  const shoulderY = torsoTopY + (torsoBottomY - torsoTopY) * 0.18;
+  const handReach = r * 0.95;
+  const handRise = r * 0.42;
+
+  // Arms emerge from the OUTER torso strands and rise outward.
+  drawStrandedLine(
+    ctx,
+    cx - torsoW / 2, shoulderY,
+    cx - handReach, shoulderY - handRise,
+    limbStrands, limbStrandThick, limbStrandGap, copper,
+  );
+  drawStrandedLine(
+    ctx,
+    cx + torsoW / 2, shoulderY,
+    cx + handReach, shoulderY - handRise,
+    limbStrands, limbStrandThick, limbStrandGap, copper,
+  );
+
+  // Hands — copper-dark blobs at the strand-bundle ends, with thin
+  // outline. Sized to cover the strand cluster so the limbs visibly
+  // converge into them.
+  drawTerminator(ctx, cx - handReach, shoulderY - handRise, handR, copperDark);
+  drawTerminator(ctx, cx + handReach, shoulderY - handRise, handR, copperDark);
+
+  // ---- Legs (3-strand) ----
+  const legSplay = r * 0.55;
+  // Legs emerge from the inner torso strands for visual continuity.
+  const legTopXLeft = cx - torsoW / 2 + torsoStrandThick / 2 + torsoStrandGap * 0.5;
+  const legTopXRight = cx + torsoW / 2 - torsoStrandThick / 2 - torsoStrandGap * 0.5;
+  drawStrandedLine(
+    ctx,
+    legTopXLeft, torsoBottomY,
+    cx - legSplay, feetY,
+    limbStrands, limbStrandThick, limbStrandGap, copper,
+  );
+  drawStrandedLine(
+    ctx,
+    legTopXRight, torsoBottomY,
+    cx + legSplay, feetY,
+    limbStrands, limbStrandThick, limbStrandGap, copper,
+  );
+
+  // Feet — same blob treatment as hands.
+  drawTerminator(ctx, cx - legSplay, feetY, footR, copperDark);
+  drawTerminator(ctx, cx + legSplay, feetY, footR, copperDark);
 
   ctx.restore();
 
-  // Visible top of the art (account for the eye/prong round-cap).
   return {
     topY: prongTopY - eyeR - 4,
-    // Status rings hug the head — Magnek channels through the magnet.
     centerY: curveCenterY,
   };
+}
+
+// Draw a stranded copper wire as N parallel strokes from (x1, y1) to
+// (x2, y2). Strands are offset perpendicular to the wire's direction
+// by `strandGap`, centered on the wire's centerline.
+function drawStrandedLine(
+  ctx: CanvasRenderingContext2D,
+  x1: number, y1: number, x2: number, y2: number,
+  strands: number, strandThick: number, strandGap: number,
+  color: string,
+): void {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy);
+  if (len < 0.01) return;
+  // Unit perpendicular (rotate direction 90° CCW).
+  const px = -dy / len;
+  const py = dx / len;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = strandThick;
+  ctx.lineCap = "round";
+  for (let i = 0; i < strands; i++) {
+    const offset = (i - (strands - 1) / 2) * strandGap;
+    const ox = px * offset;
+    const oy = py * offset;
+    ctx.beginPath();
+    ctx.moveTo(x1 + ox, y1 + oy);
+    ctx.lineTo(x2 + ox, y2 + oy);
+    ctx.stroke();
+  }
+}
+
+// Hand / foot termination — a filled circle with a thin dark outline,
+// drawn ON TOP of the strand-bundle endpoint so the limb visually
+// converges into it.
+function drawTerminator(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number, r: number,
+  fill: string,
+): void {
+  ctx.fillStyle = fill;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#1a1a1a";
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.stroke();
 }
 
 // Single eye on a magnet pole. "+" gets cross marks, "-" gets just
