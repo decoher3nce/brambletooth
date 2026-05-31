@@ -756,27 +756,44 @@ export class SelectScreen {
     }
     cy += 8;
 
-    // Abilities (name + cooldown / charge hint).
+    // Abilities — name + wrapped description + cooldown/charge tag.
+    // Replaces the bare name-and-cd line so a new player can read what
+    // each ability actually does before committing to a character.
     ctx.fillStyle = ACCENT;
     ctx.font = "bold 11px system-ui, sans-serif";
     ctx.textAlign = "left";
     ctx.fillText("ABILITIES", x + pad, cy);
     cy += 14;
-    ctx.font = "12px system-ui, sans-serif";
+    const descIndent = pad + 12; // indent description under the bullet
+    const descRight = w - pad;
+    const descWidth = descRight - descIndent;
     for (const slot of def.abilities) {
       if (!slot) continue;
       const ab = ABILITIES[slot];
       if (!ab) continue;
+      // Header row: bullet + name + cd/charge tag on the right.
       ctx.fillStyle = TEXT;
+      ctx.font = "bold 12px system-ui, sans-serif";
       ctx.textAlign = "left";
       ctx.fillText(`• ${ab.name}`, x + pad, cy);
       ctx.fillStyle = TEXT_DIM;
+      ctx.font = "10px system-ui, sans-serif";
       ctx.textAlign = "right";
       const tag = ab.chargeTime
-        ? `${ab.chargeTime}s charge / ${ab.cooldown}s cd`
+        ? `${ab.chargeTime}s charge · ${ab.cooldown}s cd`
         : `${ab.cooldown}s cd`;
-      ctx.fillText(tag, x + w - pad, cy);
-      cy += 15;
+      ctx.fillText(tag, x + descRight, cy);
+      cy += 13;
+      // Description (wrapped, dimmer, indented under the bullet).
+      ctx.fillStyle = TEXT_DIM;
+      ctx.font = "10px system-ui, sans-serif";
+      ctx.textAlign = "left";
+      const descLines = wrapText(ctx, ab.description, descWidth);
+      for (const line of descLines) {
+        ctx.fillText(line, x + descIndent, cy);
+        cy += 12;
+      }
+      cy += 5; // gap before next ability
     }
   }
 

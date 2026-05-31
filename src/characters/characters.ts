@@ -1,7 +1,7 @@
 // Each character is a data record. Adding new characters = adding entries
 // here (and any new abilities they need in abilities.ts).
 
-import { ABILITIES, MAGNEK_PLATE_CAP } from "../abilities/abilities";
+import { MAGNEK_PLATE_CAP } from "../abilities/abilities";
 
 export type CharacterRole = "hunter" | "survivor" | "flex";
 
@@ -45,10 +45,6 @@ export const CHARACTERS: Record<string, CharacterDef> = {
     displayStats: () => [
       { label: "HP", value: "140" },
       { label: "Speed", value: "145" },
-      { label: "Slash cooldown", value: `${ABILITIES["slash"].cooldown}s` },
-      { label: "Slime Shot cooldown", value: `${ABILITIES["slime_shot"].cooldown}s` },
-      { label: "Trap cooldown", value: `${ABILITIES["slime_trap"].cooldown}s` },
-      { label: "Relocate cooldown", value: `${ABILITIES["relocate"].cooldown}s` },
     ],
   },
   match: {
@@ -66,10 +62,8 @@ export const CHARACTERS: Record<string, CharacterDef> = {
     displayStats: () => [
       { label: "HP", value: "80" },
       { label: "Speed", value: "165" },
-      { label: "Overdrive boost", value: "1.6× for 2.5s" },
-      { label: "Overdrive cooldown", value: `${ABILITIES["overdrive"].cooldown}s` },
+      { label: "Overdrive boost", value: "1.35× for 2.5s" },
       { label: "Glitch range", value: "140 units" },
-      { label: "Glitch cooldown", value: `${ABILITIES["glitch"].cooldown}s` },
     ],
   },
   magnek: {
@@ -88,9 +82,6 @@ export const CHARACTERS: Record<string, CharacterDef> = {
       { label: "HP", value: "100" },
       { label: "Speed", value: "145" },
       { label: "Plate cap", value: String(MAGNEK_PLATE_CAP) },
-      { label: "Place cooldown", value: `${ABILITIES["place_plate"].cooldown}s` },
-      { label: "Magnesis charge", value: `${ABILITIES["magnesis"].chargeTime}s` },
-      { label: "Magnesis cooldown", value: `${ABILITIES["magnesis"].cooldown}s` },
     ],
   },
 };
