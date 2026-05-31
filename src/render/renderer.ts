@@ -159,8 +159,12 @@ export class Renderer {
   // line is blocked by a prop.
   drawEntities(world: World, cam: Camera, visible?: (e: Entity) => boolean): void {
     const sorted = [...world.entities].sort((a, b) => {
-      const ay = a.pos.y;
-      const by = b.pos.y;
+      // Plates are floor decals — push them to a slightly lower sort
+      // y so a character standing ON a plate always renders ON TOP
+      // (feet + shadow visible above the plate disk). Without this
+      // the x-tiebreak flips arbitrarily.
+      const ay = a.kind === "plate" ? a.pos.y - 0.5 : a.pos.y;
+      const by = b.kind === "plate" ? b.pos.y - 0.5 : b.pos.y;
       if (ay !== by) return ay - by;
       return a.pos.x - b.pos.x;
     });

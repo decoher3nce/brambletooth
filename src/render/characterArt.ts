@@ -308,9 +308,11 @@ function drawMagnek(
   );
 
   // Legs: stride opposite to the arm on the same side. Idle = legs
-  // straight down (no splay). Walking = alternating stride forward/back.
+  // straight down from hip positions (feet under hips, NOT crossed
+  // at center — no ballet pose). Walking = alternating stride that
+  // splays outward and bobs fwd/back.
   const idleLegSplay = r * 0.0;
-  const walkLegSplay = r * 0.55;
+  const walkLegSplay = r * 0.35;
   const legSplay = idleLegSplay + (walkLegSplay - idleLegSplay) * walkSpeed;
   const legTopXLeft = cx - torsoBundleW / 4;
   const legTopXRight = cx + torsoBundleW / 4;
@@ -319,11 +321,11 @@ function drawMagnek(
   const kneeling = anim.pose === "kneel";
   const leftLegEndX = kneeling
     ? cx - r * 0.2
-    : cx - legSplay + oppSwing * r * 0.35 * walkSpeed;
+    : legTopXLeft - legSplay + oppSwing * r * 0.3 * walkSpeed;
   const leftLegEndY = kneeling ? cy - r * 0.05 : feetY;
   const rightLegEndX = kneeling
     ? cx + r * 0.55
-    : cx + legSplay + swing * r * 0.35 * walkSpeed;
+    : legTopXRight + legSplay + swing * r * 0.3 * walkSpeed;
   const rightLegEndY = feetY;
 
   drawWireLimb(
@@ -434,9 +436,10 @@ function drawSpiraledStrands(
   // Draw per-strand (shadow + highlight) so each strand's z-order is
   // consistent at crossings. The later-drawn strand sits on top.
   for (const pts of paths) {
-    // Shadow base.
+    // Shadow base (~1px visible dark border on each side of the copper
+    // highlight — matches the head outline's visual weight).
     ctx.strokeStyle = shadowColor;
-    ctx.lineWidth = strandThick + 0.8;
+    ctx.lineWidth = strandThick + 2;
     ctx.beginPath();
     ctx.moveTo(pts[0]!, pts[1]!);
     for (let i = 2; i < pts.length; i += 2) {
@@ -500,9 +503,10 @@ function drawWireLimb(
     const sy = wristY + py * splayMax * 0.15 * sign;
     const ex = x2 + px * splayMax * sign;
     const ey = y2 + py * splayMax * sign;
-    // Shadow.
+    // Shadow (matches strand-shadow width — body silhouette has a
+    // consistent dark border like the head's).
     ctx.strokeStyle = shadowColor;
-    ctx.lineWidth = tipThick + 0.8;
+    ctx.lineWidth = tipThick + 2;
     ctx.lineCap = "round";
     ctx.beginPath();
     ctx.moveTo(sx, sy);

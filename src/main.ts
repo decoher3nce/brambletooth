@@ -344,6 +344,11 @@ interface PlayState {
   controllers: Map<number, Controller>;
   cam: Camera;
   chosenCharacterId: string;
+  // Pre-round countdown (seconds remaining). > 0 = freeze the world,
+  // show a big "3 / 2 / 1" overlay; engine doesn't tick yet so the
+  // player has a beat to see the spawn before being thrown in.
+  // null/undefined = countdown already finished (engine ticking).
+  countdown: number | null;
 }
 let play: PlayState | null = null;
 
@@ -723,7 +728,13 @@ function startRound(chosenId: string): void {
   const player = world.playerCharacter();
   const cam = createCamera(player ? { ...player.pos } : { x: 0, y: 0 });
 
-  play = { world, mode, engine, controllers, cam, chosenCharacterId: chosenId };
+  play = {
+    world, mode, engine, controllers, cam,
+    chosenCharacterId: chosenId,
+    // 3-second pre-round countdown — matches the multiplayer cadence
+    // (COUNTDOWN_INGAME_AT) so single-player doesn't feel jarring.
+    countdown: 3,
+  };
   scene = "playing";
 }
 
@@ -743,18 +754,39 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
   if (scene === "playing" && play) {
     const p = play;
     input.mouseWorld = screenToWorld(input.mouseScreen, p.cam, renderer.cw, renderer.ch);
-    p.engine.tick(dt);
+
+    // Pre-round countdown: freeze the world (don't tick the engine)
+    // while remaining > 0 so the player sees the spawn and reads
+    // 3..2..1 before input takes effect. Camera still snaps to the
+    // player so the framing is correct.
+    if (p.countdown != null && p.countdown > 0) {
+      p.countdown -= dt;
+      if (p.countdown <= 0) p.countdown = null;
+      // Drop any ability presses that landed during the freeze so the
+      // first real tick doesn't auto-fire abilities the player
+      // queued before the round actually started.
+      input.pressedAbilities.clear();
+    } else {
+      p.engine.tick(dt);
+    }
 
     const player = p.world.playerCharacter();
     if (player) {
-      p.cam.target.x += (player.pos.x - p.cam.target.x) * Math.min(1, dt * 6);
-      p.cam.target.y += (player.pos.y - p.cam.target.y) * Math.min(1, dt * 6);
+      // Snap on first frame, ease afterward.
+      const snap = p.countdown != null ? 1 : Math.min(1, dt * 6);
+      p.cam.target.x += (player.pos.x - p.cam.target.x) * snap;
+      p.cam.target.y += (player.pos.y - p.cam.target.y) * snap;
     }
 
-    // Sound + visual events + heartbeat (local mode).
+    // Sound + visual events + heartbeat (local mode). Skip while the
+    // countdown freeze is active so no spawn-frame sounds fire.
     const localMe = p.world.playerCharacter() ?? null;
-    detectSoundAndVisualEvents(p.world, localMe);
-    updateHeartbeatFor(p.world, localMe?.id ?? null);
+    if (p.countdown == null) {
+      detectSoundAndVisualEvents(p.world, localMe);
+      updateHeartbeatFor(p.world, localMe?.id ?? null);
+    } else {
+      setHeartbeat(null);
+    }
 
     renderer.clear("#1a2421");
     renderer.drawArena(p.world, p.cam);
@@ -774,6 +806,10 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
     });
     if (input.isTouchMode) {
       touchControls.draw(ctx, dims, p.world, p.engine.outcome, p.engine.paused);
+    }
+    // Countdown overlay on top of everything.
+    if (p.countdown != null && p.countdown > 0) {
+      drawCountdownOverlay(dims, p.countdown);
     }
   }
 }
