@@ -106,8 +106,11 @@ export class Engine {
       }
 
       // Effective speed: base, plus overdrive, minus slow.
+      // Overdrive at 1.35× lets Match (base 165) outpace Slagy (145)
+      // by ~78 units — meaningful escape window but catchable. v0
+      // had 1.6× which landed Match at 264 (uncatchable, dominant).
       let speedMult = 1;
-      if (c.statuses["overdrive"] > 0) speedMult *= 1.6;
+      if (c.statuses["overdrive"] > 0) speedMult *= 1.35;
       if (c.statuses["slowed"] > 0) speedMult *= 0.5;
 
       const desired = intent.moveDir;
