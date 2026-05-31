@@ -562,6 +562,267 @@ function drawPoleEye(
   ctx.stroke();
 }
 
+// ---- Slagy ----
+// Hulking slime monster, mutated by radioactive waste. Squat slug-
+// like silhouette with a translucent shiny green body, scary fanged
+// mouth, glowing yellow eyes that track the cursor, and stubby arms
+// that swing during the walk cycle. A faint radioactive halo bleeds
+// off the body's edge.
+function drawSlagy(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  radius: number,
+  facing: number,
+  anim: CharacterAnim,
+): CharacterArtResult {
+  const r = radius;
+
+  // Squat proportions: shorter and stockier than Magnek (2.4r vs 2.8r).
+  // Feet at cy; art extends upward. Body breathes idle and bobs while
+  // walking — both expressed as a vertical-scale modulation that
+  // anchors at the ground so feet never lift off.
+  const baseH = r * 2.4;
+  const walkSpeed = Math.max(0, Math.min(1, anim.walkSpeed));
+  const breathe = Math.sin(anim.phase * 2.5) * 0.025;
+  const walkBob = Math.sin(anim.phase * 8) * walkSpeed * 0.06;
+  const scaleY = 1 + breathe + walkBob;
+  const totalH = baseH * scaleY;
+
+  const feetY = cy;
+  const topY = cy - totalH;
+  const headBaseY = cy - totalH * 0.5;
+  const bodyMidY = (headBaseY + feetY) / 2;
+
+  // ---- Body silhouette geometry ----
+  // Single closed curve: ground → up the left side bulging at body mid
+  // → in at head sides → over the head dome → mirror on the right →
+  // back to ground. Built into a Path2D so we can reuse the same path
+  // for fill, clip (highlight), and stroke without rebuilding.
+  const headW = r * 1.7;
+  const bodyMidW = r * 1.85;
+  const bottomW = r * 1.5;
+  const bodyPath = new Path2D();
+  bodyPath.moveTo(cx - bottomW / 2, feetY);
+  // Left side — bulge outward at body mid, taper in at head.
+  bodyPath.quadraticCurveTo(cx - bodyMidW / 2, bodyMidY, cx - headW / 2, headBaseY);
+  bodyPath.quadraticCurveTo(cx - headW / 2 + 2, topY + r * 0.18, cx, topY);
+  // Right side — mirror.
+  bodyPath.quadraticCurveTo(cx + headW / 2 - 2, topY + r * 0.18, cx + headW / 2, headBaseY);
+  bodyPath.quadraticCurveTo(cx + bodyMidW / 2, bodyMidY, cx + bottomW / 2, feetY);
+  // Bottom — slight bow downward.
+  bodyPath.quadraticCurveTo(cx, feetY + 3, cx - bottomW / 2, feetY);
+  bodyPath.closePath();
+
+  ctx.save();
+
+  // ---- Radioactive halo (outer glow) ----
+  const haloR = r * 1.75;
+  const halo = ctx.createRadialGradient(cx, cy - r * 0.7, r * 0.6, cx, cy - r * 0.7, haloR);
+  halo.addColorStop(0, "rgba(170, 235, 110, 0)");
+  halo.addColorStop(0.55, "rgba(170, 235, 110, 0.09)");
+  halo.addColorStop(1, "rgba(170, 235, 110, 0)");
+  ctx.fillStyle = halo;
+  ctx.beginPath();
+  ctx.arc(cx, cy - r * 0.7, haloR, 0, Math.PI * 2);
+  ctx.fill();
+
+  // ---- Body fill (translucent green) ----
+  ctx.fillStyle = "rgba(95, 185, 107, 0.86)";
+  ctx.fill(bodyPath);
+
+  // ---- Shiny highlight (clipped to body, upper-left blob) ----
+  ctx.save();
+  ctx.clip(bodyPath);
+  const hlCx = cx - r * 0.5;
+  const hlCy = topY + r * 0.55;
+  const hlR = r * 1.1;
+  const hl = ctx.createRadialGradient(hlCx, hlCy, 0, hlCx, hlCy, hlR);
+  hl.addColorStop(0, "rgba(225, 250, 205, 0.55)");
+  hl.addColorStop(0.45, "rgba(190, 240, 175, 0.22)");
+  hl.addColorStop(1, "rgba(190, 240, 175, 0)");
+  ctx.fillStyle = hl;
+  ctx.beginPath();
+  ctx.arc(hlCx, hlCy, hlR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // ---- Body outline (matches the head-outline weight pattern Magnek
+  // uses — visible 1-1.5px dark border around the silhouette) ----
+  ctx.strokeStyle = "#1a2a15";
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.stroke(bodyPath);
+
+  // ---- Stubby arms (drawn after the body so they sit on top) ----
+  // Idle: arms hang at the sides. Walking: gentle alternating swing.
+  const swing = Math.sin(anim.phase * 8) * walkSpeed;
+  const armCy = bodyMidY + r * 0.05;
+  const armW = r * 0.5;
+  const armH = r * 0.7;
+  const armSwing = r * 0.18 * walkSpeed;
+  drawSlagyArm(ctx, cx - bodyMidW / 2 + 2, armCy + swing * armSwing, armW, armH, -1);
+  drawSlagyArm(ctx, cx + bodyMidW / 2 - 2, armCy - swing * armSwing, armW, armH, +1);
+
+  // ---- Face: glowing yellow eyes + scary fanged mouth ----
+  const faceY = topY + (headBaseY - topY) * 0.5;
+  const eyeSpacing = r * 0.45;
+  const eyeR = r * 0.24;
+  const lookX = Math.cos(facing);
+  const lookY = Math.sin(facing);
+  drawSlagyEye(ctx, cx - eyeSpacing, faceY, eyeR, lookX, lookY);
+  drawSlagyEye(ctx, cx + eyeSpacing, faceY, eyeR, lookX, lookY);
+
+  const mouthCy = faceY + r * 0.62;
+  const mouthW = r * 0.95;
+  const mouthH = r * 0.45;
+  drawSlagyMouth(ctx, cx, mouthCy, mouthW, mouthH);
+
+  ctx.restore();
+
+  return {
+    topY: topY - 4,
+    centerY: faceY,
+  };
+}
+
+// Stubby arm — an oval green nub that sits against the body.
+function drawSlagyArm(
+  ctx: CanvasRenderingContext2D,
+  attachX: number, attachY: number,
+  w: number, h: number,
+  dir: number, // -1 = left arm, +1 = right arm
+): void {
+  const tipX = attachX + dir * w * 1.1;
+  const tipY = attachY + h * 0.15; // hang slightly downward
+  ctx.save();
+  // Outline first so the arm has the same dark border as the body.
+  const armPath = new Path2D();
+  // Capsule-ish shape: rounded rect via two arcs + side curves.
+  const midX = (attachX + tipX) / 2;
+  const midY = (attachY + tipY) / 2;
+  const angle = Math.atan2(tipY - attachY, tipX - attachX);
+  const len = Math.hypot(tipX - attachX, tipY - attachY);
+  // Draw as a rotated ellipse.
+  armPath.ellipse(midX, midY, len * 0.65, h * 0.45, angle, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(95, 185, 107, 0.86)";
+  ctx.fill(armPath);
+  ctx.strokeStyle = "#1a2a15";
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.stroke(armPath);
+  // Tiny highlight on top of arm.
+  ctx.save();
+  ctx.clip(armPath);
+  const hl = ctx.createRadialGradient(midX - len * 0.2, midY - h * 0.2, 0, midX - len * 0.2, midY - h * 0.2, len * 0.6);
+  hl.addColorStop(0, "rgba(220, 250, 200, 0.35)");
+  hl.addColorStop(1, "rgba(220, 250, 200, 0)");
+  ctx.fillStyle = hl;
+  ctx.beginPath();
+  ctx.arc(midX - len * 0.2, midY - h * 0.2, len * 0.6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  ctx.restore();
+}
+
+// Glowing yellow eye that tracks aim. Pupil + iris shift inside the
+// white toward the look direction.
+function drawSlagyEye(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number, r: number,
+  lookX: number, lookY: number,
+): void {
+  // Eye white (slightly oval — taller than wide for menacing look).
+  ctx.fillStyle = "#f5f5e8";
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, r, r * 1.1, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#1a2a15";
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+  // Iris (yellow) + pupil (black). Both shift toward aim direction;
+  // vertical shift dampened for iso feel.
+  const shift = r * 0.35;
+  const px = cx + lookX * shift;
+  const py = cy + lookY * shift * 0.6;
+  ctx.fillStyle = "#ffd84a";
+  ctx.beginPath();
+  ctx.arc(px, py, r * 0.65, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#0a0a0a";
+  ctx.beginPath();
+  ctx.arc(px + lookX * 0.8, py + lookY * 0.4, r * 0.35, 0, Math.PI * 2);
+  ctx.fill();
+  // Small white highlight (specular).
+  ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+  ctx.beginPath();
+  ctx.arc(px - r * 0.18, py - r * 0.22, r * 0.13, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// Open mouth with jagged fangs — hunter intimidation factor.
+function drawSlagyMouth(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number, w: number, h: number,
+): void {
+  ctx.save();
+  // Mouth interior — dark, slightly purple-red for menace.
+  const mouthPath = new Path2D();
+  mouthPath.ellipse(cx, cy, w / 2, h / 2, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "#2a0814";
+  ctx.fill(mouthPath);
+  ctx.strokeStyle = "#1a2a15";
+  ctx.lineWidth = 1.4;
+  ctx.stroke(mouthPath);
+
+  // Clip teeth to the mouth shape so they don't poke past the lips.
+  ctx.save();
+  ctx.clip(mouthPath);
+
+  const teethTop = 5;
+  const fangColor = "#f0e8b0";
+  // Top row — pointing down.
+  for (let i = 0; i < teethTop; i++) {
+    const fx = cx - w / 2 + (i + 0.5) * (w / teethTop);
+    const fy = cy - h / 2;
+    const fh = h * 0.42 + (i % 2) * h * 0.08;
+    const fw = w * 0.07;
+    ctx.fillStyle = fangColor;
+    ctx.beginPath();
+    ctx.moveTo(fx - fw, fy);
+    ctx.lineTo(fx + fw, fy);
+    ctx.lineTo(fx, fy + fh);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "#1a2a15";
+    ctx.lineWidth = 0.7;
+    ctx.stroke();
+  }
+  // Bottom row — fewer, pointing up. Offset between top fangs.
+  const teethBot = 4;
+  for (let i = 0; i < teethBot; i++) {
+    const fx = cx - w / 2 + (i + 1) * (w / (teethBot + 1));
+    const fy = cy + h / 2;
+    const fh = h * 0.32;
+    const fw = w * 0.06;
+    ctx.fillStyle = fangColor;
+    ctx.beginPath();
+    ctx.moveTo(fx - fw, fy);
+    ctx.lineTo(fx + fw, fy);
+    ctx.lineTo(fx, fy - fh);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "#1a2a15";
+    ctx.lineWidth = 0.7;
+    ctx.stroke();
+  }
+  ctx.restore();
+  ctx.restore();
+}
+
 export const CHARACTER_ART: Record<string, CharacterArtFn> = {
   magnek: drawMagnek,
+  slagy: drawSlagy,
 };
