@@ -16,8 +16,8 @@ import { Renderer, createCamera, screenToWorld } from "./render/renderer";
 import type { Entity, CharacterEntity } from "./core/entity";
 import { isProp } from "./core/entity";
 import { distToSegment } from "./core/math";
-import { playSound, unlockAudio, setHeartbeat } from "./audio/sound";
-import type { SoundId } from "./audio/sound";
+import { playSound, unlockAudio, setHeartbeat, setAudioPrefs } from "./audio/sound";
+import type { SoundId, AudioPrefs } from "./audio/sound";
 import { worldToScreen } from "./render/renderer";
 import {
   ACHIEVEMENT_CATALOG,
@@ -103,6 +103,45 @@ const NAME_KEY = "brambletooth.name";
 const POINTS_KEY = "brambletooth.points";
 const PIN_KEY = "brambletooth.pin";
 const LOGGEDIN_KEY = "brambletooth.loggedIn";
+const AUDIO_SETTINGS_KEY = "brambletooth.audio";
+
+// ---- Audio prefs (settings page) ----
+// Module-level so the UI handlers can mutate + persist + push to the
+// audio module. Loaded on startup; default = everything on at full
+// volume. Saved to localStorage on every change.
+function clamp01(v: number): number {
+  return Math.max(0, Math.min(1, v));
+}
+function defaultAudioSettings(): AudioPrefs {
+  return {
+    heartbeat: { enabled: true, volume: 1.0 },
+    footsteps: { enabled: true, volume: 1.0 },
+  };
+}
+function loadAudioSettings(): AudioPrefs {
+  try {
+    const raw = localStorage.getItem(AUDIO_SETTINGS_KEY);
+    if (!raw) return defaultAudioSettings();
+    const parsed = JSON.parse(raw) as Partial<AudioPrefs>;
+    return {
+      heartbeat: {
+        enabled: parsed?.heartbeat?.enabled ?? true,
+        volume: clamp01(parsed?.heartbeat?.volume ?? 1.0),
+      },
+      footsteps: {
+        enabled: parsed?.footsteps?.enabled ?? true,
+        volume: clamp01(parsed?.footsteps?.volume ?? 1.0),
+      },
+    };
+  } catch { return defaultAudioSettings(); }
+}
+function persistAudioSettings(): void {
+  try { localStorage.setItem(AUDIO_SETTINGS_KEY, JSON.stringify(audioSettings)); }
+  catch { /* ignore */ }
+  setAudioPrefs(audioSettings); // propagate immediately
+}
+const audioSettings: AudioPrefs = loadAudioSettings();
+setAudioPrefs(audioSettings); // push to audio module on startup
 
 function getName(): string {
   try { return (localStorage.getItem(NAME_KEY) ?? "").slice(0, 24); }
@@ -428,9 +467,17 @@ let titleLoginBtn: Rect | null = null;
 let titleLogoutBtn: Rect | null = null;
 let titleProfileBtn: Rect | null = null;
 let titleProfileBackBtn: Rect | null = null;
-type TitleSubScene = "main" | "profile" | "shop";
+let titleProfileSettingsBtn: Rect | null = null;
+type TitleSubScene = "main" | "profile" | "shop" | "settings";
 let titleSubScene: TitleSubScene = "main";
 const backBtnRect: Rect = { x: 20, y: 20, w: 96, h: 36 };
+
+// Settings sub-scene hit zones (re-built each draw).
+let settingsBackBtn: Rect | null = null;
+let settingsHeartbeatToggleBtn: Rect | null = null;
+let settingsHeartbeatVolBar: Rect | null = null;
+let settingsFootstepsToggleBtn: Rect | null = null;
+let settingsFootstepsVolBar: Rect | null = null;
 
 // Shop sub-scene hit zones (re-built each draw).
 let shopBackBtn: Rect | null = null;
@@ -442,11 +489,56 @@ function handleTitleTap(p: { x: number; y: number }): void {
   // Audio gesture unlock on any title tap — works even before chooseMode.
   unlockAudio();
 
-  // Profile sub-scene: only one button to handle (BACK).
+  // Profile sub-scene: SETTINGS or BACK.
   if (titleSubScene === "profile") {
+    if (titleProfileSettingsBtn && inRect(p, titleProfileSettingsBtn)) {
+      playSound("ui_click");
+      titleSubScene = "settings";
+      return;
+    }
     if (titleProfileBackBtn && inRect(p, titleProfileBackBtn)) {
       playSound("ui_back");
       titleSubScene = "main";
+    }
+    return;
+  }
+  // Settings sub-scene: per-sound toggles + volume bars + BACK.
+  if (titleSubScene === "settings") {
+    if (settingsBackBtn && inRect(p, settingsBackBtn)) {
+      playSound("ui_back");
+      titleSubScene = "profile";
+      return;
+    }
+    if (settingsHeartbeatToggleBtn && inRect(p, settingsHeartbeatToggleBtn)) {
+      audioSettings.heartbeat.enabled = !audioSettings.heartbeat.enabled;
+      persistAudioSettings();
+      playSound("ui_click");
+      return;
+    }
+    if (settingsFootstepsToggleBtn && inRect(p, settingsFootstepsToggleBtn)) {
+      audioSettings.footsteps.enabled = !audioSettings.footsteps.enabled;
+      persistAudioSettings();
+      playSound("ui_click");
+      // Preview so the user hears the change immediately on enable.
+      if (audioSettings.footsteps.enabled) playSound("footsteps");
+      return;
+    }
+    if (settingsHeartbeatVolBar && inRect(p, settingsHeartbeatVolBar)) {
+      audioSettings.heartbeat.volume = clamp01(
+        (p.x - settingsHeartbeatVolBar.x) / settingsHeartbeatVolBar.w,
+      );
+      persistAudioSettings();
+      playSound("ui_pick");
+      return;
+    }
+    if (settingsFootstepsVolBar && inRect(p, settingsFootstepsVolBar)) {
+      audioSettings.footsteps.volume = clamp01(
+        (p.x - settingsFootstepsVolBar.x) / settingsFootstepsVolBar.w,
+      );
+      persistAudioSettings();
+      // Preview at the new volume.
+      playSound("footsteps");
+      return;
     }
     return;
   }
@@ -653,6 +745,7 @@ function goToTitle(): void {
   // Reset sound/visual event detection state.
   prevCharSnap.clear();
   prevObjectivePicked.clear();
+  lastFootstep.clear();
   clientEffects.length = 0;
   setHeartbeat(null);
   // Reset name input visibility — frameTitle will re-show it next frame.
@@ -783,6 +876,7 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
     const localMe = p.world.playerCharacter() ?? null;
     if (p.countdown == null) {
       detectSoundAndVisualEvents(p.world, localMe);
+      detectFootsteps(p.world, localMe);
       updateHeartbeatFor(p.world, localMe?.id ?? null);
     } else {
       setHeartbeat(null);
@@ -986,6 +1080,7 @@ function drawNetGameScene(dt: number, dims: { w: number; h: number }, n: NetClie
   // world's "me" so sounds anchor to the same character the camera sees.
   const netMe = netViewWorld.playerCharacter() ?? null;
   detectSoundAndVisualEvents(netViewWorld, netMe);
+  detectFootsteps(netViewWorld, netMe);
   updateHeartbeatFor(netViewWorld, n.yourEntityId);
 
   renderer.clear("#1a2421");
@@ -1223,6 +1318,10 @@ function frameTitle(dims: { w: number; h: number }): void {
   }
   if (titleSubScene === "shop") {
     frameShop(dims);
+    return;
+  }
+  if (titleSubScene === "settings") {
+    frameSettings(dims);
     return;
   }
 
@@ -1536,18 +1635,118 @@ function frameProfile(dims: { w: number; h: number }): void {
     ry += rowH;
   }
 
+  // SETTINGS + BACK buttons below the panel.
+  const bw = 160;
+  const bh = 40;
+  const gap = 12;
+  const groupW = 2 * bw + gap;
+  const startX = (cw - groupW) / 2;
+  const by = panelY + panelH + 20;
+  titleProfileSettingsBtn = { x: startX, y: by, w: bw, h: bh };
+  titleProfileBackBtn = { x: startX + bw + gap, y: by, w: bw, h: bh };
+  // Settings (left)
+  ctx.fillStyle = "rgba(40, 52, 48, 0.95)";
+  roundRect(titleProfileSettingsBtn, 8);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.2)";
+  ctx.lineWidth = 1;
+  roundRect(titleProfileSettingsBtn, 8);
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("⚙ SETTINGS", titleProfileSettingsBtn.x + bw / 2, by + bh / 2);
+  // Back (right)
+  ctx.fillStyle = "rgba(40, 52, 48, 0.95)";
+  roundRect(titleProfileBackBtn, 8);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.2)";
+  roundRect(titleProfileBackBtn, 8);
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.fillText("← BACK", titleProfileBackBtn.x + bw / 2, by + bh / 2);
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
+}
+
+// ---- Settings sub-scene ----
+// First settings page — per-sound on/off + volume bar. Designed to
+// expand with more per-player customization rows over time. Reached
+// from the profile page; back button returns to profile.
+function frameSettings(dims: { w: number; h: number }): void {
+  const cw = dims.w;
+  const ch = dims.h;
+  ctx.fillStyle = "#1a2421";
+  ctx.fillRect(0, 0, cw, ch);
+  nameInput.style.display = "none";
+  pinInput.style.display = "none";
+
+  // Reset hit-test refs each draw.
+  settingsHeartbeatToggleBtn = null;
+  settingsHeartbeatVolBar = null;
+  settingsFootstepsToggleBtn = null;
+  settingsFootstepsVolBar = null;
+
+  // Header
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 36px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText("SETTINGS", cw / 2, ch * 0.1);
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.font = "13px system-ui, sans-serif";
+  ctx.fillText("Tune the sounds you hear in-game.", cw / 2, ch * 0.1 + 22);
+
+  // Sound panel
+  const panelW = Math.min(560, cw - 80);
+  const panelX = (cw - panelW) / 2;
+  const panelY = ch * 0.22;
+  const rowH = 86;
+  const sectionHeaderH = 30;
+  const panelH = sectionHeaderH + rowH * 2 + 20;
+
+  ctx.fillStyle = "rgba(20, 30, 28, 0.85)";
+  roundRect({ x: panelX, y: panelY, w: panelW, h: panelH }, 12);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.lineWidth = 1;
+  roundRect({ x: panelX, y: panelY, w: panelW, h: panelH }, 12);
+  ctx.stroke();
+
+  // Section header
+  ctx.fillStyle = "#ffd84a";
+  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText("SOUND", panelX + 16, panelY + 22);
+
+  // Two sound rows.
+  drawSettingsSoundRow(
+    panelX, panelY + sectionHeaderH, panelW, rowH,
+    "Heartbeat",
+    "Pulses faster when a hunter is close.",
+    "heartbeat",
+  );
+  drawSettingsSoundRow(
+    panelX, panelY + sectionHeaderH + rowH, panelW, rowH,
+    "Footsteps",
+    "Hear any character moving nearby.",
+    "footsteps",
+  );
+
   // BACK button below the panel.
   const bw = 160;
   const bh = 40;
   const bx = (cw - bw) / 2;
   const by = panelY + panelH + 20;
-  titleProfileBackBtn = { x: bx, y: by, w: bw, h: bh };
+  settingsBackBtn = { x: bx, y: by, w: bw, h: bh };
   ctx.fillStyle = "rgba(40, 52, 48, 0.95)";
-  roundRect(titleProfileBackBtn, 8);
+  roundRect(settingsBackBtn, 8);
   ctx.fill();
   ctx.strokeStyle = "rgba(255,255,255,0.2)";
   ctx.lineWidth = 1;
-  roundRect(titleProfileBackBtn, 8);
+  roundRect(settingsBackBtn, 8);
   ctx.stroke();
   ctx.fillStyle = "#fff";
   ctx.font = "bold 13px system-ui, sans-serif";
@@ -1555,6 +1754,89 @@ function frameProfile(dims: { w: number; h: number }): void {
   ctx.textBaseline = "middle";
   ctx.fillText("← BACK", bx + bw / 2, by + bh / 2);
   ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
+}
+
+// Single sound-settings row: name + description on the left, ON/OFF
+// toggle on the right, volume bar across the bottom. The toggle and
+// the bar each register their own hit zone in the right module-level
+// rects keyed by `kind`.
+function drawSettingsSoundRow(
+  rowX: number, rowY: number, rowW: number, rowH: number,
+  label: string, description: string,
+  kind: "heartbeat" | "footsteps",
+): void {
+  const cfg = audioSettings[kind];
+
+  // Label + description
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 14px system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(label, rowX + 16, rowY + 22);
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.fillText(description, rowX + 16, rowY + 38);
+
+  // ON/OFF toggle (top-right of the row).
+  const togW = 64;
+  const togH = 26;
+  const togX = rowX + rowW - togW - 16;
+  const togY = rowY + 12;
+  const togRect: Rect = { x: togX, y: togY, w: togW, h: togH };
+  if (kind === "heartbeat") settingsHeartbeatToggleBtn = togRect;
+  else settingsFootstepsToggleBtn = togRect;
+  ctx.fillStyle = cfg.enabled ? "#48d0a0" : "rgba(40, 52, 48, 0.95)";
+  roundRect(togRect, 6);
+  ctx.fill();
+  if (!cfg.enabled) {
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.lineWidth = 1;
+    roundRect(togRect, 6);
+    ctx.stroke();
+  }
+  ctx.fillStyle = cfg.enabled ? "#1a2421" : "rgba(255,255,255,0.6)";
+  ctx.font = "bold 12px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(cfg.enabled ? "ON" : "OFF", togX + togW / 2, togY + togH / 2);
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
+
+  // Volume bar (bottom of the row). Click anywhere to set volume.
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.fillText("Volume", rowX + 16, rowY + 68);
+  const barLeft = 80;
+  const barRightPad = 60; // leave room for the percentage label
+  const barX = rowX + barLeft;
+  const barY = rowY + 58;
+  const barW = rowW - barLeft - barRightPad - 16;
+  const barH = 12;
+  const barRect: Rect = { x: barX, y: barY, w: barW, h: barH };
+  if (kind === "heartbeat") settingsHeartbeatVolBar = barRect;
+  else settingsFootstepsVolBar = barRect;
+  // Track
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  roundRect(barRect, 6);
+  ctx.fill();
+  // Fill
+  const fillW = barW * cfg.volume;
+  if (fillW > 1) {
+    ctx.fillStyle = cfg.enabled ? "#ffd84a" : "rgba(255,216,74,0.35)";
+    roundRect({ x: barX, y: barY, w: fillW, h: barH }, 6);
+    ctx.fill();
+  }
+  // Outline
+  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.lineWidth = 1;
+  roundRect(barRect, 6);
+  ctx.stroke();
+  // Percentage label
+  ctx.fillStyle = "rgba(255,255,255,0.7)";
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.textAlign = "right";
+  ctx.fillText(`${Math.round(cfg.volume * 100)}%`, rowX + rowW - 16, rowY + 67);
   ctx.textAlign = "left";
 }
 
@@ -2023,6 +2305,60 @@ function updateClientEffects(_dt: number): void {
 
 function drawClientEffects(_cam: { target: { x: number; y: number }; zoom: number }): void {
   // Reserved for future cosmetic effects.
+}
+
+// Per-character timestamp of the last fired footstep, in seconds
+// (performance.now() / 1000). Used so each moving character emits
+// one footstep per FOOTSTEP_INTERVAL while they're walking; resets
+// when the character stops so the first step after standing still
+// fires immediately on the next move.
+const lastFootstep = new Map<number, number>();
+const FOOTSTEP_INTERVAL = 0.42;       // seconds between steps per character
+const FOOTSTEP_MOVING_SPEED = 30;     // velocity magnitude above which we count as "walking"
+
+function detectFootsteps(world: World, viewer: CharacterEntity | null): void {
+  if (!audioPrefs_footsteps_enabled()) return; // cheap gate to skip the whole loop
+  const now = performance.now() / 1000;
+  const vp = viewer?.pos ?? null;
+  const seenIds = new Set<number>();
+  for (const e of world.entities) {
+    if (e.kind !== "character") continue;
+    if (e.dead) continue;
+    seenIds.add(e.id);
+    // Mid-transport (Magnesis arc) Magnek glides, not walks — no steps.
+    if (e.transport) { lastFootstep.delete(e.id); continue; }
+    const speed = Math.hypot(e.vel.x, e.vel.y);
+    if (speed < FOOTSTEP_MOVING_SPEED) {
+      lastFootstep.delete(e.id);
+      continue;
+    }
+    const last = lastFootstep.get(e.id);
+    if (last == null) {
+      // First step after a stop fires immediately; subsequent steps
+      // wait the interval.
+      lastFootstep.set(e.id, now);
+      const distance = vp ? Math.hypot(e.pos.x - vp.x, e.pos.y - vp.y) : 0;
+      playSound("footsteps", { distance });
+      continue;
+    }
+    if (now - last >= FOOTSTEP_INTERVAL) {
+      const distance = vp ? Math.hypot(e.pos.x - vp.x, e.pos.y - vp.y) : 0;
+      playSound("footsteps", { distance });
+      lastFootstep.set(e.id, now);
+    }
+  }
+  // Garbage-collect entries for entities that left the world.
+  for (const id of [...lastFootstep.keys()]) {
+    if (!seenIds.has(id)) lastFootstep.delete(id);
+  }
+}
+
+// Tiny accessor so detectFootsteps can avoid the per-entity loop when
+// the user has turned footsteps off. The audio module is the source
+// of truth; this just shadows the enabled flag through the settings
+// object which is always in sync (persistAudioSettings updates both).
+function audioPrefs_footsteps_enabled(): boolean {
+  return audioSettings.footsteps.enabled;
 }
 
 function detectSoundAndVisualEvents(world: World, viewer: CharacterEntity | null): void {

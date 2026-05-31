@@ -9,6 +9,26 @@
 let ctx: AudioContext | null = null;
 let masterGain: GainNode | null = null;
 
+// ---- Per-sound user preferences ----
+// Settings UI (in main.ts) writes here via setAudioPrefs(); playSound
+// and setHeartbeat read here to gate playback and scale volume. Keep
+// the surface tiny so adding a new tunable sound is one entry + a
+// gate inside playSound.
+export interface AudioPrefs {
+  heartbeat: { enabled: boolean; volume: number }; // volume 0..1
+  footsteps: { enabled: boolean; volume: number };
+}
+let audioPrefs: AudioPrefs = {
+  heartbeat: { enabled: true, volume: 1.0 },
+  footsteps: { enabled: true, volume: 1.0 },
+};
+export function setAudioPrefs(p: AudioPrefs): void {
+  audioPrefs = p;
+}
+export function getAudioPrefs(): AudioPrefs {
+  return audioPrefs;
+}
+
 function ensureContext(): AudioContext | null {
   if (ctx) return ctx;
   try {
@@ -63,6 +83,7 @@ export type SoundId =
   | "objective_pickup"
   | "achievement"
   | "heartbeat"
+  | "footsteps"
   // UI sounds (crisp, short — under ~100ms — so they don't pile up).
   | "ui_click"
   | "ui_pick"
@@ -73,8 +94,17 @@ export function playSound(id: SoundId, opts: PlayOpts = {}): void {
   const c = ensureContext();
   if (!c || !masterGain) return;
   if (c.state === "suspended") void c.resume();
+  // Per-sound user gating + volume scaling. The heartbeat looper
+  // applies its prefs in setHeartbeat instead (since it owns its own
+  // volume curve), but a one-shot heartbeat through this path still
+  // gets gated for safety.
+  if (id === "footsteps" && !audioPrefs.footsteps.enabled) return;
+  if (id === "heartbeat" && !audioPrefs.heartbeat.enabled) return;
+  let prefVol = 1.0;
+  if (id === "footsteps") prefVol = audioPrefs.footsteps.volume;
+  else if (id === "heartbeat") prefVol = audioPrefs.heartbeat.volume;
   const dist = opts.distance ?? 0;
-  const vol = distanceVolume(dist) * (opts.volumeMul ?? 1);
+  const vol = distanceVolume(dist) * (opts.volumeMul ?? 1) * prefVol;
   if (vol <= 0.005) return;
   const local = c.createGain();
   local.gain.value = vol;
@@ -253,6 +283,13 @@ const SOUND_DEFS: Record<SoundId, SoundDef> = {
   ui_denied: (c, dest) => {
     envOsc(c, dest, "sawtooth", 180, 90, 0.08, 0.18);
   },
+  // Footstep: short soft thud — low-frequency hit + brief filtered
+  // noise for grit. Plays once per character per ~step interval; the
+  // caller in main.ts handles distance attenuation via PlayOpts.
+  footsteps: (c, dest) => {
+    envOsc(c, dest, "sine", 130, 70, 0.07, 0.32);
+    envNoise(c, dest, 0.05, 0.16, 600);
+  },
 };
 
 // ---- Heartbeat looper ----
@@ -265,7 +302,7 @@ let heartbeatTargetBpm = 50;
 let heartbeatTargetVolume = 0.05;
 
 export function setHeartbeat(distanceToHunter: number | null): void {
-  if (distanceToHunter == null) {
+  if (distanceToHunter == null || !audioPrefs.heartbeat.enabled) {
     stopHeartbeat();
     return;
   }
@@ -276,7 +313,9 @@ export function setHeartbeat(distanceToHunter: number | null): void {
   const nearD = 100;
   const t = Math.max(0, Math.min(1, (farD - distanceToHunter) / (farD - nearD)));
   heartbeatTargetBpm = minBpm + (maxBpm - minBpm) * t;
-  heartbeatTargetVolume = 0.1 + (0.65 - 0.1) * t;
+  // Scale by user volume preference so the slider takes effect on the
+  // next scheduled beat without needing a restart.
+  heartbeatTargetVolume = (0.1 + (0.65 - 0.1) * t) * audioPrefs.heartbeat.volume;
   if (!heartbeatActive) startHeartbeat();
 }
 
