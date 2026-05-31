@@ -57,6 +57,7 @@ export class HuntMode implements GameMode {
       statuses: {},
       isPlayer: this.cfg.playerRole === "hunter",
       objectivesCollected: 0,
+      exited: false,
     });
 
     // Survivors spawn distributed across the north edge.
@@ -86,8 +87,19 @@ export class HuntMode implements GameMode {
         statuses: {},
         isPlayer: this.cfg.playerRole === "survivor" && i === 0,
         objectivesCollected: 0,
+        exited: false,
       });
     }
+
+    // Spawn the exit zone in the south-east corner of the arena.
+    // Survivors who have collected `objectivesRequired` nuggets can
+    // step on it to escape.
+    world.spawn<import("../core/entity").ExitEntity>({
+      kind: "exit",
+      pos: { x: b.maxX - 110, y: b.maxY - 110 },
+      radius: 36,
+      dead: false,
+    });
 
     // One objective at a time — spawn the first.
     this.spawnObjective(world);
@@ -97,6 +109,12 @@ export class HuntMode implements GameMode {
   // spawn the next so the field never has zero (until the round ends).
   onObjectiveCollected(world: World, _collectorId: number): void {
     this.spawnObjective(world);
+  }
+
+  // A survivor may escape via the exit once they've collected the
+  // required number of nuggets.
+  canSurvivorExit(s: CharacterEntity): boolean {
+    return s.objectivesCollected >= this.cfg.objectivesRequired;
   }
 
   private spawnObjective(world: World): void {
@@ -150,17 +168,25 @@ export class HuntMode implements GameMode {
   }
 
   checkOutcome(world: World): RoundOutcome {
+    // The set of "all survivors" includes both those still alive on
+    // the field and any who have escaped via the exit (exited=true).
+    // charactersOnTeam returns living characters only — exited
+    // survivors are still alive, just no longer interactive.
     const survivors = world.charactersOnTeam("survivor");
     const hunters = world.charactersOnTeam("hunter");
+    const exited = survivors.filter((s) => s.exited);
+    const stillFighting = survivors.filter((s) => !s.exited);
 
-    if (survivors.length === 0) return "hunter_win";
     if (hunters.length === 0) return "survivor_win";
 
-    // First survivor to reach the per-survivor target wins.
-    if (survivors.some((s) => s.objectivesCollected >= this.cfg.objectivesRequired)) {
-      return "survivor_win";
+    // Everyone's done — either escaped or died. If anyone escaped,
+    // the survivor team wins; otherwise the hunter wins clean.
+    if (stillFighting.length === 0) {
+      return exited.length > 0 ? "survivor_win" : "hunter_win";
     }
-    if (world.elapsed >= world.timeLimit) return "survivor_win";
+    // Timeout: hunter wins. Win condition is to complete the
+    // objective (collect + exit), not just to survive the clock.
+    if (world.elapsed >= world.timeLimit) return "hunter_win";
     return "ongoing";
   }
 }

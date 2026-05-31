@@ -7,7 +7,7 @@
 
 import type { World } from "../core/world";
 import type { Entity } from "../core/entity";
-import { isCharacter, isProjectile, isTrap, isObjective, isProp, isPlate } from "../core/entity";
+import { isCharacter, isProjectile, isTrap, isObjective, isProp, isPlate, isExit } from "../core/entity";
 import type { Vec2 } from "../core/math";
 import { CHARACTERS } from "../characters/characters";
 import { ABILITIES } from "../abilities/abilities";
@@ -159,12 +159,14 @@ export class Renderer {
   // line is blocked by a prop.
   drawEntities(world: World, cam: Camera, visible?: (e: Entity) => boolean): void {
     const sorted = [...world.entities].sort((a, b) => {
-      // Plates are floor decals — push them to a slightly lower sort
-      // y so a character standing ON a plate always renders ON TOP
-      // (feet + shadow visible above the plate disk). Without this
-      // the x-tiebreak flips arbitrarily.
-      const ay = a.kind === "plate" ? a.pos.y - 0.5 : a.pos.y;
-      const by = b.kind === "plate" ? b.pos.y - 0.5 : b.pos.y;
+      // Floor decals (plates, exit zone) push to a slightly lower
+      // sort y so a character standing on them always renders ON TOP
+      // (feet + shadow visible above the disk). Without this the
+      // x-tiebreak flips arbitrarily.
+      const isFloorA = a.kind === "plate" || a.kind === "exit";
+      const isFloorB = b.kind === "plate" || b.kind === "exit";
+      const ay = isFloorA ? a.pos.y - 0.5 : a.pos.y;
+      const by = isFloorB ? b.pos.y - 0.5 : b.pos.y;
       if (ay !== by) return ay - by;
       return a.pos.x - b.pos.x;
     });
@@ -179,6 +181,7 @@ export class Renderer {
     else if (isObjective(e)) this.drawObjective(e, cam);
     else if (isTrap(e)) this.drawTrap(e, cam);
     else if (isPlate(e)) this.drawPlate(e, cam);
+    else if (isExit(e)) this.drawExit(e, cam);
     else if (isProjectile(e)) this.drawProjectile(e, cam);
     else if (isCharacter(e)) this.drawCharacter(e, cam);
   }
@@ -281,6 +284,10 @@ export class Renderer {
     }
   }
 
+  // Gold nugget — irregular lumpy blob in warm gold with a darker
+  // shaded lower-right half and a small white speculary highlight.
+  // Pulses a soft halo so it reads as "pick me up" against the dark
+  // ground without looking like a faceted gem.
   private drawObjective(
     e: Extract<Entity, { kind: "objective" }>,
     cam: Camera,
@@ -288,29 +295,103 @@ export class Renderer {
     if (e.collected) return;
     const s = worldToScreen(e.pos, cam, this.cw, this.ch);
     const ctx = this.ctx;
-    // Pulsing glow
+    // Pulsing ground glow.
     const t = (performance.now() / 400) % (Math.PI * 2);
     const glow = 0.7 + 0.3 * Math.sin(t);
-    ctx.fillStyle = `rgba(255, 220, 80, ${0.2 * glow})`;
+    ctx.fillStyle = `rgba(255, 200, 80, ${0.22 * glow})`;
     ctx.beginPath();
-    ctx.ellipse(s.x, s.y, 26, 13, 0, 0, Math.PI * 2);
+    ctx.ellipse(s.x, s.y + 3, 22, 10, 0, 0, Math.PI * 2);
     ctx.fill();
-    // Diamond crystal
-    ctx.fillStyle = "#ffd84a";
+
+    // Nugget body — irregular polygon with rounded corners. Built
+    // once with stable vertices around the nugget center so the
+    // shape doesn't shimmer between frames.
+    const nuggetPath = new Path2D();
+    const vertices: [number, number][] = [
+      [-9, -7], [-2, -10], [6, -8], [10, -2], [8, 4], [3, 6], [-5, 5], [-10, 0],
+    ];
+    nuggetPath.moveTo(s.x + vertices[0]![0], s.y + vertices[0]![1]);
+    for (let i = 1; i < vertices.length; i++) {
+      nuggetPath.lineTo(s.x + vertices[i]![0], s.y + vertices[i]![1]);
+    }
+    nuggetPath.closePath();
+    // Fill (warm gold).
+    ctx.fillStyle = "#f1c241";
+    ctx.fill(nuggetPath);
+    // Outline.
+    ctx.strokeStyle = "#5a3a08";
+    ctx.lineWidth = 1.4;
+    ctx.lineJoin = "round";
+    ctx.stroke(nuggetPath);
+    // Darker shaded lower-right (clipped to the nugget).
+    ctx.save();
+    ctx.clip(nuggetPath);
+    ctx.fillStyle = "#b88720";
     ctx.beginPath();
-    ctx.moveTo(s.x, s.y - 18);
-    ctx.lineTo(s.x + 10, s.y - 6);
-    ctx.lineTo(s.x, s.y + 6);
-    ctx.lineTo(s.x - 10, s.y - 6);
+    ctx.moveTo(s.x - 12, s.y + 8);
+    ctx.lineTo(s.x + 12, s.y + 8);
+    ctx.lineTo(s.x + 12, s.y - 2);
+    ctx.lineTo(s.x - 1, s.y + 6);
     ctx.closePath();
     ctx.fill();
-    ctx.fillStyle = "#b8941e";
+    // Small specular highlight in the upper-left.
+    ctx.fillStyle = "rgba(255, 250, 200, 0.85)";
     ctx.beginPath();
-    ctx.moveTo(s.x, s.y - 18);
-    ctx.lineTo(s.x + 10, s.y - 6);
-    ctx.lineTo(s.x, s.y + 6);
-    ctx.closePath();
+    ctx.ellipse(s.x - 4, s.y - 5, 3, 1.6, -0.5, 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
+  }
+
+  // Exit zone — an open archway / portal of grass-edged stone tiles
+  // on the ground. Survivors who've met the exit requirements step
+  // here to escape (engine sets exited=true). Pulses subtly so it
+  // reads as a goal.
+  private drawExit(
+    e: Extract<Entity, { kind: "exit" }>,
+    cam: Camera,
+  ): void {
+    const s = worldToScreen(e.pos, cam, this.cw, this.ch);
+    const ctx = this.ctx;
+    const r = e.radius;
+    const t = (performance.now() / 500) % (Math.PI * 2);
+    const pulse = 0.65 + 0.35 * (0.5 + 0.5 * Math.sin(t));
+    ctx.save();
+    // Outer iso-elliptical pad (ground footprint).
+    ctx.translate(s.x, s.y);
+    ctx.scale(1, 0.5);
+    // Glow ring.
+    const grad = ctx.createRadialGradient(0, 0, r * 0.25, 0, 0, r * 1.15);
+    grad.addColorStop(0, `rgba(120, 220, 160, ${0.35 * pulse})`);
+    grad.addColorStop(0.65, `rgba(120, 220, 160, ${0.12 * pulse})`);
+    grad.addColorStop(1, "rgba(120, 220, 160, 0)");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 1.15, 0, Math.PI * 2);
+    ctx.fill();
+    // Inner stone pad.
+    ctx.fillStyle = "#2d3a32";
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#3f5246";
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.78, 0, Math.PI * 2);
+    ctx.fill();
+    // Bright green portal core.
+    ctx.fillStyle = `rgba(170, 240, 180, ${0.55 + 0.35 * pulse})`;
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.45, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    // "EXIT" label above the pad (screen-space).
+    ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+    ctx.fillRect(s.x - 22, s.y - r * 0.7 - 14, 44, 14);
+    ctx.fillStyle = "#aaf0b4";
+    ctx.font = "bold 10px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText("EXIT", s.x, s.y - r * 0.7 - 4);
+    ctx.textAlign = "left";
   }
 
   private drawTrap(e: Extract<Entity, { kind: "trap" }>, cam: Camera): void {
@@ -374,6 +455,27 @@ export class Renderer {
     const s = worldToScreen(e.pos, cam, this.cw, this.ch);
     const def = CHARACTERS[e.characterId];
     const ctx = this.ctx;
+
+    // Survivor has escaped via the exit — render a faint translucent
+    // shimmer at their last position instead of the full body, and
+    // skip every other character-draw step. Their HP bar / name
+    // still draw so the round summary feels coherent.
+    if (e.exited) {
+      ctx.save();
+      ctx.fillStyle = "rgba(170, 240, 180, 0.25)";
+      ctx.beginPath();
+      ctx.ellipse(s.x, s.y - e.radius * 0.6, e.radius * 1.1, e.radius * 1.7, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      // Tiny "ESCAPED" label so the audience knows.
+      ctx.fillStyle = "rgba(170, 240, 180, 0.75)";
+      ctx.font = "bold 9px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "alphabetic";
+      ctx.fillText("ESCAPED", s.x, s.y - e.radius * 2.4);
+      ctx.textAlign = "left";
+      return;
+    }
 
     // Ability-driven transport trail (e.g. Magnesis). Draw before the
     // shadow so the dots sit on the ground but under everything else.

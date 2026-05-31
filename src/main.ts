@@ -105,6 +105,18 @@ const PIN_KEY = "brambletooth.pin";
 const LOGGEDIN_KEY = "brambletooth.loggedIn";
 const AUDIO_SETTINGS_KEY = "brambletooth.audio";
 
+// ==== Invincible Mode (special test login) ====
+// Logging in as this profile grants the local human invincible
+// status: no damage taken + 1.5× ability cooldown rate. Currently
+// applied in single-player only (startRound flips the player's
+// character.invincible flag after mode.initialize). Hardcoded for
+// now per design; remove this block to disable the feature.
+const INVINCIBLE_NAME = "Bigfoot";
+const INVINCIBLE_PIN = "1234";
+function isInvincibleProfile(name: string, pin: string): boolean {
+  return name === INVINCIBLE_NAME && pin === INVINCIBLE_PIN;
+}
+
 // ---- Audio prefs (settings page) ----
 // Module-level so the UI handlers can mutate + persist + push to the
 // audio module. Loaded on startup; default = everything on at full
@@ -806,6 +818,17 @@ function startRound(chosenId: string): void {
     objectivesRequired: OBJECTIVES_REQUIRED,
   });
   mode.initialize(world);
+
+  // ==== Invincible Mode hook (Bigfoot / 1234) ====
+  // When the local human is logged in as the special Bigfoot profile,
+  // flip their character's invincible flag. The engine reads it and
+  // skips damage + grants 1.5× cooldown rate. Single block — easy to
+  // delete: remove this block + INVINCIBLE_* constants below + the
+  // invincible field in entity.ts to drop the feature entirely.
+  if (loggedIn && isInvincibleProfile(getName(), getPin())) {
+    const player = world.playerCharacter();
+    if (player) player.invincible = true;
+  }
 
   const controllers = new Map<number, Controller>();
   for (const c of world.allCharacters()) {
@@ -2637,6 +2660,11 @@ const POINTS_CATCH = 5;
 const POINTS_OBJECTIVE = 5;
 const POINTS_SURVIVE = 10;
 const POINTS_WIN = 20;
+// Exit-tier bonuses (Forest World Map 1). Stack on top of the base
+// POINTS_WIN + POINTS_SURVIVE when a survivor escapes via the exit.
+const POINTS_TEAM_EXIT = 10;       // all surviving survivors escaped together
+const POINTS_LONE_EXIT = 15;       // only this survivor escaped
+const POINTS_PERFECT_LONE = 25;    // lone exit + this survivor collected every nugget
 export const POINTS_LEAVE_PENALTY = 15;
 
 interface RoundAwardState {
@@ -2677,8 +2705,9 @@ function processAwards(
     state.lowestHpRatio = 1;
   }
 
-  // Find / refresh my own entity + team.
-  let me: { team: "hunter" | "survivor"; hp: number; maxHp: number } | null = null;
+  // Find / refresh my own entity + team. Cast retains exit + collect
+  // fields used by the Forest World Map 1 award block below.
+  let me: CharacterEntity | null = null;
   for (const e of world.entities) {
     if (e.kind === "character" && e.id === viewerEntityId) {
       me = e;
@@ -2741,6 +2770,38 @@ function processAwards(
       // Untouchable: survivor finished alive AND never dropped below half
       // HP during the round.
       if (state.lowestHpRatio >= 0.5) earnAchievement("untouchable");
+    }
+    // ---- Forest World · Map 1 completion ----
+    // Granted to each survivor who exited alive. Bonus tier stacks on
+    // top of POINTS_WIN + POINTS_SURVIVE:
+    //  - Team exit  : all surviving survivors made it out (≥2 of them)
+    //  - Lone exit  : only one survivor exited; others died or
+    //                 didn't make it
+    //  - Perfect lone: lone exit AND that survivor personally collected
+    //                  every nugget the team picked up
+    if (me && me.team === "survivor" && me.exited) {
+      earnAchievement("forest_world_1");
+      const allSurvivors: CharacterEntity[] = [];
+      for (const e of world.entities) {
+        if (e.kind === "character" && e.team === "survivor") allSurvivors.push(e);
+      }
+      const exitedCount = allSurvivors.filter((s) => s.exited).length;
+      const isLone = exitedCount === 1;
+      const allExited =
+        allSurvivors.length > 1 && exitedCount === allSurvivors.length;
+      const myCount = me.objectivesCollected;
+      const teamCount = allSurvivors.reduce((s, c) => s + c.objectivesCollected, 0);
+      const perfectLone = isLone && myCount >= 5 && teamCount === myCount;
+      if (perfectLone) {
+        addPoints(POINTS_PERFECT_LONE);
+        fireAchievementBanner(`PERFECT LONE EXIT · +${POINTS_PERFECT_LONE}`);
+      } else if (isLone) {
+        addPoints(POINTS_LONE_EXIT);
+        fireAchievementBanner(`LONE EXIT · +${POINTS_LONE_EXIT}`);
+      } else if (allExited) {
+        addPoints(POINTS_TEAM_EXIT);
+        fireAchievementBanner(`TEAM EXIT · +${POINTS_TEAM_EXIT}`);
+      }
     }
   }
 }

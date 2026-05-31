@@ -11,7 +11,7 @@ import type {
   Entity,
   PropEntity,
 } from "../core/entity";
-import { isCharacter, isProjectile, isTrap, isObjective, isProp } from "../core/entity";
+import { isCharacter, isProjectile, isTrap, isObjective, isProp, isExit } from "../core/entity";
 import type { Vec2 } from "../core/math";
 import { add, scale, normalize, sub, len, dist, clamp, circlesOverlap } from "../core/math";
 import { ABILITIES } from "../abilities/abilities";
@@ -61,6 +61,7 @@ export class Engine {
     // 2) Apply movement
     for (const c of world.allCharacters()) {
       if (c.dead) continue;
+      if (c.exited) continue; // escaped survivors are inert
       const intent = intents.get(c.id);
       if (!intent) continue;
 
@@ -135,6 +136,7 @@ export class Engine {
     // 3) Fire abilities (after movement so aim is fresh)
     for (const c of world.allCharacters()) {
       if (c.dead) continue;
+      if (c.exited) continue; // escaped survivors don't cast
       const intent = intents.get(c.id);
       if (!intent) continue;
       const def = CHARACTERS[c.characterId];
@@ -152,7 +154,10 @@ export class Engine {
         // Optional pre-condition gate. If it refuses, no cd, no channel.
         if (ability.canCast && !ability.canCast(ctx)) continue;
         ability.cast(ctx);
-        c.cooldowns[abilityId] = ability.cooldown;
+        // Invincible Mode (Bigfoot login): 1.5× cooldown rate, i.e.
+        // cooldowns end ~33% sooner than usual.
+        const cdMult = c.invincible ? 1 / 1.5 : 1;
+        c.cooldowns[abilityId] = ability.cooldown * cdMult;
         // Channeled abilities: start the channel timer; engine will fire
         // onChargeComplete when remaining hits 0 (see channel-tick block).
         if (ability.chargeTime && ability.chargeTime > 0) {
@@ -202,10 +207,11 @@ export class Engine {
       // Hit characters on target team
       for (const c of world.charactersOnTeam(e.targetTeam)) {
         if (c.id === e.ownerId) continue;
+        if (c.exited) continue;            // escaped survivors aren't hittable
         if (c.statuses["phased"] > 0) continue;
         if (circlesOverlap(e.pos, e.radius, c.pos, c.radius)) {
-          c.hp -= e.damage;
-          if (e.slowOnHit) c.statuses["slowed"] = e.slowOnHit;
+          if (!c.invincible) c.hp -= e.damage; // Bigfoot takes no damage
+          if (e.slowOnHit && !c.invincible) c.statuses["slowed"] = e.slowOnHit;
           e.dead = true;
           break;
         }
@@ -235,10 +241,11 @@ export class Engine {
       if (e.armDelay > 0) continue;
       if (e.triggered) continue;
       for (const c of world.charactersOnTeam(e.targetTeam)) {
+        if (c.exited) continue;
         if (c.statuses["phased"] > 0) continue;
         if (circlesOverlap(e.pos, e.radius, c.pos, c.radius)) {
-          c.hp -= e.damage;
-          c.statuses["slowed"] = e.slowDuration;
+          if (!c.invincible) c.hp -= e.damage;
+          if (!c.invincible) c.statuses["slowed"] = e.slowDuration;
           e.triggered = true;
           // Trap consumed on trigger
           e.dead = true;
@@ -254,12 +261,32 @@ export class Engine {
       if (!isObjective(o)) continue;
       if (o.collected) continue;
       for (const c of world.charactersOnTeam("survivor")) {
+        if (c.exited) continue;
         if (circlesOverlap(o.pos, o.radius, c.pos, c.radius)) {
           o.collected = true;
           o.collectedBy = c.id;
           c.objectivesCollected += 1;
           this.cfg.mode.onObjectiveCollected?.(world, c.id);
           break;
+        }
+      }
+    }
+
+    // 6b) Exit interaction — a survivor who has met the mode's exit
+    // requirements (e.g. enough nuggets) and overlaps an exit zone
+    // flips their `exited` flag. They become inert: no movement,
+    // no damage, no abilities. The mode's checkOutcome reads exited
+    // alongside dead to decide when the round ends.
+    const canExit = this.cfg.mode.canSurvivorExit?.bind(this.cfg.mode);
+    if (canExit) {
+      for (const ex of world.entities) {
+        if (!isExit(ex)) continue;
+        for (const c of world.charactersOnTeam("survivor")) {
+          if (c.exited) continue;
+          if (!canExit(c)) continue;
+          if (circlesOverlap(ex.pos, ex.radius, c.pos, c.radius)) {
+            c.exited = true;
+          }
         }
       }
     }

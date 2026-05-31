@@ -24,6 +24,7 @@ export const ACHIEVEMENT_ORDER = [
   "untouchable",
   "ghost",
   "veteran",
+  "forest_world_1",
 ];
 
 // ---- Icon helpers ----
@@ -246,6 +247,47 @@ function drawCrown(
   ctx.restore();
 }
 
+// Forest archway — two trees flanking a glowing exit portal,
+// echoing the in-world exit zone visual. Used for the Forest World
+// Map 1 completion achievement.
+function drawForestArch(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  s: number,
+  locked: boolean,
+): void {
+  const a = alpha(locked);
+  ctx.save();
+  ctx.translate(x, y);
+  // Glow portal in the center
+  const grad = ctx.createRadialGradient(s * 0.5, s * 0.6, 0, s * 0.5, s * 0.6, s * 0.32);
+  grad.addColorStop(0, `rgba(170, 240, 180, ${0.8 * a})`);
+  grad.addColorStop(1, "rgba(170, 240, 180, 0)");
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(s * 0.5, s * 0.6, s * 0.32, 0, Math.PI * 2);
+  ctx.fill();
+  // Two tree trunks
+  ctx.fillStyle = `rgba(80, 50, 30, ${a})`;
+  ctx.fillRect(s * 0.18, s * 0.42, s * 0.1, s * 0.46);
+  ctx.fillRect(s * 0.72, s * 0.42, s * 0.1, s * 0.46);
+  // Two tree canopies
+  ctx.fillStyle = `rgba(60, 130, 70, ${a})`;
+  ctx.beginPath();
+  ctx.arc(s * 0.23, s * 0.32, s * 0.17, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(s * 0.77, s * 0.32, s * 0.17, 0, Math.PI * 2);
+  ctx.fill();
+  // Inner bright portal core
+  ctx.fillStyle = `rgba(220, 250, 200, ${a})`;
+  ctx.beginPath();
+  ctx.arc(s * 0.5, s * 0.6, s * 0.12, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 export const ACHIEVEMENT_CATALOG: Record<string, AchievementDef> = {
   noob: {
     id: "noob",
@@ -282,6 +324,12 @@ export const ACHIEVEMENT_CATALOG: Record<string, AchievementDef> = {
     name: "Veteran",
     description: "Reach 100 lifetime points",
     draw: drawCrown,
+  },
+  forest_world_1: {
+    id: "forest_world_1",
+    name: "Forest World · Map 1",
+    description: "Escape the forest via the exit",
+    draw: drawForestArch,
   },
 };
 

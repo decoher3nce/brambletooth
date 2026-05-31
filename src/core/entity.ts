@@ -14,7 +14,8 @@ export type EntityKind =
   | "trap"
   | "objective"
   | "prop"
-  | "plate";
+  | "plate"
+  | "exit";
 
 export interface BaseEntity {
   id: EntityId;
@@ -73,6 +74,17 @@ export interface CharacterEntity extends BaseEntity {
   // this round. Win condition = any survivor's count reaching the target.
   // Always 0 for hunters; kept on every character for protocol simplicity.
   objectivesCollected: number;
+  // Survivor escaped the map alive via the exit. When true the engine
+  // skips this character's movement / damage / abilities; the renderer
+  // ghosts them out. Stays in the world for end-of-round accounting.
+  // Always false for hunters.
+  exited: boolean;
+  // Invincible mode (special login). When true the engine ignores
+  // damage to this character and applies a cooldown-rate multiplier
+  // to ability cooldowns when they're set. Kept on every character
+  // for protocol simplicity; only set when the local human is the
+  // Bigfoot special profile (see main.ts).
+  invincible?: boolean;
 }
 
 export interface ProjectileEntity extends BaseEntity {
@@ -123,13 +135,22 @@ export interface PlateEntity extends BaseEntity {
   placedAt: number;
 }
 
+// Exit zone — survivors who have collected the required nugget count
+// can step onto it to escape the map. Stepping on it flips the
+// character's `exited` flag; the engine then ignores the character.
+// The exit is non-blocking and visible to everyone.
+export interface ExitEntity extends BaseEntity {
+  kind: "exit";
+}
+
 export type Entity =
   | CharacterEntity
   | ProjectileEntity
   | TrapEntity
   | ObjectiveEntity
   | PropEntity
-  | PlateEntity;
+  | PlateEntity
+  | ExitEntity;
 
 // Type guards
 export function isCharacter(e: Entity): e is CharacterEntity {
@@ -149,4 +170,7 @@ export function isProp(e: Entity): e is PropEntity {
 }
 export function isPlate(e: Entity): e is PlateEntity {
   return e.kind === "plate";
+}
+export function isExit(e: Entity): e is ExitEntity {
+  return e.kind === "exit";
 }
