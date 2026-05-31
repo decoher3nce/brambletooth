@@ -117,6 +117,17 @@ export class HuntMode implements GameMode {
     return s.objectivesCollected >= this.cfg.objectivesRequired;
   }
 
+  // Danger Mode kicks in once ANY survivor has hit the exit
+  // threshold (including survivors who have already escaped — their
+  // count is preserved so the buff persists through round-end).
+  isDangerMode(world: World): boolean {
+    for (const c of world.allCharacters()) {
+      if (c.team !== "survivor") continue;
+      if (c.objectivesCollected >= this.cfg.objectivesRequired) return true;
+    }
+    return false;
+  }
+
   private spawnObjective(world: World): void {
     const b = world.arena.bounds;
     // Try several random placements; keep the first one that doesn't

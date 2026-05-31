@@ -58,6 +58,10 @@ export class Engine {
       if (ctrl) intents.set(c.id, ctrl.update(c, world, dt));
     }
 
+    // Danger Mode (mode-defined). Queried once per tick and used in
+    // the movement loop and the cooldown-set block below.
+    const dangerMode = this.cfg.mode.isDangerMode?.(world) ?? false;
+
     // 2) Apply movement
     for (const c of world.allCharacters()) {
       if (c.dead) continue;
@@ -110,9 +114,12 @@ export class Engine {
       // Overdrive at 1.35× lets Match (base 165) outpace Slagy (145)
       // by ~78 units — meaningful escape window but catchable. v0
       // had 1.6× which landed Match at 264 (uncatchable, dominant).
+      // Danger Mode (any survivor at exit threshold) buffs hunters
+      // by +10% to compress the closing window.
       let speedMult = 1;
       if (c.statuses["overdrive"] > 0) speedMult *= 1.35;
       if (c.statuses["slowed"] > 0) speedMult *= 0.5;
+      if (dangerMode && c.team === "hunter") speedMult *= 1.1;
 
       const desired = intent.moveDir;
       const dmag = len(desired);
@@ -156,7 +163,10 @@ export class Engine {
         ability.cast(ctx);
         // Invincible Mode (Bigfoot login): 1.5× cooldown rate, i.e.
         // cooldowns end ~33% sooner than usual.
-        const cdMult = c.invincible ? 1 / 1.5 : 1;
+        // Danger Mode: hunter's cooldowns shrink by 10% so they keep
+        // pace with scrambling survivors.
+        let cdMult = c.invincible ? 1 / 1.5 : 1;
+        if (dangerMode && c.team === "hunter") cdMult *= 0.9;
         c.cooldowns[abilityId] = ability.cooldown * cdMult;
         // Channeled abilities: start the channel timer; engine will fire
         // onChargeComplete when remaining hits 0 (see channel-tick block).

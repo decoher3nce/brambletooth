@@ -30,6 +30,10 @@ export interface HUDOptions {
   // Caller passes true in multiplayer modes; single-player keeps it off
   // since the top-left card already shows the only survivor.
   showSurvivorList: boolean;
+  // Danger Mode (mode-defined). True when the hunter's escalation
+  // buffs are active. Renders a pulsing DANGER badge under the
+  // timer so survivors and hunter both feel the shift.
+  dangerMode: boolean;
 }
 
 // Layout constants shared so callers can mirror our top-left stack
@@ -48,7 +52,7 @@ export function drawHUD(
   world: World,
   opts: HUDOptions,
 ): void {
-  const { dimensions: dims, isTouchMode, points, outcome, paused, objectivesRequired, showSurvivorList } = opts;
+  const { dimensions: dims, isTouchMode, points, outcome, paused, objectivesRequired, showSurvivorList, dangerMode } = opts;
   const cw = dims.w;
   const ch = dims.h;
   const player = world.playerCharacter();
@@ -98,6 +102,29 @@ export function drawHUD(
   ctx.fillRect(cw / 2 - 80, 56, 160, 22);
   ctx.fillStyle = "#ffd84a";
   ctx.fillText(objLine, cw / 2, 72);
+
+  // Danger Mode badge (pulsing red) — sits just below the objective
+  // line when active. Plays on every frame; main.ts can additionally
+  // fire a one-shot banner on transition for ceremony.
+  if (dangerMode) {
+    const t = (performance.now() / 350) % (Math.PI * 2);
+    const pulse = 0.7 + 0.3 * (0.5 + 0.5 * Math.sin(t));
+    const bw = 110;
+    const bh = 22;
+    const bx = cw / 2 - bw / 2;
+    const by = 82;
+    ctx.fillStyle = `rgba(208, 72, 72, ${0.85 * pulse})`;
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = `rgba(255, 200, 200, ${pulse})`;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 12px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("⚠ DANGER MODE", cw / 2, by + bh / 2 + 1);
+    ctx.textBaseline = "alphabetic";
+  }
 
   // ---- Top-right: mini all-survivors HP list (multiplayer) ----
   if (showSurvivorList && survivors.length > 0) {

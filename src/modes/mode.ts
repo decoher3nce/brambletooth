@@ -23,4 +23,10 @@ export interface GameMode {
   // overlap and flips the survivor's `exited` flag. Modes without an
   // exit zone can omit this hook.
   canSurvivorExit?(survivor: CharacterEntity): boolean;
+  // True when the hunter's "Danger Mode" buffs should apply. Hunt
+  // mode flips this on once any survivor has reached the exit
+  // threshold — survivors are now scrambling for the exit and the
+  // hunter gets +10% speed / -10% cooldowns to close the gap.
+  // Modes without a danger phase can omit this hook.
+  isDangerMode?(world: World): boolean;
 }

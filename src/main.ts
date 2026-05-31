@@ -758,6 +758,7 @@ function goToTitle(): void {
   prevCharSnap.clear();
   prevObjectivePicked.clear();
   lastFootstep.clear();
+  prevDangerMode = false;
   clientEffects.length = 0;
   setHeartbeat(null);
   // Reset name input visibility — frameTitle will re-show it next frame.
@@ -900,6 +901,7 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
     if (p.countdown == null) {
       detectSoundAndVisualEvents(p.world, localMe);
       detectFootsteps(p.world, localMe);
+      checkDangerModeTransition(p.world);
       updateHeartbeatFor(p.world, localMe?.id ?? null);
     } else {
       setHeartbeat(null);
@@ -920,6 +922,7 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
       // Single-player has only one survivor — the top-left card
       // already shows them, so the mini list would be redundant.
       showSurvivorList: false,
+      dangerMode: computeDangerMode(p.world),
     });
     if (input.isTouchMode) {
       touchControls.draw(ctx, dims, p.world, p.engine.outcome, p.engine.paused);
@@ -1104,6 +1107,7 @@ function drawNetGameScene(dt: number, dims: { w: number; h: number }, n: NetClie
   const netMe = netViewWorld.playerCharacter() ?? null;
   detectSoundAndVisualEvents(netViewWorld, netMe);
   detectFootsteps(netViewWorld, netMe);
+  checkDangerModeTransition(netViewWorld);
   updateHeartbeatFor(netViewWorld, n.yourEntityId);
 
   renderer.clear("#1a2421");
@@ -1121,6 +1125,7 @@ function drawNetGameScene(dt: number, dims: { w: number; h: number }, n: NetClie
     // Multiplayer: show every survivor's HP so hunters and survivors
     // alike have visibility into team status.
     showSurvivorList: true,
+    dangerMode: computeDangerMode(netViewWorld),
   });
   if (input.isTouchMode) {
     touchControls.draw(ctx, dims, netViewWorld, n.outcome, false);
@@ -2328,6 +2333,32 @@ function updateClientEffects(_dt: number): void {
 
 function drawClientEffects(_cam: { target: { x: number; y: number }; zoom: number }): void {
   // Reserved for future cosmetic effects.
+}
+
+// Compute Danger Mode locally from the world: any survivor whose
+// personal nugget count has crossed the exit threshold flips the
+// hunter's escalation buffs on (the server engine reads the same
+// condition through HuntMode.isDangerMode). Mirrored here so the
+// HUD can render the badge without holding a mode reference.
+function computeDangerMode(world: World): boolean {
+  for (const e of world.entities) {
+    if (e.kind !== "character") continue;
+    if (e.team !== "survivor") continue;
+    if (e.objectivesCollected >= OBJECTIVES_REQUIRED) return true;
+  }
+  return false;
+}
+
+// Module-level previous Danger Mode state so we can fire a one-shot
+// banner exactly when it activates (not every frame). Reset on
+// round transitions alongside the other detection caches.
+let prevDangerMode = false;
+function checkDangerModeTransition(world: World): void {
+  const now = computeDangerMode(world);
+  if (now && !prevDangerMode) {
+    fireAchievementBanner("⚠ DANGER MODE — hunter is faster!");
+  }
+  prevDangerMode = now;
 }
 
 // Per-character timestamp of the last fired footstep, in seconds
