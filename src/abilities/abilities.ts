@@ -261,8 +261,12 @@ registerAbility({
     if (platesOwnedBy(world, caster.id).length === 0) return false;
     for (const e of world.entities) {
       if (e.kind !== "stream") continue;
-      const d = distToSegment(caster.pos, e.a, e.b);
-      if (d <= e.width + caster.radius) return false;
+      // Closest segment in the polyline — refuse if it's within reach.
+      for (let i = 0; i < e.points.length - 1; i++) {
+        const a = e.points[i]!;
+        const b = e.points[i + 1]!;
+        if (distToSegment(caster.pos, a, b) <= e.width + caster.radius) return false;
+      }
     }
     return true;
   },

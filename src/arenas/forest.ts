@@ -132,25 +132,69 @@ export function buildForest(world: World, seed: number, objectiveCount: number):
   }
 }
 
-// Forest Map 2 — one long horizontal stream cutting across the
-// middle of the map. Flow heads WEST (away from the SE-corner
-// exit), so survivors pushing east to escape have to fight the
-// current. Magnesis won't fire while standing in it.
+// Seeded meandering polyline running east→west (so each segment's
+// direction is -x and the engine pushes characters WEST — away
+// from the SE-corner exit). Endpoint Y values taper toward midY so
+// the stream meets the map edges cleanly; interior points wobble
+// up to `amplitude` units off the centerline via a sine wave with
+// a random phase, plus a small jitter for irregularity.
+function makeMeanderingPoints(
+  seed: number,
+  xWest: number,
+  xEast: number,
+  midY: number,
+  amplitude: number,
+  segments: number,
+): { x: number; y: number }[] {
+  const rng = mulberry32(seed);
+  const phase = rng() * Math.PI * 2;
+  const pts: { x: number; y: number }[] = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    // East→west ordering: i=0 is at xEast, i=segments is at xWest.
+    // Each segment direction is then (next - prev) = (-Δx, ...).
+    const x = xEast + (xWest - xEast) * t;
+    const envelope = Math.sin(t * Math.PI); // taper at endpoints
+    const wave = Math.sin(t * Math.PI * 2.5 + phase) * amplitude * envelope;
+    const jitter = (rng() - 0.5) * amplitude * 0.15;
+    pts.push({ x, y: midY + wave + jitter });
+  }
+  return pts;
+}
+
+// Bounding circle for a polyline (used for cheap broad-phase + the
+// floor-decal depth sort).
+function polylineBounds(
+  pts: { x: number; y: number }[],
+  width: number,
+): { center: { x: number; y: number }; radius: number } {
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const halfDiag = Math.hypot(maxX - minX, maxY - minY) / 2;
+  return { center: { x: cx, y: cy }, radius: halfDiag + width };
+}
+
+// Forest Map 2 — one meandering stream across the middle of the
+// map, flowing WEST (away from the SE-corner exit). Survivors
+// pushing east toward escape fight the current.
 export function buildForest2(world: World, seed: number, objectiveCount: number): void {
   buildForest(world, seed, objectiveCount);
   const b = world.arena.bounds;
-  const cy = 0;
-  const aPt = { x: b.minX + 60, y: cy };
-  const bPt = { x: b.maxX - 60, y: cy };
+  const points = makeMeanderingPoints(seed + 31337, b.minX + 60, b.maxX - 60, 0, 130, 10);
+  const bb = polylineBounds(points, 65);
   world.spawn<StreamEntity>({
     kind: "stream",
-    // Bounding circle for cheap broad-phase: midpoint + (length/2 + width).
-    pos: { x: (aPt.x + bPt.x) / 2, y: (aPt.y + bPt.y) / 2 },
-    radius: Math.hypot(bPt.x - aPt.x, bPt.y - aPt.y) / 2 + 70,
-    a: aPt,
-    b: bPt,
+    pos: bb.center,
+    radius: bb.radius,
+    points,
     width: 65,
-    flow: { x: -1, y: 0 }, // west — opposite the SE exit
     flowSpeed: 100,
     slowFactor: 0.55,
     dead: false,
@@ -245,19 +289,17 @@ export function buildForest4(world: World, seed: number, objectiveCount: number)
 export function buildForest5(world: World, seed: number, objectiveCount: number): void {
   buildForest(world, seed, objectiveCount);
   const b = world.arena.bounds;
-  // One long horizontal stream south of the cliff line. Flows west
-  // (away from SE exit) just like Map 2.
-  const sy = 180;
-  const sa = { x: b.minX + 60, y: sy };
-  const sb = { x: b.maxX - 60, y: sy };
+  // Meandering stream south of the cliff line. Flows west like
+  // Map 2 — same seeded-meander generator, different center Y so
+  // it doesn't sit under the cliff edge.
+  const streamPoints = makeMeanderingPoints(seed + 41421, b.minX + 60, b.maxX - 60, 180, 90, 9);
+  const streamBB = polylineBounds(streamPoints, 60);
   world.spawn<StreamEntity>({
     kind: "stream",
-    pos: { x: (sa.x + sb.x) / 2, y: sy },
-    radius: Math.hypot(sb.x - sa.x, 0) / 2 + 70,
-    a: sa,
-    b: sb,
+    pos: streamBB.center,
+    radius: streamBB.radius,
+    points: streamPoints,
     width: 60,
-    flow: { x: -1, y: 0 },
     flowSpeed: 90,
     slowFactor: 0.55,
     dead: false,

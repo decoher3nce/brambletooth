@@ -399,87 +399,113 @@ export class Renderer {
     ctx.textAlign = "left";
   }
 
-  // Stream — long capsule (segment + width) of flowing water on the
-  // ground plane. Drawn as a wide round-capped stroke along the
-  // segment, with sandy "banks" along the edges and animated
-  // chevrons marching downstream.
+  // Stream — meandering polyline of flowing water on the ground.
+  // Painted as a layered stroke (sandy bank → water → inner shimmer)
+  // through smoothed quadratic curves between the control points,
+  // with chevrons that march along the local segment direction so
+  // the current visibly follows the meander.
   private drawStream(
     e: Extract<Entity, { kind: "stream" }>,
     cam: Camera,
   ): void {
     const ctx = this.ctx;
-    const a = worldToScreen(e.a, cam, this.cw, this.ch);
-    const b = worldToScreen(e.b, cam, this.cw, this.ch);
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const segLen = Math.hypot(dx, dy);
-    if (segLen < 1) return;
-    // World width maps approximately 1:1 to screen-x and 0.5 to
-    // screen-y (iso). For now use the world width as the stroke
-    // half-thickness directly — visually close enough for the
-    // mostly-horizontal streams we ship.
+    const pts = e.points.map((p) => worldToScreen(p, cam, this.cw, this.ch));
+    if (pts.length < 2) return;
     const w = e.width;
 
-    // Sandy bank — slightly wider than the water, painted first.
+    // Smoothed path through the control points: for each interior
+    // point, draw a quadratic curve from the previous midpoint to
+    // the next midpoint, using the point itself as the control.
+    // Endpoints connect with straight segments. Visually this gives
+    // soft river bends without overshooting the centerline.
+    const buildPath = (target: CanvasRenderingContext2D | Path2D) => {
+      if (target instanceof Path2D) {
+        target.moveTo(pts[0]!.x, pts[0]!.y);
+        for (let i = 1; i < pts.length - 1; i++) {
+          const mx = (pts[i]!.x + pts[i + 1]!.x) / 2;
+          const my = (pts[i]!.y + pts[i + 1]!.y) / 2;
+          target.quadraticCurveTo(pts[i]!.x, pts[i]!.y, mx, my);
+        }
+        target.lineTo(pts[pts.length - 1]!.x, pts[pts.length - 1]!.y);
+      } else {
+        target.moveTo(pts[0]!.x, pts[0]!.y);
+        for (let i = 1; i < pts.length - 1; i++) {
+          const mx = (pts[i]!.x + pts[i + 1]!.x) / 2;
+          const my = (pts[i]!.y + pts[i + 1]!.y) / 2;
+          target.quadraticCurveTo(pts[i]!.x, pts[i]!.y, mx, my);
+        }
+        target.lineTo(pts[pts.length - 1]!.x, pts[pts.length - 1]!.y);
+      }
+    };
+
     ctx.save();
     ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    // Sandy bank — widest, brownish.
     ctx.lineWidth = (w + 10) * 2;
     ctx.strokeStyle = "rgba(196, 168, 110, 0.55)";
     ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
+    buildPath(ctx);
     ctx.stroke();
-
-    // Water body — translucent blue.
+    // Water body.
     ctx.lineWidth = w * 2;
     ctx.strokeStyle = "rgba(80, 150, 200, 0.78)";
     ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
+    buildPath(ctx);
     ctx.stroke();
-
     // Inner shimmer — narrower, brighter.
     ctx.lineWidth = w * 1.3;
     ctx.strokeStyle = "rgba(180, 220, 240, 0.35)";
     ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
+    buildPath(ctx);
     ctx.stroke();
     ctx.restore();
 
-    // Animated flow chevrons — march downstream along the segment.
-    // Direction comes from `flow` (not necessarily a→b), so a stream
-    // could in principle have backward-flowing chevrons. In practice
-    // we point flow along the segment.
-    const ex = dx / segLen;
-    const ey = dy / segLen;
-    // Perpendicular (for chevron arms).
-    const px = -ey;
-    const py = ex;
-    // Sign of flow's projection onto segment direction (which way
-    // the chevrons should point).
-    const flowDotSeg = e.flow.x * ex + e.flow.y * ey;
-    const sign = flowDotSeg >= 0 ? 1 : -1;
+    // Animated flow chevrons walking along the polyline. We march
+    // by arc length, switching segments as we cross boundaries —
+    // so chevrons turn with the river bend.
+    const segs: { p0: { x: number; y: number }; p1: { x: number; y: number }; len: number; cum: number }[] = [];
+    let totalLen = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i]!;
+      const p1 = pts[i + 1]!;
+      const l = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+      segs.push({ p0, p1, len: l, cum: totalLen });
+      totalLen += l;
+    }
+    if (totalLen < 1) return;
+
     const t = (performance.now() / 700) % 1;
     const chevW = Math.min(18, w * 0.4);
     const chevH = Math.min(10, w * 0.3);
-    const spacing = 40;
+    const spacing = 50;
+
     ctx.save();
     ctx.strokeStyle = "rgba(220, 240, 255, 0.7)";
     ctx.lineWidth = 2.2;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    for (let off = -spacing; off <= segLen + spacing; off += spacing) {
-      // Step along the segment by `off`, with phase animation.
+    for (let off = 0; off <= totalLen; off += spacing) {
       const s = off + t * spacing;
-      if (s < -chevW || s > segLen + chevW) continue;
-      const cx = a.x + ex * s;
-      const cy = a.y + ey * s;
-      // Chevron tips point in flow direction.
-      const tipX = cx + ex * (chevW * 0.5) * sign;
-      const tipY = cy + ey * (chevW * 0.5) * sign;
-      const backX = cx - ex * (chevW * 0.5) * sign;
-      const backY = cy - ey * (chevW * 0.5) * sign;
+      if (s < 0 || s > totalLen) continue;
+      // Find segment containing s.
+      let seg = segs[0]!;
+      for (const sg of segs) {
+        if (s >= sg.cum && s <= sg.cum + sg.len) { seg = sg; break; }
+      }
+      const localT = (s - seg.cum) / (seg.len || 1);
+      const cx = seg.p0.x + (seg.p1.x - seg.p0.x) * localT;
+      const cy = seg.p0.y + (seg.p1.y - seg.p0.y) * localT;
+      const ex = (seg.p1.x - seg.p0.x) / (seg.len || 1);
+      const ey = (seg.p1.y - seg.p0.y) / (seg.len || 1);
+      // Perpendicular (chevron arms).
+      const px = -ey;
+      const py = ex;
+      // Chevron points forward along the segment.
+      const tipX = cx + ex * (chevW * 0.5);
+      const tipY = cy + ey * (chevW * 0.5);
+      const backX = cx - ex * (chevW * 0.5);
+      const backY = cy - ey * (chevW * 0.5);
       ctx.beginPath();
       ctx.moveTo(backX + px * chevH, backY + py * chevH);
       ctx.lineTo(tipX, tipY);

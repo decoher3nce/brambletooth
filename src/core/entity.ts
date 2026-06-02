@@ -146,27 +146,34 @@ export interface ExitEntity extends BaseEntity {
   kind: "exit";
 }
 
-// Flowing water (Forest Map 2 + Map 5). A capsule-shaped stream
-// defined by line segment a→b inflated by `width` on each side.
-// A character is "in stream" when distToSegment(c.pos, a, b) ≤
-// width + c.radius. When in the stream:
-//   - velocity is multiplied by `slowFactor` (e.g. 0.55)
-//   - velocity gains `flow * flowSpeed` (pushes downstream)
-// Magnek's Magnesis cast is also refused while standing in a stream
-// (the water shorts out the magnetic field, narratively).
+// Flowing water (Forest Map 2 + Map 5). A meandering polyline that
+// inflates by `width` on each side to form a stream. Each consecutive
+// pair of points forms a segment; the stream's shape is the union of
+// all those capsules. A character is "in stream" when their distance
+// to the NEAREST segment is ≤ width + character radius.
 //
-// `pos` is the midpoint of (a, b); `radius` is the bounding circle
-// for the capsule (length/2 + width). Both kept on BaseEntity for
+// While in the stream:
+//   - velocity is multiplied by `slowFactor` (e.g. 0.55)
+//   - velocity gains a push along the LOCAL segment direction at
+//     `flowSpeed` units/sec. The push naturally follows the meander
+//     since each segment's direction is its own (b-a) vector.
+//
+// Magnek's Magnesis cast is refused while standing in a stream.
+//
+// `pos` is the polyline's bounding-box center; `radius` is the
+// bounding circle for the whole curve. Both kept on BaseEntity for
 // cheap broad-phase culling, snapshot ordering, and the floor-decal
 // depth sort.
 export interface StreamEntity extends BaseEntity {
   kind: "stream";
-  a: Vec2;
-  b: Vec2;
+  // Ordered control points along the stream centerline. Length ≥ 2.
+  // Consecutive pairs form straight segments; visual is a smoothed
+  // curve through them (quadratic interpolation in the renderer).
+  points: Vec2[];
   width: number; // half-thickness in world units
-  // Flow direction unit vector. Engine normalizes defensively.
-  flow: Vec2;
-  // Push velocity magnitude (units/sec) added each tick.
+  // Push velocity magnitude (units/sec) along the local segment
+  // direction. The local direction is computed from the nearest
+  // segment at evaluation time, so flow follows the meander.
   flowSpeed: number;
   // 0..1 multiplier applied to the character's intent velocity.
   slowFactor: number;

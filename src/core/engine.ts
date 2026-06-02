@@ -135,22 +135,35 @@ export class Engine {
         c.facing = Math.atan2(c.vel.y, c.vel.x);
       }
 
-      // Stream: any stream capsule whose centerline is within
-      // (width + character radius) of the character's position
-      // slows their intent velocity and pushes them downstream.
-      // Pushes from multiple overlapping streams stack. Cheap
-      // broad-phase via the bounding `radius` field before the
-      // segment-distance test.
+      // Stream: walk each stream's polyline segments, find the
+      // closest one to the character, and if within (width + char
+      // radius), slow + push along THAT segment's direction. So a
+      // meandering river curves the current along with it. Cheap
+      // broad-phase via the bounding `radius` first.
       for (const s of world.entities) {
         if (!isStream(s)) continue;
         if (!circlesOverlap(c.pos, c.radius, s.pos, s.radius)) continue;
-        const d = distToSegment(c.pos, s.a, s.b);
-        if (d > s.width + c.radius) continue;
+        let bestD = Infinity;
+        let bestDirX = 0;
+        let bestDirY = 0;
+        for (let i = 0; i < s.points.length - 1; i++) {
+          const a = s.points[i]!;
+          const b = s.points[i + 1]!;
+          const d = distToSegment(c.pos, a, b);
+          if (d < bestD) {
+            bestD = d;
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const sl = Math.hypot(dx, dy) || 1;
+            bestDirX = dx / sl;
+            bestDirY = dy / sl;
+          }
+        }
+        if (bestD > s.width + c.radius) continue;
         c.vel.x *= s.slowFactor;
         c.vel.y *= s.slowFactor;
-        const fl = Math.hypot(s.flow.x, s.flow.y) || 1;
-        c.vel.x += (s.flow.x / fl) * s.flowSpeed;
-        c.vel.y += (s.flow.y / fl) * s.flowSpeed;
+        c.vel.x += bestDirX * s.flowSpeed;
+        c.vel.y += bestDirY * s.flowSpeed;
       }
 
       // Apply movement with prop collision (simple slide-on-block)
