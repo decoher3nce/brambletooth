@@ -132,29 +132,29 @@ export function buildForest(world: World, seed: number, objectiveCount: number):
   }
 }
 
-// Forest Map 2 — adds a chain of streams running east across the
-// middle band of the map. Characters that wade in get slowed and
-// pushed downstream; Magnesis won't fire while standing in one.
+// Forest Map 2 — one long horizontal stream cutting across the
+// middle of the map. Flow heads WEST (away from the SE-corner
+// exit), so survivors pushing east to escape have to fight the
+// current. Magnesis won't fire while standing in it.
 export function buildForest2(world: World, seed: number, objectiveCount: number): void {
   buildForest(world, seed, objectiveCount);
-  // Four overlapping stream circles forming a "river" mid-map.
-  // East-flowing (toward +x), moderate speed, half-speed slow.
-  const radius = 95;
-  const flow = { x: 1, y: 0 };
-  const flowSpeed = 90;
-  const slowFactor = 0.55;
-  const xs = [-450, -200, 60, 320, 560];
-  for (const x of xs) {
-    world.spawn<StreamEntity>({
-      kind: "stream",
-      pos: { x, y: -40 },
-      radius,
-      flow,
-      flowSpeed,
-      slowFactor,
-      dead: false,
-    });
-  }
+  const b = world.arena.bounds;
+  const cy = 0;
+  const aPt = { x: b.minX + 60, y: cy };
+  const bPt = { x: b.maxX - 60, y: cy };
+  world.spawn<StreamEntity>({
+    kind: "stream",
+    // Bounding circle for cheap broad-phase: midpoint + (length/2 + width).
+    pos: { x: (aPt.x + bPt.x) / 2, y: (aPt.y + bPt.y) / 2 },
+    radius: Math.hypot(bPt.x - aPt.x, bPt.y - aPt.y) / 2 + 70,
+    a: aPt,
+    b: bPt,
+    width: 65,
+    flow: { x: -1, y: 0 }, // west — opposite the SE exit
+    flowSpeed: 100,
+    slowFactor: 0.55,
+    dead: false,
+  });
 }
 
 // Spawn an animal NPC at a given world position. Wander radius
@@ -244,25 +244,25 @@ export function buildForest4(world: World, seed: number, objectiveCount: number)
 // cliff line awkwardly.
 export function buildForest5(world: World, seed: number, objectiveCount: number): void {
   buildForest(world, seed, objectiveCount);
-  // Stream band — south of the cliff (south half of map).
-  const radius = 90;
-  const flow = { x: 1, y: 0 };
-  const flowSpeed = 90;
-  const slowFactor = 0.55;
-  const xs = [-480, -240, 0, 240, 480];
-  for (const x of xs) {
-    world.spawn<StreamEntity>({
-      kind: "stream",
-      pos: { x, y: 180 },
-      radius,
-      flow,
-      flowSpeed,
-      slowFactor,
-      dead: false,
-    });
-  }
-  // Cliff — same north-of-middle position as Map 3.
   const b = world.arena.bounds;
+  // One long horizontal stream south of the cliff line. Flows west
+  // (away from SE exit) just like Map 2.
+  const sy = 180;
+  const sa = { x: b.minX + 60, y: sy };
+  const sb = { x: b.maxX - 60, y: sy };
+  world.spawn<StreamEntity>({
+    kind: "stream",
+    pos: { x: (sa.x + sb.x) / 2, y: sy },
+    radius: Math.hypot(sb.x - sa.x, 0) / 2 + 70,
+    a: sa,
+    b: sb,
+    width: 60,
+    flow: { x: -1, y: 0 },
+    flowSpeed: 90,
+    slowFactor: 0.55,
+    dead: false,
+  });
+  // Cliff — same north-of-middle position as Map 3.
   world.spawn<CliffEntity>({
     kind: "cliff",
     pos: { x: 0, y: -180 },

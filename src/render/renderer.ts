@@ -399,59 +399,91 @@ export class Renderer {
     ctx.textAlign = "left";
   }
 
-  // Stream — flowing water disk. Translucent blue ellipse on the iso
-  // ground plane + animated chevron pattern showing flow direction.
+  // Stream — long capsule (segment + width) of flowing water on the
+  // ground plane. Drawn as a wide round-capped stroke along the
+  // segment, with sandy "banks" along the edges and animated
+  // chevrons marching downstream.
   private drawStream(
     e: Extract<Entity, { kind: "stream" }>,
     cam: Camera,
   ): void {
-    const s = worldToScreen(e.pos, cam, this.cw, this.ch);
     const ctx = this.ctx;
-    const r = e.radius;
+    const a = worldToScreen(e.a, cam, this.cw, this.ch);
+    const b = worldToScreen(e.b, cam, this.cw, this.ch);
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const segLen = Math.hypot(dx, dy);
+    if (segLen < 1) return;
+    // World width maps approximately 1:1 to screen-x and 0.5 to
+    // screen-y (iso). For now use the world width as the stroke
+    // half-thickness directly — visually close enough for the
+    // mostly-horizontal streams we ship.
+    const w = e.width;
+
+    // Sandy bank — slightly wider than the water, painted first.
     ctx.save();
-    ctx.translate(s.x, s.y);
-    ctx.scale(1, 0.5); // iso-elliptical
-    // Body
-    ctx.fillStyle = "rgba(80, 150, 200, 0.55)";
+    ctx.lineCap = "round";
+    ctx.lineWidth = (w + 10) * 2;
+    ctx.strokeStyle = "rgba(196, 168, 110, 0.55)";
     ctx.beginPath();
-    ctx.arc(0, 0, r, 0, Math.PI * 2);
-    ctx.fill();
-    // Brighter inner shimmer
-    const grad = ctx.createRadialGradient(0, -r * 0.2, 0, 0, 0, r);
-    grad.addColorStop(0, "rgba(180, 220, 240, 0.45)");
-    grad.addColorStop(1, "rgba(180, 220, 240, 0)");
-    ctx.fillStyle = grad;
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+
+    // Water body — translucent blue.
+    ctx.lineWidth = w * 2;
+    ctx.strokeStyle = "rgba(80, 150, 200, 0.78)";
     ctx.beginPath();
-    ctx.arc(0, 0, r, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+
+    // Inner shimmer — narrower, brighter.
+    ctx.lineWidth = w * 1.3;
+    ctx.strokeStyle = "rgba(180, 220, 240, 0.35)";
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
     ctx.restore();
-    // Animated flow chevrons drawn screen-aligned (no iso squish — so
-    // they read as a moving current rather than a squashed pattern).
-    const fl = Math.hypot(e.flow.x, e.flow.y) || 1;
-    const fx = e.flow.x / fl;
-    const fy = e.flow.y / fl;
-    const angle = Math.atan2(fy, fx);
-    const t = (performance.now() / 600) % 1;
+
+    // Animated flow chevrons — march downstream along the segment.
+    // Direction comes from `flow` (not necessarily a→b), so a stream
+    // could in principle have backward-flowing chevrons. In practice
+    // we point flow along the segment.
+    const ex = dx / segLen;
+    const ey = dy / segLen;
+    // Perpendicular (for chevron arms).
+    const px = -ey;
+    const py = ex;
+    // Sign of flow's projection onto segment direction (which way
+    // the chevrons should point).
+    const flowDotSeg = e.flow.x * ex + e.flow.y * ey;
+    const sign = flowDotSeg >= 0 ? 1 : -1;
+    const t = (performance.now() / 700) % 1;
+    const chevW = Math.min(18, w * 0.4);
+    const chevH = Math.min(10, w * 0.3);
+    const spacing = 40;
     ctx.save();
-    ctx.translate(s.x, s.y);
-    ctx.rotate(angle);
-    ctx.strokeStyle = "rgba(220, 240, 255, 0.55)";
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(220, 240, 255, 0.7)";
+    ctx.lineWidth = 2.2;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    // Chevrons march along the +x axis. Y compressed to feel iso.
-    const chevW = 14;
-    const chevH = 7;
-    const spacing = 32;
-    const yScale = 0.5;
-    const half = r;
-    for (let off = -half; off <= half; off += spacing) {
-      const x = off + t * spacing;
-      if (x < -half - chevW || x > half + chevW) continue;
+    for (let off = -spacing; off <= segLen + spacing; off += spacing) {
+      // Step along the segment by `off`, with phase animation.
+      const s = off + t * spacing;
+      if (s < -chevW || s > segLen + chevW) continue;
+      const cx = a.x + ex * s;
+      const cy = a.y + ey * s;
+      // Chevron tips point in flow direction.
+      const tipX = cx + ex * (chevW * 0.5) * sign;
+      const tipY = cy + ey * (chevW * 0.5) * sign;
+      const backX = cx - ex * (chevW * 0.5) * sign;
+      const backY = cy - ey * (chevW * 0.5) * sign;
       ctx.beginPath();
-      ctx.moveTo(x - chevW * 0.5, (-chevH) * yScale);
-      ctx.lineTo(x, 0);
-      ctx.lineTo(x - chevW * 0.5, chevH * yScale);
+      ctx.moveTo(backX + px * chevH, backY + py * chevH);
+      ctx.lineTo(tipX, tipY);
+      ctx.lineTo(backX - px * chevH, backY - py * chevH);
       ctx.stroke();
     }
     ctx.restore();

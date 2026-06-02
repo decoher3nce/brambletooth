@@ -145,26 +145,45 @@ function thumbForest2(
   x: number, y: number, w: number, h: number,
 ): void {
   drawForestBase(ctx, x, y, w, h);
-  // Stream band — translucent blue ellipse across the middle.
-  ctx.fillStyle = "rgba(80, 150, 200, 0.7)";
+  // Long horizontal stream — capsule with sandy bank + brighter
+  // inner shimmer. Flow arrow points WEST (left), matching the
+  // in-world stream that flows away from the SE-corner exit.
+  const sy = y + h * 0.58;
+  const sx0 = x + w * 0.08;
+  const sx1 = x + w * 0.92;
+  // Bank
+  ctx.lineCap = "round";
+  ctx.lineWidth = h * 0.18;
+  ctx.strokeStyle = "rgba(196, 168, 110, 0.7)";
   ctx.beginPath();
-  ctx.ellipse(x + w * 0.5, y + h * 0.55, w * 0.5, h * 0.12, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(220, 240, 255, 0.5)";
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.ellipse(x + w * 0.5, y + h * 0.55, w * 0.5, h * 0.12, 0, 0, Math.PI * 2);
+  ctx.moveTo(sx0, sy);
+  ctx.lineTo(sx1, sy);
   ctx.stroke();
-  // Flow arrow
-  ctx.strokeStyle = "rgba(220, 240, 255, 0.8)";
-  ctx.lineWidth = 2;
+  // Water
+  ctx.lineWidth = h * 0.12;
+  ctx.strokeStyle = "rgba(80, 150, 200, 0.85)";
   ctx.beginPath();
-  ctx.moveTo(x + w * 0.32, y + h * 0.55);
-  ctx.lineTo(x + w * 0.68, y + h * 0.55);
-  ctx.moveTo(x + w * 0.62, y + h * 0.51);
-  ctx.lineTo(x + w * 0.68, y + h * 0.55);
-  ctx.lineTo(x + w * 0.62, y + h * 0.59);
+  ctx.moveTo(sx0, sy);
+  ctx.lineTo(sx1, sy);
   ctx.stroke();
+  // Shimmer
+  ctx.lineWidth = h * 0.06;
+  ctx.strokeStyle = "rgba(180, 220, 240, 0.55)";
+  ctx.beginPath();
+  ctx.moveTo(sx0, sy);
+  ctx.lineTo(sx1, sy);
+  ctx.stroke();
+  // Flow chevrons pointing west (toward -x).
+  ctx.strokeStyle = "rgba(220, 240, 255, 0.85)";
+  ctx.lineWidth = 1.8;
+  for (let i = 0; i < 3; i++) {
+    const cx = x + w * (0.3 + i * 0.18);
+    ctx.beginPath();
+    ctx.moveTo(cx + w * 0.04, sy - h * 0.04);
+    ctx.lineTo(cx, sy);
+    ctx.lineTo(cx + w * 0.04, sy + h * 0.04);
+    ctx.stroke();
+  }
 }
 function thumbForest3(
   ctx: CanvasRenderingContext2D,
@@ -214,11 +233,21 @@ function thumbForest5(
   ctx.moveTo(x + 4, cy);
   ctx.lineTo(x + w - 4, cy);
   ctx.stroke();
-  // Stream in the lower third
-  ctx.fillStyle = "rgba(80, 150, 200, 0.65)";
+  // Stream in the lower third — long horizontal capsule, west-flowing
+  const ssy = y + h * 0.75;
+  ctx.lineCap = "round";
+  ctx.lineWidth = h * 0.12;
+  ctx.strokeStyle = "rgba(196, 168, 110, 0.65)";
   ctx.beginPath();
-  ctx.ellipse(x + w * 0.5, y + h * 0.75, w * 0.45, h * 0.08, 0, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.moveTo(x + w * 0.1, ssy);
+  ctx.lineTo(x + w * 0.9, ssy);
+  ctx.stroke();
+  ctx.lineWidth = h * 0.08;
+  ctx.strokeStyle = "rgba(80, 150, 200, 0.85)";
+  ctx.beginPath();
+  ctx.moveTo(x + w * 0.1, ssy);
+  ctx.lineTo(x + w * 0.9, ssy);
+  ctx.stroke();
   // Animal centerpiece
   drawThumbBear(ctx, x + w * 0.32, y + h * 0.62, w * 0.07);
 }

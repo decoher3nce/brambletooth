@@ -14,7 +14,7 @@ import type {
 import { isCharacter, isProjectile, isTrap, isObjective, isProp, isExit, isStream, isCliff, isAnimal } from "../core/entity";
 import type { AnimalEntity } from "../core/entity";
 import type { Vec2 } from "../core/math";
-import { add, scale, normalize, sub, len, dist, clamp, circlesOverlap, segmentsIntersect } from "../core/math";
+import { add, scale, normalize, sub, len, dist, clamp, circlesOverlap, segmentsIntersect, distToSegment } from "../core/math";
 import { ABILITIES } from "../abilities/abilities";
 import { CHARACTERS } from "../characters/characters";
 import type { GameMode, RoundOutcome } from "../modes/mode";
@@ -135,12 +135,17 @@ export class Engine {
         c.facing = Math.atan2(c.vel.y, c.vel.x);
       }
 
-      // Stream: any stream the character's center overlaps slows
-      // their intent velocity and pushes them downstream. Pushes from
-      // multiple overlapping streams stack.
+      // Stream: any stream capsule whose centerline is within
+      // (width + character radius) of the character's position
+      // slows their intent velocity and pushes them downstream.
+      // Pushes from multiple overlapping streams stack. Cheap
+      // broad-phase via the bounding `radius` field before the
+      // segment-distance test.
       for (const s of world.entities) {
         if (!isStream(s)) continue;
         if (!circlesOverlap(c.pos, c.radius, s.pos, s.radius)) continue;
+        const d = distToSegment(c.pos, s.a, s.b);
+        if (d > s.width + c.radius) continue;
         c.vel.x *= s.slowFactor;
         c.vel.y *= s.slowFactor;
         const fl = Math.hypot(s.flow.x, s.flow.y) || 1;

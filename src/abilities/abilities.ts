@@ -11,7 +11,7 @@ import type {
 import { isPlate } from "../core/entity";
 import type { World } from "../core/world";
 import type { Vec2 } from "../core/math";
-import { normalize, sub, scale, add, dist } from "../core/math";
+import { normalize, sub, scale, add, dist, distToSegment } from "../core/math";
 
 // Hard cap on plates per Magnek. Placing a (cap+1)th plate evicts the oldest.
 // Exported so the character select screen can display it as a stat.
@@ -261,10 +261,8 @@ registerAbility({
     if (platesOwnedBy(world, caster.id).length === 0) return false;
     for (const e of world.entities) {
       if (e.kind !== "stream") continue;
-      const dx = caster.pos.x - e.pos.x;
-      const dy = caster.pos.y - e.pos.y;
-      const r = caster.radius + e.radius;
-      if (dx * dx + dy * dy <= r * r) return false;
+      const d = distToSegment(caster.pos, e.a, e.b);
+      if (d <= e.width + caster.radius) return false;
     }
     return true;
   },

@@ -146,14 +146,24 @@ export interface ExitEntity extends BaseEntity {
   kind: "exit";
 }
 
-// Flowing water (Forest Map 2). A circular patch of stream that
-// applies two effects to any character whose center overlaps it:
-//   - velocity is multiplied by `slowFactor` (e.g. 0.5)
+// Flowing water (Forest Map 2 + Map 5). A capsule-shaped stream
+// defined by line segment a→b inflated by `width` on each side.
+// A character is "in stream" when distToSegment(c.pos, a, b) ≤
+// width + c.radius. When in the stream:
+//   - velocity is multiplied by `slowFactor` (e.g. 0.55)
 //   - velocity gains `flow * flowSpeed` (pushes downstream)
 // Magnek's Magnesis cast is also refused while standing in a stream
 // (the water shorts out the magnetic field, narratively).
+//
+// `pos` is the midpoint of (a, b); `radius` is the bounding circle
+// for the capsule (length/2 + width). Both kept on BaseEntity for
+// cheap broad-phase culling, snapshot ordering, and the floor-decal
+// depth sort.
 export interface StreamEntity extends BaseEntity {
   kind: "stream";
+  a: Vec2;
+  b: Vec2;
+  width: number; // half-thickness in world units
   // Flow direction unit vector. Engine normalizes defensively.
   flow: Vec2;
   // Push velocity magnitude (units/sec) added each tick.
