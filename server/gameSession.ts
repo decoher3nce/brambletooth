@@ -6,7 +6,7 @@
 import { World } from "../src/core/world";
 import { Engine } from "../src/core/engine";
 import { HuntMode } from "../src/modes/hunt";
-import { FOREST_ARENA_CONFIG, buildForest } from "../src/arenas/forest";
+import { getMap, defaultMapId } from "../src/maps/registry";
 import { createInput } from "../src/core/input";
 import type { InputState } from "../src/core/input";
 import { HumanController } from "../src/core/humanController";
@@ -54,7 +54,9 @@ export class GameSession {
   private players: SessionPlayer[] = [];
   tickCount = 0;
 
-  constructor(picks: SessionPick[]) {
+  readonly mapId: string;
+
+  constructor(picks: SessionPick[], mapId?: string) {
     if (!picksAreValid(picks)) {
       throw new Error("GameSession requires one hunter and at least one survivor pick");
     }
@@ -67,9 +69,13 @@ export class GameSession {
       (p) => CHARACTERS[p.characterId].role === "survivor",
     );
 
-    this.world = new World(FOREST_ARENA_CONFIG, TIME_LIMIT_SECONDS);
+    // Resolve the chosen map (falls back to the default first map if
+    // the caller passed an unknown id — defensive).
+    const mapDef = getMap(mapId ?? defaultMapId()) ?? getMap(defaultMapId())!;
+    this.mapId = mapDef.id;
+    this.world = new World(mapDef.arenaConfig, TIME_LIMIT_SECONDS);
     // HuntMode owns objective spawning (one-at-a-time, respawn on collect).
-    buildForest(this.world, Math.floor(Math.random() * 1e9), 0);
+    mapDef.buildArena(this.world, Math.floor(Math.random() * 1e9), 0);
 
     this.mode = new HuntMode({
       hunterCharacterId: hunterPick.characterId,

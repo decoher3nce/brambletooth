@@ -27,6 +27,7 @@ import {
   type LobbyPlayerView,
 } from "../src/net/protocol";
 import { CHARACTERS } from "../src/characters/characters";
+import { multiplayerCommonMaps, defaultMapId } from "../src/maps/registry";
 
 const PORT = Number(process.env.PORT) || DEFAULT_PORT;
 const TICK_HZ = 30;
@@ -39,7 +40,28 @@ interface ClientConn {
   name: string;
   characterId: string | null;
   ready: boolean;
+  // Maps this client has completed in campaign mode (received via the
+  // "completedMaps" message after join). Used to compute the lobby
+  // map-vote candidate set. Empty = no completions = only default-
+  // first-maps available.
+  completedMaps: string[];
 }
+
+// Map-vote phase: when all players are ready, the server picks the
+// candidate set (intersection of everyone's playable maps) and runs a
+// 5-second vote. Per-slot votes accumulate; clients see the live
+// tally each broadcast tick. On 0, server picks a winner (random
+// among top vote-getters), broadcasts mapChosen, and starts the
+// existing countdown phase with the chosen map.
+const MAP_VOTE_SECONDS = 5;
+interface VoteState {
+  candidates: string[];                // map ids in display order
+  votes: Map<PlayerSlot, string>;      // slot -> mapId voted for
+  remaining: number;                   // seconds left
+}
+let voteState: VoteState | null = null;
+let voteTimer: ReturnType<typeof setInterval> | null = null;
+let pendingMapId: string | null = null; // set when vote concludes, consumed by tryStartCountdown
 
 // A player who dropped mid-round. Their slot stays reserved (slots[slot] is
 // null = freeable for fresh joins, but the ghost lets us recognize a
@@ -95,8 +117,94 @@ function startBlockReason(): string | null {
 }
 
 function broadcastLobby(): void {
-  if (session || countdownRemaining > 0) return; // not in lobby
+  if (session || countdownRemaining > 0 || voteState) return; // not in lobby
   broadcast({ type: "lobby", players: lobbyViews(), blockedReason: startBlockReason() });
+}
+
+// Snapshot of vote state for broadcasting. Slot index -> mapId | null.
+function voteStateMessage(): ServerMessage {
+  const conns = slots.filter((c): c is ClientConn => c !== null);
+  const votesArr: (string | null)[] = conns.map(
+    (c) => voteState?.votes.get(c.slot) ?? null,
+  );
+  return {
+    type: "mapVoteState",
+    remaining: voteState!.remaining,
+    candidates: voteState!.candidates,
+    votes: votesArr,
+  };
+}
+
+function broadcastVoteState(): void {
+  if (!voteState) return;
+  broadcast(voteStateMessage());
+}
+
+// Compute the candidate set: maps every connected player can play.
+function computeVoteCandidates(): string[] {
+  const conns = slots.filter((c): c is ClientConn => c !== null);
+  const progress = conns.map((c) => ({
+    completedMaps: c.completedMaps,
+    purchasedItems: [] as string[], // server doesn't track shop yet
+  }));
+  const maps = multiplayerCommonMaps(progress);
+  // Always include at least the default first map so a vote can run
+  // even if completedMaps got out of sync.
+  const ids = maps.map((m) => m.id);
+  if (ids.length === 0) ids.push(defaultMapId());
+  return ids;
+}
+
+// Begin the 5-second vote. Replaces the previous "ready → countdown"
+// fast-path. tryStartMapVote runs from the ready handler; after the
+// vote, tryStartCountdown runs with the chosen map.
+function tryStartMapVote(): void {
+  if (session || countdownRemaining > 0 || voteState) return;
+  if (startBlockReason() !== null) return;
+  const candidates = computeVoteCandidates();
+  voteState = { candidates, votes: new Map(), remaining: MAP_VOTE_SECONDS };
+  console.log(`[round] map vote started: ${candidates.length} candidate(s) [${candidates.join(", ")}]`);
+  broadcastVoteState();
+  voteTimer = setInterval(() => {
+    if (!voteState) return;
+    voteState.remaining = Math.max(0, voteState.remaining - 0.2);
+    broadcastVoteState();
+    if (voteState.remaining <= 0) {
+      finishMapVote();
+    }
+  }, 200);
+}
+
+function finishMapVote(): void {
+  if (!voteState) return;
+  // Tally — count votes per mapId. Slots that didn't vote are skipped.
+  const tally = new Map<string, number>();
+  for (const id of voteState.candidates) tally.set(id, 0);
+  for (const mid of voteState.votes.values()) {
+    if (tally.has(mid)) tally.set(mid, (tally.get(mid) ?? 0) + 1);
+  }
+  // If nobody voted, fall back to the first candidate.
+  let chosen = voteState.candidates[0]!;
+  let topCount = -1;
+  const topMaps: string[] = [];
+  for (const [mid, n] of tally.entries()) {
+    if (n > topCount) {
+      topCount = n;
+      topMaps.length = 0;
+      topMaps.push(mid);
+    } else if (n === topCount) {
+      topMaps.push(mid);
+    }
+  }
+  if (topMaps.length > 0) {
+    chosen = topMaps[Math.floor(Math.random() * topMaps.length)]!;
+  }
+  pendingMapId = chosen;
+  voteState = null;
+  if (voteTimer) { clearInterval(voteTimer); voteTimer = null; }
+  console.log(`[round] map vote chose: ${chosen}`);
+  broadcast({ type: "mapChosen", mapId: chosen });
+  tryStartCountdown();
 }
 
 // ---- Round lifecycle ----
@@ -106,13 +214,17 @@ function tryStartCountdown(): void {
   if (startBlockReason() !== null) return;
 
   // Build the session immediately so the world exists for in-game countdown
-  // rendering. The engine ticks only after countdown reaches 0.
+  // rendering. The engine ticks only after countdown reaches 0. Pass the
+  // map id chosen by the vote (or the default if no vote ran — e.g. a
+  // restart that re-uses the same lobby).
   const conns = slots.filter((c): c is ClientConn => c !== null);
   const picks: SessionPick[] = conns.map((c) => ({
     slot: c.slot,
     characterId: c.characterId!,
   }));
-  session = new GameSession(picks);
+  const chosenMap = pendingMapId ?? defaultMapId();
+  pendingMapId = null;
+  session = new GameSession(picks, chosenMap);
   countdownRemaining = COUNTDOWN_SECONDS;
 
   // Tell each client which entity it drives — they need this before
@@ -183,6 +295,9 @@ function endRoundToLobby(): void {
   countdownRemaining = 0;
   serverPaused = false;
   ghosts.clear(); // ghosts only matter mid-round
+  if (voteTimer) { clearInterval(voteTimer); voteTimer = null; }
+  voteState = null;
+  pendingMapId = null;
   for (const c of slots) if (c) c.ready = false;
   broadcast({ type: "toLobby" });
   broadcastLobby();
@@ -231,10 +346,25 @@ function handleMessage(conn: ClientConn, raw: string): void {
       break;
 
     case "ready":
-      if (session || countdownRemaining > 0) break;
+      if (session || countdownRemaining > 0 || voteState) break;
       conn.ready = msg.ready && conn.characterId !== null;
       broadcastLobby();
-      tryStartCountdown();
+      tryStartMapVote();
+      break;
+
+    case "completedMaps":
+      conn.completedMaps = Array.isArray(msg.ids) ? msg.ids.filter((s) => typeof s === "string") : [];
+      // If the vote hasn't started yet, no effect. If it's running,
+      // the candidate set is already locked for this round (no recompute
+      // mid-vote — that would change tiles under voters' fingers).
+      break;
+
+    case "mapVote":
+      if (!voteState) break;
+      if (typeof msg.mapId !== "string") break;
+      if (!voteState.candidates.includes(msg.mapId)) break;
+      voteState.votes.set(conn.slot, msg.mapId);
+      broadcastVoteState();
       break;
 
     case "input":
@@ -282,6 +412,7 @@ function tryRejoin(ws: WebSocket, token: string): ClientConn | null {
     name: ghost.name,
     characterId: ghost.characterId,
     ready: true,
+    completedMaps: [],
   };
   slots[ghost.slot] = conn;
   ghosts.delete(token);
@@ -349,6 +480,7 @@ function onConnection(ws: WebSocket): void {
       name: `Player ${slot + 1}`,
       characterId: null,
       ready: false,
+      completedMaps: [],
     };
     slots[slot] = conn;
     console.log(`[conn] ${conn.playerId} joined as slot ${slot}`);

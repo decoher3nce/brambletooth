@@ -24,6 +24,7 @@ import type { RoundOutcome } from "../modes/mode";
 export type NetPhase =
   | "connecting"
   | "lobby"
+  | "voting"    // 5s map vote between all-ready and countdown
   | "countdown" // pre-round timer
   | "playing"
   | "ended"
@@ -62,6 +63,13 @@ export class NetClient {
   outcome: RoundOutcome = "ongoing";
   paused = false;
   countdownRemaining = 0;
+  // Map-vote state (only meaningful while phase === "voting").
+  voteCandidates: string[] = [];
+  voteVotes: (string | null)[] = [];
+  voteRemaining = 0;
+  // Map id chosen by the vote — set when phase transitions to
+  // countdown via mapChosen. Renderer can display it briefly.
+  chosenMapId: string | null = null;
   notices: NoticeEntry[] = [];
 
   private url: string;
@@ -72,6 +80,9 @@ export class NetClient {
   private noticeSeq = 1;
   // Set by disconnect() — onclose then refuses to schedule a reconnect.
   private intentionalClose = false;
+  // Stashed so we can resend completedMaps on every reconnect (the
+  // server doesn't persist them across the websocket).
+  private completedMaps: string[] = [];
 
   constructor(url: string, name = "") {
     this.url = url;
@@ -106,6 +117,9 @@ export class NetClient {
       if (this.name) join.name = this.name;
       if (this.sessionToken) join.rejoinToken = this.sessionToken;
       ws.send(JSON.stringify(join));
+      // Server uses this to compute the multiplayer map-vote intersection.
+      // Resend on every (re)connect since the server doesn't persist it.
+      ws.send(JSON.stringify({ type: "completedMaps", ids: this.completedMaps }));
     };
     ws.onmessage = (ev) => {
       try {
@@ -209,6 +223,19 @@ export class NetClient {
           bornAt: performance.now(),
         });
         break;
+
+      case "mapVoteState":
+        this.phase = "voting";
+        this.voteCandidates = m.candidates;
+        this.voteVotes = m.votes;
+        this.voteRemaining = m.remaining;
+        break;
+
+      case "mapChosen":
+        this.chosenMapId = m.mapId;
+        // Server will start broadcasting countdown messages next; phase
+        // transitions to "countdown" via that handler.
+        break;
     }
   }
 
@@ -235,6 +262,16 @@ export class NetClient {
   // Ask the server to broadcast an achievement notice to everyone.
   sendAchievement(text: string): void {
     this.send({ type: "achievement", text });
+  }
+  // Map vote — cast / change vote during the voting phase.
+  voteMap(mapId: string): void {
+    this.send({ type: "mapVote", mapId });
+  }
+  // Tell the server which maps this client has completed (drives the
+  // vote candidate intersection). Sent at join time + on any change.
+  sendCompletedMaps(ids: string[]): void {
+    this.completedMaps = ids;
+    this.send({ type: "completedMaps", ids });
   }
 
   // ---- In-round ----

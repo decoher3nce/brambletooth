@@ -64,6 +64,22 @@ export interface PauseMessage {
   paused: boolean;
 }
 
+// Map vote — client casts (or changes) its vote during the map-vote
+// phase. The server tallies on its tick and broadcasts MapVoteState
+// each second; the client UI re-paints from those snapshots.
+export interface MapVoteMessage {
+  type: "mapVote";
+  mapId: string;
+}
+
+// Client tells server which maps it has completed (in campaign mode)
+// so the server can compute the multiplayer intersection. Sent on
+// join (and again if completedMaps changes mid-lobby).
+export interface CompletedMapsMessage {
+  type: "completedMaps";
+  ids: string[];
+}
+
 export type ClientMessage =
   | JoinMessage
   | SelectMessage
@@ -71,7 +87,9 @@ export type ClientMessage =
   | InputMessage
   | RestartMessage
   | PauseMessage
-  | AchievementMessage;
+  | AchievementMessage
+  | MapVoteMessage
+  | CompletedMapsMessage;
 
 // ---- Server → Client ----
 
@@ -164,6 +182,27 @@ export interface AchievementMessage {
   text: string;
 }
 
+// Map-vote phase broadcast. Server sends this every tick during the
+// vote window so the client UI can show live tallies. `remaining` is
+// seconds left in the vote window; when it hits 0 the server picks a
+// winner and starts the countdown / round.
+export interface MapVoteStateMessage {
+  type: "mapVoteState";
+  remaining: number;       // seconds left in the 5s vote window
+  candidates: string[];    // map ids the lobby is voting on (intersection)
+  // Per-slot vote: slot index → mapId (or null if not voted yet). Length
+  // matches the lobby player count.
+  votes: (string | null)[];
+}
+
+// Sent when the vote ends: server announces the chosen map id and
+// transitions to the standard countdown phase. Client can render a
+// brief "winner" frame before the countdown overlay takes over.
+export interface MapChosenMessage {
+  type: "mapChosen";
+  mapId: string;
+}
+
 export type ServerMessage =
   | WelcomeMessage
   | LobbyMessage
@@ -172,4 +211,6 @@ export type ServerMessage =
   | OutcomeMessage
   | ToLobbyMessage
   | CountdownMessage
-  | NoticeMessage;
+  | NoticeMessage
+  | MapVoteStateMessage
+  | MapChosenMessage;

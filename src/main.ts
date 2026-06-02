@@ -32,6 +32,17 @@ import {
   shopKindLabel,
 } from "./shop/catalog";
 import type { ShopItem, ShopItemKind } from "./shop/catalog";
+import {
+  WORLDS,
+  WORLDS_REQUIRED_MAPS,
+  getMap,
+  getWorld,
+  defaultMapId,
+  isWorldUnlocked,
+  isMapUnlockedCampaign,
+  isMapPlayableVsComputer,
+} from "./maps/registry";
+import type { MapDef, ProfileProgress, WorldDef } from "./maps/registry";
 import type { Camera } from "./render/renderer";
 import { HuntMode } from "./modes/hunt";
 import { FOREST_ARENA_CONFIG, buildForest } from "./arenas/forest";
@@ -95,7 +106,13 @@ function chooseMode(mode: AppMode): void {
   started = true;
   // First user gesture — Safari requires this to start audio.
   unlockAudio();
-  if (mode === "net" && !net) net = new NetClient(resolveServerUrl(), getName());
+  if (mode === "net" && !net) {
+    net = new NetClient(resolveServerUrl(), getName());
+    // Push our completed-maps list so the server can compute the
+    // multiplayer map-vote intersection. Resent automatically on
+    // reconnect (NetClient stashes it).
+    net.sendCompletedMaps(getCompletedMaps());
+  }
 }
 
 // ---- Persistent profile (localStorage; synced to server when logged in) ----
@@ -215,6 +232,7 @@ interface ProfileResponse {
     points: number;
     achievements?: (string | { id: string; earnedAt?: number })[];
     inventory?: (string | { id: string; purchasedAt?: number })[];
+    completedMaps?: string[];
   };
   error?: string;
 }
@@ -253,6 +271,9 @@ async function tryLogin(name: string, pin: string): Promise<boolean> {
             : { id: p.id, purchasedAt: Number(p.purchasedAt) || 0 },
         ),
       );
+    }
+    if (Array.isArray(body.profile.completedMaps)) {
+      saveCompletedMaps(body.profile.completedMaps);
     }
     loggedIn = true;
     try { localStorage.setItem(LOGGEDIN_KEY, "1"); } catch { /* ignore */ }
@@ -293,6 +314,7 @@ function scheduleProfileSync(): void {
           points: getPoints(),
           achievements: getEarnedAchievements(),
           inventory: getInventory(),
+          completedMaps: getCompletedMaps(),
         }),
       });
       const body = (await r.json()) as ProfileResponse;
@@ -320,6 +342,10 @@ function scheduleProfileSync(): void {
                 : { id: p.id, purchasedAt: Number(p.purchasedAt) || 0 },
             ),
           );
+        }
+        // CompletedMaps — server already unions; just take what it sends.
+        if (Array.isArray(body.profile.completedMaps)) {
+          saveCompletedMaps(body.profile.completedMaps);
         }
       }
     } catch { /* swallow — local is the source of truth until next sync */ }
@@ -395,6 +421,13 @@ interface PlayState {
   controllers: Map<number, Controller>;
   cam: Camera;
   chosenCharacterId: string;
+  // Which map this round is being played on. Used to mark completion
+  // when a campaign run wins, and to title the HUD's map name.
+  mapId: string;
+  // True when this round is part of campaign flow — winning will mark
+  // the map completed AND advance progression. False for Vs Computer
+  // (no progression effect; still playable).
+  isCampaign: boolean;
   // Pre-round countdown (seconds remaining). > 0 = freeze the world,
   // show a big "3 / 2 / 1" overlay; engine doesn't tick yet so the
   // player has a beat to see the spawn before being thrown in.
@@ -429,7 +462,7 @@ selectScreen.bind(canvas, logicalSize, {
         net.ready(true);
       }
     } else if (appMode === "local") {
-      startRound(chosenId);
+      startRound(chosenId, pendingMapId, pendingIsCampaign);
     }
   },
   onSelect: (id) => {
@@ -474,15 +507,24 @@ touchControls.bind(canvas, logicalSize, {
 // --- Title screen + back-button input ---
 // Title hit zones (only when !started). Back-button hit zone (only when
 // started) is stored separately and computed each draw from logical size.
-let titleButtons: { single: Rect; two: Rect; ffa: Rect; shop: Rect } | null = null;
+let titleButtons: { campaign: Rect; vs: Rect; two: Rect; shop: Rect } | null = null;
 let titleLoginBtn: Rect | null = null;
 let titleLogoutBtn: Rect | null = null;
 let titleProfileBtn: Rect | null = null;
 let titleProfileBackBtn: Rect | null = null;
 let titleProfileSettingsBtn: Rect | null = null;
-type TitleSubScene = "main" | "profile" | "shop" | "settings";
+type TitleSubScene = "main" | "profile" | "shop" | "settings" | "campaign" | "vsMapSelect";
 let titleSubScene: TitleSubScene = "main";
 const backBtnRect: Rect = { x: 20, y: 20, w: 96, h: 36 };
+
+// Map select hit zones (campaign + vs-computer). Rebuilt each draw.
+let mapSelectBackBtn: Rect | null = null;
+let mapTileBtns: { mapId: string; rect: Rect; playable: boolean }[] = [];
+// Last map a campaign/vs-computer flow committed to, threaded through
+// character select to startRound. Defaults to the first map id so the
+// title's quick play paths still work.
+let pendingMapId: string = defaultMapId();
+let pendingIsCampaign: boolean = false;
 
 // Settings sub-scene hit zones (re-built each draw).
 let settingsBackBtn: Rect | null = null;
@@ -511,6 +553,32 @@ function handleTitleTap(p: { x: number; y: number }): void {
     if (titleProfileBackBtn && inRect(p, titleProfileBackBtn)) {
       playSound("ui_back");
       titleSubScene = "main";
+    }
+    return;
+  }
+  // Campaign / Vs Computer map-select sub-scenes: BACK button + per-tile
+  // selection. A playable tile starts the relevant flow.
+  if (titleSubScene === "campaign" || titleSubScene === "vsMapSelect") {
+    if (mapSelectBackBtn && inRect(p, mapSelectBackBtn)) {
+      playSound("ui_back");
+      titleSubScene = "main";
+      return;
+    }
+    for (const tile of mapTileBtns) {
+      if (!inRect(p, tile.rect)) continue;
+      if (!tile.playable) {
+        playSound("ui_denied");
+        return;
+      }
+      playSound("ui_click");
+      pendingMapId = tile.mapId;
+      pendingIsCampaign = titleSubScene === "campaign";
+      // Drop into the standard single-player flow: character select
+      // (we re-use the SelectScreen). chooseMode("local") flips the
+      // engine into local mode and the existing select-screen hand-off
+      // routes onStart → startRound(chosenId, pendingMapId).
+      chooseMode("local");
+      return;
     }
     return;
   }
@@ -607,16 +675,15 @@ function handleTitleTap(p: { x: number; y: number }): void {
     return;
   }
   if (!titleButtons) return;
-  if (inRect(p, titleButtons.single)) {
+  if (inRect(p, titleButtons.campaign)) {
     playSound("ui_click");
-    chooseMode("local");
+    titleSubScene = "campaign";
+  } else if (inRect(p, titleButtons.vs)) {
+    playSound("ui_click");
+    titleSubScene = "vsMapSelect";
   } else if (inRect(p, titleButtons.two)) {
     playSound("ui_click");
     chooseMode("net");
-  } else if (inRect(p, titleButtons.ffa)) {
-    // Grayed out — give audible feedback that the click registered but
-    // nothing's behind it yet.
-    playSound("ui_denied");
   } else if (inRect(p, titleButtons.shop)) {
     playSound("ui_click");
     titleSubScene = "shop";
@@ -706,10 +773,24 @@ function handleBackTap(p: { x: number; y: number }): boolean {
   return true;
 }
 
+// Tap a map vote tile (multiplayer voting phase). Sends the vote to
+// the server; the live tally re-renders from the next state message.
+function handleMapVoteTap(p: { x: number; y: number }): boolean {
+  if (!net || net.phase !== "voting") return false;
+  for (const tile of mapVoteTiles) {
+    if (!inRect(p, tile.rect)) continue;
+    playSound("ui_click");
+    net.voteMap(tile.mapId);
+    return true;
+  }
+  return false;
+}
+
 canvas.addEventListener("mousedown", (ev) => {
   const r = canvas.getBoundingClientRect();
   const p = { x: ev.clientX - r.left, y: ev.clientY - r.top };
   if (started) {
+    if (handleMapVoteTap(p)) return;
     if (handleLeaveGameTap(p)) return;
     handleBackTap(p);
   } else {
@@ -724,6 +805,7 @@ canvas.addEventListener(
     const r = canvas.getBoundingClientRect();
     const p = { x: t.clientX - r.left, y: t.clientY - r.top };
     if (started) {
+      if (handleMapVoteTap(p)) { ev.preventDefault(); return; }
       if (handleLeaveGameTap(p)) { ev.preventDefault(); return; }
       if (handleBackTap(p)) ev.preventDefault();
     } else {
@@ -790,9 +872,14 @@ window.addEventListener("keydown", (ev) => {
 
 // ===== Local mode =====
 
-function startRound(chosenId: string): void {
+function startRound(
+  chosenId: string,
+  mapId: string = defaultMapId(),
+  isCampaign: boolean = false,
+): void {
   const def = CHARACTERS[chosenId];
   if (!def) return;
+  const mapDef = getMap(mapId) ?? getMap(defaultMapId())!;
 
   let hunterId: string;
   let survivorId: string;
@@ -807,10 +894,10 @@ function startRound(chosenId: string): void {
     playerRole = "survivor";
   }
 
-  const world = new World(FOREST_ARENA_CONFIG, TIME_LIMIT_SECONDS);
+  const world = new World(mapDef.arenaConfig, TIME_LIMIT_SECONDS);
   // HuntMode owns objective spawning (one at a time, respawn on collect),
   // so the arena builder places no objectives.
-  buildForest(world, Math.floor(Math.random() * 1e9), 0);
+  mapDef.buildArena(world, Math.floor(Math.random() * 1e9), 0);
 
   const mode = new HuntMode({
     hunterCharacterId: hunterId,
@@ -848,6 +935,8 @@ function startRound(chosenId: string): void {
   play = {
     world, mode, engine, controllers, cam,
     chosenCharacterId: chosenId,
+    mapId: mapDef.id,
+    isCampaign,
     // 3-second pre-round countdown — matches the multiplayer cadence
     // (COUNTDOWN_INGAME_AT) so single-player doesn't feel jarring.
     countdown: 3,
@@ -1017,6 +1106,11 @@ function frameNet(dt: number, dims: { w: number; h: number }): void {
       selectScreen.setLobbyView(buildLobbyView());
       selectScreen.draw(ctx, dims);
       drawPlayerHoverTooltip(dims);
+      drawNoticesToast(dims, n.notices);
+      return;
+    case "voting":
+      netCamInit = false;
+      drawMapVoteScreen(dims, n);
       drawNoticesToast(dims, n.notices);
       return;
     case "countdown": {
@@ -1352,6 +1446,14 @@ function frameTitle(dims: { w: number; h: number }): void {
     frameSettings(dims);
     return;
   }
+  if (titleSubScene === "campaign") {
+    frameCampaign(dims);
+    return;
+  }
+  if (titleSubScene === "vsMapSelect") {
+    frameVsMapSelect(dims);
+    return;
+  }
 
   const cw = dims.w;
   const ch = dims.h;
@@ -1395,7 +1497,8 @@ function frameTitle(dims: { w: number; h: number }): void {
   }
 
   // ---- Two-column button layout ----
-  // Left column (yellow): play modes — SINGLE / MULTI / FFA.
+  // Left column (yellow): play modes — CAMPAIGN / VS COMPUTER /
+  // MULTIPLAYER.
   // Right column (purple): non-play buttons — SHOP, with room for
   // future utility buttons (profile shortcuts, settings, etc.).
   const bh = 56;
@@ -1407,15 +1510,15 @@ function frameTitle(dims: { w: number; h: number }): void {
   const leftX = cw / 2 - totalW / 2;
   const rightX = leftX + colW + colGap;
   const by = ch * 0.58;
-  const single: Rect = { x: leftX, y: by, w: colW, h: bh };
-  const two: Rect = { x: leftX, y: by + bh + gap, w: colW, h: bh };
-  const ffa: Rect = { x: leftX, y: by + 2 * (bh + gap), w: colW, h: bh };
+  const campaign: Rect = { x: leftX, y: by, w: colW, h: bh };
+  const vs: Rect = { x: leftX, y: by + bh + gap, w: colW, h: bh };
+  const two: Rect = { x: leftX, y: by + 2 * (bh + gap), w: colW, h: bh };
   const shop: Rect = { x: rightX, y: by, w: colW, h: bh };
-  titleButtons = { single, two, ffa, shop };
+  titleButtons = { campaign, vs, two, shop };
 
-  drawModeButton(single, "SINGLE PLAYER", "1 vs Computer", true, "yellow");
-  drawModeButton(two, "MULTIPLAYER", "1 vs Many (over your network)", true, "yellow");
-  drawModeButton(ffa, "FREE FOR ALL", "N vs N · with players + computers · COMING SOON", false, "yellow");
+  drawModeButton(campaign, "CAMPAIGN", "Story · unlock maps + worlds", true, "yellow");
+  drawModeButton(vs, "VS COMPUTER", "Pick any unlocked map · vs AI", true, "yellow");
+  drawModeButton(two, "MULTIPLAYER", "1 vs Many · vote on a map", true, "yellow");
   drawModeButton(shop, "SHOP", "Characters · Outfits · Upgrades", true, "purple");
 }
 
@@ -1865,6 +1968,359 @@ function drawSettingsSoundRow(
   ctx.font = "11px system-ui, sans-serif";
   ctx.textAlign = "right";
   ctx.fillText(`${Math.round(cfg.volume * 100)}%`, rowX + rowW - 16, rowY + 67);
+  ctx.textAlign = "left";
+}
+
+// ---- Campaign + Vs Computer map-select sub-scenes ----
+// Shared rendering helpers. Both screens show worlds as horizontal
+// bands, each band a row of map tiles. Tiles are completed (yellow
+// check), playable (white border), or locked (dimmed).
+
+function frameCampaign(dims: { w: number; h: number }): void {
+  drawMapSelectScreen(dims, "campaign");
+}
+function frameVsMapSelect(dims: { w: number; h: number }): void {
+  drawMapSelectScreen(dims, "vs");
+}
+
+function drawMapSelectScreen(
+  dims: { w: number; h: number },
+  mode: "campaign" | "vs",
+): void {
+  const cw = dims.w;
+  const ch = dims.h;
+  ctx.fillStyle = "#1a2421";
+  ctx.fillRect(0, 0, cw, ch);
+  nameInput.style.display = "none";
+  pinInput.style.display = "none";
+
+  // Reset hit zones each draw.
+  mapTileBtns = [];
+
+  // Header
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 36px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(mode === "campaign" ? "CAMPAIGN" : "VS COMPUTER", cw / 2, ch * 0.08);
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.font = "13px system-ui, sans-serif";
+  ctx.fillText(
+    mode === "campaign"
+      ? "Beat each map to unlock the next. 5 completed in a world unlocks the next world."
+      : "Pick any map you've unlocked — replay anytime against the AI.",
+    cw / 2,
+    ch * 0.08 + 22,
+  );
+
+  // World list
+  const progress = localProgress();
+  const panelW = Math.min(720, cw - 80);
+  const panelX = (cw - panelW) / 2;
+  let y = ch * 0.18;
+  const worldH = 140;
+  const tileSize = 84;
+  const tileGap = 12;
+
+  for (const world of WORLDS) {
+    const unlocked = isWorldUnlocked(world.id, progress);
+    drawWorldBand(panelX, y, panelW, worldH, world, unlocked, tileSize, tileGap, mode, progress);
+    y += worldH + 14;
+  }
+
+  // BACK button below the list.
+  const bbw = 160;
+  const bbh = 40;
+  const bbx = (cw - bbw) / 2;
+  const bby = ch - 56;
+  mapSelectBackBtn = { x: bbx, y: bby, w: bbw, h: bbh };
+  ctx.fillStyle = "rgba(40, 52, 48, 0.95)";
+  roundRect(mapSelectBackBtn, 8);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.2)";
+  ctx.lineWidth = 1;
+  roundRect(mapSelectBackBtn, 8);
+  ctx.stroke();
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("← BACK", bbx + bbw / 2, bby + bbh / 2);
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
+}
+
+function drawWorldBand(
+  panelX: number, y: number, panelW: number, h: number,
+  world: WorldDef, unlocked: boolean,
+  tileSize: number, tileGap: number,
+  mode: "campaign" | "vs",
+  progress: ProfileProgress,
+): void {
+  // Band background.
+  ctx.fillStyle = unlocked ? "rgba(20, 30, 28, 0.85)" : "rgba(15, 22, 20, 0.7)";
+  roundRect({ x: panelX, y, w: panelW, h }, 12);
+  ctx.fill();
+  ctx.strokeStyle = unlocked
+    ? (world.accentColor ?? "rgba(255,255,255,0.12)")
+    : "rgba(255,255,255,0.06)";
+  ctx.lineWidth = 1.5;
+  roundRect({ x: panelX, y, w: panelW, h }, 12);
+  ctx.stroke();
+
+  // World name + completion counter.
+  const completedInWorld = world.maps.filter((m) => progress.completedMaps.includes(m.id)).length;
+  ctx.fillStyle = unlocked ? "#fff" : "rgba(255,255,255,0.4)";
+  ctx.font = "bold 16px system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(world.name, panelX + 16, y + 26);
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.fillText(
+    `${completedInWorld} / ${world.maps.length} maps · ${WORLDS_REQUIRED_MAPS} to unlock next`,
+    panelX + 16,
+    y + 42,
+  );
+
+  if (!unlocked) {
+    // Show a locked label + unlock criterion.
+    ctx.fillStyle = "rgba(255,255,255,0.45)";
+    ctx.font = "italic 12px system-ui, sans-serif";
+    ctx.textAlign = "right";
+    let lockText = "🔒 Locked";
+    if (world.unlock.kind === "after-world") {
+      const prev = getWorld(world.unlock.previousWorldId);
+      lockText = `🔒 Complete ${world.unlock.mapsNeeded} in ${prev?.name ?? "previous world"}`;
+    } else if (world.unlock.kind === "shop") {
+      lockText = "🔒 Available in the SHOP";
+    }
+    ctx.fillText(lockText, panelX + panelW - 16, y + 30);
+    ctx.textAlign = "left";
+    return;
+  }
+
+  // Map tile row.
+  const tileTop = y + 56;
+  let tx = panelX + 16;
+  for (const map of world.maps) {
+    const completed = progress.completedMaps.includes(map.id);
+    const playable = mode === "campaign"
+      ? isMapUnlockedCampaign(map.id, progress)
+      : isMapPlayableVsComputer(map.id, progress);
+    drawMapTile(tx, tileTop, tileSize, map, completed, playable, world.accentColor);
+    mapTileBtns.push({
+      mapId: map.id,
+      rect: { x: tx, y: tileTop, w: tileSize, h: tileSize },
+      playable,
+    });
+    tx += tileSize + tileGap;
+    if (tx + tileSize > panelX + panelW - 16) break; // clip overflow
+  }
+}
+
+function drawMapTile(
+  x: number, y: number, size: number,
+  map: MapDef, completed: boolean, playable: boolean,
+  accent: string | undefined,
+): void {
+  // Tile background.
+  ctx.fillStyle = playable ? "rgba(40, 52, 48, 0.9)" : "rgba(20, 26, 24, 0.7)";
+  roundRect({ x, y, w: size, h: size }, 8);
+  ctx.fill();
+  ctx.strokeStyle = completed
+    ? "#ffd84a"
+    : playable
+      ? (accent ?? "rgba(255,255,255,0.25)")
+      : "rgba(255,255,255,0.08)";
+  ctx.lineWidth = completed ? 2.5 : 1.5;
+  roundRect({ x, y, w: size, h: size }, 8);
+  ctx.stroke();
+
+  // Small generic map "preview" — a stylized tile of grass + a couple
+  // of trees + an exit dot. Per-map thumbnails can land later.
+  ctx.save();
+  ctx.beginPath();
+  roundRect({ x: x + 4, y: y + 4, w: size - 8, h: size - 8 }, 6);
+  ctx.clip();
+  // Ground
+  ctx.fillStyle = playable ? "#2a3e2c" : "rgba(60,60,60,0.4)";
+  ctx.fillRect(x + 4, y + 4, size - 8, size - 8);
+  // Two tiny "trees"
+  if (playable) {
+    ctx.fillStyle = "#3a6a3a";
+    ctx.beginPath();
+    ctx.arc(x + size * 0.32, y + size * 0.42, size * 0.1, 0, Math.PI * 2);
+    ctx.arc(x + size * 0.68, y + size * 0.55, size * 0.09, 0, Math.PI * 2);
+    ctx.fill();
+    // Exit dot
+    ctx.fillStyle = "rgba(170, 240, 180, 0.85)";
+    ctx.beginPath();
+    ctx.arc(x + size * 0.78, y + size * 0.78, size * 0.06, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // Name label
+  ctx.fillStyle = playable ? "#fff" : "rgba(255,255,255,0.45)";
+  ctx.font = "bold 11px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(map.name, x + size / 2, y + size - 8);
+
+  // Completed checkmark
+  if (completed) {
+    ctx.fillStyle = "#ffd84a";
+    ctx.font = "bold 16px system-ui, sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText("✓", x + size - 6, y + 18);
+  } else if (!playable) {
+    ctx.fillStyle = "rgba(255,255,255,0.6)";
+    ctx.font = "bold 16px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("🔒", x + size / 2, y + size / 2 - 6);
+    ctx.textBaseline = "alphabetic";
+  }
+  ctx.textAlign = "left";
+}
+
+// ---- Multiplayer map-vote screen ----
+// Shown during NetClient.phase === "voting" (5s between everyone-
+// ready and round countdown). Tile grid of candidate maps, each
+// showing the live vote tally + chip(s) of who voted for it. Tapping
+// a tile sends NetClient.voteMap so the server can update its tally.
+// Hit zones rebuild each frame in mapVoteTiles for the canvas
+// click dispatcher.
+interface MapVoteTile { mapId: string; rect: Rect; }
+let mapVoteTiles: MapVoteTile[] = [];
+
+function drawMapVoteScreen(dims: { w: number; h: number }, n: NetClient): void {
+  const cw = dims.w;
+  const ch = dims.h;
+  ctx.fillStyle = "#1a2421";
+  ctx.fillRect(0, 0, cw, ch);
+
+  mapVoteTiles = [];
+
+  // Header
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 38px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText("VOTE FOR A MAP", cw / 2, ch * 0.12);
+  // Countdown number
+  const remaining = Math.max(0, Math.ceil(n.voteRemaining));
+  ctx.fillStyle = remaining <= 2 ? "#d04848" : "#ffd84a";
+  ctx.font = "bold 56px system-ui, sans-serif";
+  ctx.fillText(String(remaining), cw / 2, ch * 0.12 + 64);
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.font = "13px system-ui, sans-serif";
+  ctx.fillText(
+    "Tap a tile to vote. Change your vote anytime before the timer hits zero. Ties go to random.",
+    cw / 2,
+    ch * 0.12 + 92,
+  );
+
+  // Build tally per candidate from n.voteVotes.
+  const tally = new Map<string, number>();
+  for (const mid of n.voteCandidates) tally.set(mid, 0);
+  for (const v of n.voteVotes) {
+    if (v && tally.has(v)) tally.set(v, (tally.get(v) ?? 0) + 1);
+  }
+  // Per-slot chip color (from selectScreen helper).
+  const slotChip = (slot: number): string => slotColor(slot);
+
+  // Tile grid — center horizontally; up to 4 per row.
+  const tileW = 160;
+  const tileH = 170;
+  const gap = 16;
+  const perRow = Math.max(1, Math.min(4, n.voteCandidates.length));
+  const rowW = perRow * tileW + (perRow - 1) * gap;
+  const startX = (cw - rowW) / 2;
+  const startY = ch * 0.32;
+
+  const mySlot = n.slot;
+  const myVote = mySlot !== null ? (n.voteVotes[mySlot] ?? null) : null;
+
+  for (let i = 0; i < n.voteCandidates.length; i++) {
+    const mid = n.voteCandidates[i]!;
+    const map = getMap(mid);
+    if (!map) continue;
+    const col = i % perRow;
+    const row = Math.floor(i / perRow);
+    const tx = startX + col * (tileW + gap);
+    const ty = startY + row * (tileH + gap);
+    const r: Rect = { x: tx, y: ty, w: tileW, h: tileH };
+    mapVoteTiles.push({ mapId: mid, rect: r });
+    const votes = tally.get(mid) ?? 0;
+    const isMyVote = myVote === mid;
+    drawMapVoteTile(r, map, votes, isMyVote, n.voteVotes, mid, slotChip);
+  }
+}
+
+function drawMapVoteTile(
+  r: Rect, map: MapDef, votes: number, mine: boolean,
+  allVotes: (string | null)[], mid: string,
+  slotChip: (slot: number) => string,
+): void {
+  // Card background
+  ctx.fillStyle = mine ? "rgba(40, 70, 60, 0.95)" : "rgba(20, 30, 28, 0.85)";
+  roundRect(r, 12);
+  ctx.fill();
+  ctx.strokeStyle = mine ? "#ffd84a" : "rgba(255,255,255,0.15)";
+  ctx.lineWidth = mine ? 2.5 : 1.5;
+  roundRect(r, 12);
+  ctx.stroke();
+
+  // Stylized preview (same as the SP map tile)
+  ctx.save();
+  ctx.beginPath();
+  roundRect({ x: r.x + 8, y: r.y + 8, w: r.w - 16, h: r.h - 70 }, 8);
+  ctx.clip();
+  ctx.fillStyle = "#2a3e2c";
+  ctx.fillRect(r.x + 8, r.y + 8, r.w - 16, r.h - 70);
+  ctx.fillStyle = "#3a6a3a";
+  ctx.beginPath();
+  ctx.arc(r.x + r.w * 0.3, r.y + r.h * 0.32, r.w * 0.07, 0, Math.PI * 2);
+  ctx.arc(r.x + r.w * 0.7, r.y + r.h * 0.45, r.w * 0.06, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "rgba(170, 240, 180, 0.85)";
+  ctx.beginPath();
+  ctx.arc(r.x + r.w * 0.78, r.y + r.h * 0.55, r.w * 0.05, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // World + map name
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 13px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(map.name, r.x + r.w / 2, r.y + r.h - 50);
+  const world = getWorld(map.worldId);
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.fillText(world?.name ?? "", r.x + r.w / 2, r.y + r.h - 35);
+
+  // Vote count + voter chips
+  ctx.fillStyle = "#ffd84a";
+  ctx.font = "bold 14px system-ui, sans-serif";
+  ctx.fillText(`${votes} vote${votes === 1 ? "" : "s"}`, r.x + r.w / 2, r.y + r.h - 18);
+
+  // Chips: one small color dot per slot that voted for this map.
+  const chipR = 5;
+  const chipGap = 4;
+  const voters: number[] = [];
+  for (let s = 0; s < allVotes.length; s++) if (allVotes[s] === mid) voters.push(s);
+  const chipsW = voters.length * (chipR * 2) + Math.max(0, voters.length - 1) * chipGap;
+  let cx = r.x + r.w / 2 - chipsW / 2 + chipR;
+  for (const s of voters) {
+    ctx.fillStyle = slotChip(s);
+    ctx.beginPath();
+    ctx.arc(cx, r.y + 14, chipR, 0, Math.PI * 2);
+    ctx.fill();
+    cx += chipR * 2 + chipGap;
+  }
   ctx.textAlign = "left";
 }
 
@@ -2574,6 +3030,44 @@ function isItemOwned(id: string): boolean {
   return getInventory().some((p) => p.id === id);
 }
 
+// ---- Completed-maps storage (campaign progress) ----
+const COMPLETED_MAPS_KEY = "brambletooth.completedMaps";
+function getCompletedMaps(): string[] {
+  try {
+    const raw = localStorage.getItem(COMPLETED_MAPS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((s) => typeof s === "string");
+  } catch { return []; }
+}
+function saveCompletedMaps(list: string[]): void {
+  try { localStorage.setItem(COMPLETED_MAPS_KEY, JSON.stringify(list)); }
+  catch { /* ignore */ }
+}
+function isMapCompleted(id: string): boolean {
+  return getCompletedMaps().includes(id);
+}
+function markMapCompleted(id: string): void {
+  const list = getCompletedMaps();
+  if (list.includes(id)) return;
+  list.push(id);
+  saveCompletedMaps(list);
+  scheduleProfileSync();
+  // Also push to the connected multiplayer server (if any) so future
+  // lobbies include this map in the vote intersection.
+  if (net) net.sendCompletedMaps(list);
+}
+
+// Snapshot of the local profile's progress, used by the registry's
+// pure unlock-check helpers (isWorldUnlocked, isMapPlayable*, etc.).
+function localProgress(): ProfileProgress {
+  return {
+    completedMaps: getCompletedMaps(),
+    purchasedItems: getInventory().map((p) => p.id),
+  };
+}
+
 // Try to purchase the given item. Returns:
 //   "ok"           — purchased, points debited, sync scheduled
 //   "owned"        — already owned (no-op)
@@ -2812,6 +3306,10 @@ function processAwards(
     //                  every nugget the team picked up
     if (me && me.team === "survivor" && me.exited) {
       earnAchievement("forest_world_1");
+      // Mark this map completed in campaign progress. Tied to the
+      // current play state in single-player; multiplayer marks via
+      // the mp-round-completion path below.
+      if (appMode === "local" && play) markMapCompleted(play.mapId);
       const allSurvivors: CharacterEntity[] = [];
       for (const e of world.entities) {
         if (e.kind === "character" && e.team === "survivor") allSurvivors.push(e);

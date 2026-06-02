@@ -28,6 +28,7 @@ export interface ProfileRecord {
   points: number;
   achievements: EarnedAchievement[];  // earned with timestamps
   inventory: PurchasedItem[];         // shop purchases with timestamps
+  completedMaps: string[];            // map ids beaten in campaign
   createdAt: number;
   updatedAt: number;
 }
@@ -105,6 +106,8 @@ function ensureLoaded(): void {
         if (p) {
           p.achievements = migrateAchievements(p.achievements);
           p.inventory = migrateInventory(p.inventory);
+          // Backfill completedMaps on records written before maps existed.
+          if (!Array.isArray(p.completedMaps)) p.completedMaps = [];
         }
       }
       store = raw as ProfileMap;
@@ -163,6 +166,7 @@ export function login(name: unknown, pin: unknown): LoginResult {
     points: 0,
     achievements: [],
     inventory: [],
+    completedMaps: [],
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -179,6 +183,7 @@ export interface PublicProfile {
   points: number;
   achievements: EarnedAchievement[];
   inventory: PurchasedItem[];
+  completedMaps: string[];
 }
 export function lookupPublic(name: unknown): { ok: boolean; profile?: PublicProfile; error?: string } {
   ensureLoaded();
@@ -193,6 +198,7 @@ export function lookupPublic(name: unknown): { ok: boolean; profile?: PublicProf
       points: existing.points,
       achievements: existing.achievements ?? [],
       inventory: existing.inventory ?? [],
+      completedMaps: existing.completedMaps ?? [],
     },
   };
 }
@@ -208,7 +214,7 @@ export function lookupPublic(name: unknown): { ok: boolean; profile?: PublicProf
 export function syncProfile(
   name: unknown,
   pin: unknown,
-  payload: { points?: number; achievements?: unknown; inventory?: unknown },
+  payload: { points?: number; achievements?: unknown; inventory?: unknown; completedMaps?: unknown },
 ): LoginResult {
   ensureLoaded();
   if (!isValidName(name)) return { ok: false, error: "Name must be 1-24 characters" };
@@ -265,6 +271,14 @@ export function syncProfile(
       }
     }
     existing.inventory = [...byId.values()];
+  }
+  if (Array.isArray(payload.completedMaps)) {
+    // Union of server + client completedMaps (client can't un-complete).
+    const set = new Set<string>(existing.completedMaps ?? []);
+    for (const id of payload.completedMaps) {
+      if (typeof id === "string") set.add(id);
+    }
+    existing.completedMaps = [...set];
   }
   existing.updatedAt = Date.now();
   save();
