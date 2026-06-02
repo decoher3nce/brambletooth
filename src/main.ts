@@ -3044,6 +3044,19 @@ function markMapCompleted(id: string): void {
   // Also push to the connected multiplayer server (if any) so future
   // lobbies include this map in the vote intersection.
   if (net) net.sendCompletedMaps(list);
+  // Visible confirmation — if the player doesn't see this banner
+  // after a win, the credit path didn't fire and something else is
+  // wrong. Names the map + next-up so the unlock chain is legible.
+  const map = getMap(id);
+  if (map) {
+    const world = getWorld(map.worldId);
+    const idx = world ? world.maps.findIndex((m) => m.id === id) : -1;
+    const next = world && idx >= 0 && idx + 1 < world.maps.length
+      ? world.maps[idx + 1]
+      : null;
+    const tail = next ? ` · ${next.name} unlocked` : "";
+    fireAchievementBanner(`${map.name.toUpperCase()} COMPLETED${tail}`);
+  }
 }
 
 // Snapshot of the local profile's progress, used by the registry's
@@ -3282,11 +3295,18 @@ function processAwards(
       if (state.lowestHpRatio >= 0.5) earnAchievement("untouchable");
     }
     // ---- Map completion (campaign progress) ----
-    // Any local team win counts as beating the map — picking the
-    // Hunter and winning gives campaign progression too, otherwise
-    // you'd be stuck replaying Map 1 forever. Works in SP (play.mapId)
-    // and MP (net.chosenMapId).
-    if (localTeamWon) {
+    // Belt-and-suspenders: credit on EITHER condition. Either signal
+    // alone has occasionally missed in practice (stale lastSeenTeam,
+    // edge cases at round-end), so we mark on whichever fires first.
+    //   1. localTeamWon — the local player's team won the round
+    //      (hunter caught all survivors, or any survivor exited
+    //      with this player ON the survivor team)
+    //   2. me.exited — the LOCAL survivor personally exited alive,
+    //      regardless of how lastSeenTeam landed
+    // Works in SP (play.mapId) and MP (net.chosenMapId).
+    const localSurvivorExited =
+      me != null && me.team === "survivor" && me.exited;
+    if (localTeamWon || localSurvivorExited) {
       const mapId = appMode === "local" && play
         ? play.mapId
         : net?.chosenMapId ?? null;
