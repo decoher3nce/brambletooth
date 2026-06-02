@@ -3059,11 +3059,29 @@ function markMapCompleted(id: string): void {
   }
 }
 
+// Achievements that prove a specific map was beaten. If an
+// achievement is earned but the map id isn't in completedMaps,
+// localProgress() backfills it on the fly — the UI treats the
+// achievement as authoritative truth that you've beaten the map.
+// Catches any drift where the credit path missed for an old build,
+// a sync race, or anything else stale.
+const ACHIEVEMENT_IMPLIES_MAP: Record<string, string> = {
+  forest_world_1: "forest_1",
+};
+
 // Snapshot of the local profile's progress, used by the registry's
 // pure unlock-check helpers (isWorldUnlocked, isMapPlayable*, etc.).
 function localProgress(): ProfileProgress {
+  const set = new Set(getCompletedMaps());
+  // Backfill from earned achievements — the achievement is granted on
+  // a real exit, so if you earned it, the map was beaten regardless
+  // of whether the completedMaps write landed.
+  for (const a of getEarnedAchievements()) {
+    const mapId = ACHIEVEMENT_IMPLIES_MAP[a.id];
+    if (mapId) set.add(mapId);
+  }
   return {
-    completedMaps: getCompletedMaps(),
+    completedMaps: [...set],
     purchasedItems: getInventory().map((p) => p.id),
   };
 }
@@ -3294,32 +3312,12 @@ function processAwards(
       // HP during the round.
       if (state.lowestHpRatio >= 0.5) earnAchievement("untouchable");
     }
-    // ---- Map completion (campaign progress) ----
-    // Belt-and-suspenders: credit on EITHER condition. Either signal
-    // alone has occasionally missed in practice (stale lastSeenTeam,
-    // edge cases at round-end), so we mark on whichever fires first.
-    //   1. localTeamWon — the local player's team won the round
-    //      (hunter caught all survivors, or any survivor exited
-    //      with this player ON the survivor team)
-    //   2. me.exited — the LOCAL survivor personally exited alive,
-    //      regardless of how lastSeenTeam landed
-    // Works in SP (play.mapId) and MP (net.chosenMapId).
-    const localSurvivorExited =
-      me != null && me.team === "survivor" && me.exited;
-    if (localTeamWon || localSurvivorExited) {
-      const mapId = appMode === "local" && play
-        ? play.mapId
-        : net?.chosenMapId ?? null;
-      if (mapId) markMapCompleted(mapId);
-    }
     // ---- Survivor-exit achievements + bonus tiers ----
-    // Survivor-exit-alive is still the specific condition for the
-    // forest_world_1 achievement and the exit bonus tiers:
-    //  - Team exit  : all surviving survivors made it out (≥2 of them)
-    //  - Lone exit  : only one survivor exited; others died or
-    //                 didn't make it
-    //  - Perfect lone: lone exit AND that survivor personally collected
-    //                  every nugget the team picked up
+    // Run this BEFORE the map-completion block so the
+    // completion banner ('THE GLADE COMPLETED · Streams unlocked')
+    // is the final one shown — otherwise the LONE EXIT / PERFECT
+    // LONE banner here overwrites it within the same tick and the
+    // player never sees the unlock callout.
     if (me && me.team === "survivor" && me.exited) {
       earnAchievement("forest_world_1");
       const allSurvivors: CharacterEntity[] = [];
@@ -3343,6 +3341,18 @@ function processAwards(
         addPoints(POINTS_TEAM_EXIT);
         fireAchievementBanner(`TEAM EXIT · +${POINTS_TEAM_EXIT}`);
       }
+    }
+    // ---- Map completion (campaign progress) ----
+    // Fires LAST so its banner ('THE GLADE COMPLETED · Streams
+    // unlocked') is the active one when the player looks. Credits
+    // on either signal so any path of victory unlocks the next map.
+    const localSurvivorExited =
+      me != null && me.team === "survivor" && me.exited;
+    if (localTeamWon || localSurvivorExited) {
+      const mapId = appMode === "local" && play
+        ? play.mapId
+        : net?.chosenMapId ?? null;
+      if (mapId) markMapCompleted(mapId);
     }
   }
 }
