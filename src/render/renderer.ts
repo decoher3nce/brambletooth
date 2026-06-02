@@ -7,7 +7,7 @@
 
 import type { World } from "../core/world";
 import type { Entity } from "../core/entity";
-import { isCharacter, isProjectile, isTrap, isObjective, isProp, isPlate, isExit, isStream, isCliff } from "../core/entity";
+import { isCharacter, isProjectile, isTrap, isObjective, isProp, isPlate, isExit, isStream, isCliff, isAnimal } from "../core/entity";
 import type { Vec2 } from "../core/math";
 import { CHARACTERS } from "../characters/characters";
 import { ABILITIES } from "../abilities/abilities";
@@ -186,6 +186,7 @@ export class Renderer {
     else if (isExit(e)) this.drawExit(e, cam);
     else if (isStream(e)) this.drawStream(e, cam);
     else if (isCliff(e)) this.drawCliff(e, cam);
+    else if (isAnimal(e)) this.drawAnimal(e, cam);
     else if (isProjectile(e)) this.drawProjectile(e, cam);
     else if (isCharacter(e)) this.drawCharacter(e, cam);
   }
@@ -525,6 +526,153 @@ export class Renderer {
     ctx.lineTo(b.x + hiX * 2, b.y + hiY * 2);
     ctx.stroke();
     ctx.restore();
+  }
+
+  // Forest animal — wandering NPC drawn as a stylized iso silhouette
+  // (deer or bear). Body bobs slightly while moving; the head turns
+  // toward facing direction. Tinted red while in chase mood so the
+  // player can read "this one wants to bite me" from a glance.
+  private drawAnimal(
+    e: Extract<Entity, { kind: "animal" }>,
+    cam: Camera,
+  ): void {
+    const s = worldToScreen(e.pos, cam, this.cw, this.ch);
+    const ctx = this.ctx;
+    const r = e.radius;
+    const moving = Math.hypot(e.vel.x, e.vel.y) > 5;
+    const t = performance.now() / 200;
+    const bob = moving ? Math.sin(t) * 1.2 : 0;
+    const facingX = Math.cos(e.facing);
+    const aggressive = e.mood === "chase";
+
+    // Shadow
+    ctx.save();
+    ctx.translate(s.x, s.y + 4);
+    ctx.scale(1, 0.4);
+    const sg = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+    sg.addColorStop(0, "rgba(0,0,0,0.45)");
+    sg.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = sg;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Mood-aware tint applied on top of the species base color.
+    const tint = (base: string): string => aggressive
+      ? "rgba(208, 72, 72, 0.4)"
+      : base;
+
+    if (e.species === "deer") {
+      // Body — slender brown oval, slightly bigger horizontally.
+      ctx.fillStyle = "#8a6033";
+      ctx.beginPath();
+      ctx.ellipse(s.x, s.y - r * 0.4 + bob, r * 1.1, r * 0.7, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#3d2914";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      // White underbelly highlight
+      ctx.fillStyle = "rgba(245, 230, 200, 0.55)";
+      ctx.beginPath();
+      ctx.ellipse(s.x, s.y - r * 0.25 + bob, r * 0.8, r * 0.32, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Head — small oval facing the direction of travel.
+      const headOffsetX = facingX * r * 0.7;
+      const headX = s.x + headOffsetX;
+      const headY = s.y - r * 0.9 + bob;
+      ctx.fillStyle = "#7d5527";
+      ctx.beginPath();
+      ctx.ellipse(headX, headY, r * 0.32, r * 0.28, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#3d2914";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      // Antlers — two short branching strokes.
+      ctx.strokeStyle = "#dccaa0";
+      ctx.lineWidth = 1.5;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(headX - r * 0.1, headY - r * 0.15);
+      ctx.lineTo(headX - r * 0.18, headY - r * 0.5);
+      ctx.moveTo(headX - r * 0.18, headY - r * 0.5);
+      ctx.lineTo(headX - r * 0.32, headY - r * 0.55);
+      ctx.moveTo(headX - r * 0.18, headY - r * 0.5);
+      ctx.lineTo(headX - r * 0.08, headY - r * 0.62);
+      ctx.moveTo(headX + r * 0.1, headY - r * 0.15);
+      ctx.lineTo(headX + r * 0.18, headY - r * 0.5);
+      ctx.moveTo(headX + r * 0.18, headY - r * 0.5);
+      ctx.lineTo(headX + r * 0.08, headY - r * 0.62);
+      ctx.stroke();
+      // Eye (single dot toward facing).
+      ctx.fillStyle = "#1a1a1a";
+      ctx.beginPath();
+      ctx.arc(headX + facingX * r * 0.15, headY - r * 0.05, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+      // Aggression tint on top of body
+      if (aggressive) {
+        ctx.fillStyle = tint("");
+        ctx.beginPath();
+        ctx.ellipse(s.x, s.y - r * 0.4 + bob, r * 1.1, r * 0.7, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      // Bear — chunky dark-brown blob.
+      ctx.fillStyle = "#4a2f1c";
+      ctx.beginPath();
+      ctx.ellipse(s.x, s.y - r * 0.5 + bob, r * 1.05, r * 0.85, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#1f1108";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // Head — rounder, slightly forward toward facing.
+      const headX = s.x + facingX * r * 0.55;
+      const headY = s.y - r * 0.9 + bob;
+      ctx.fillStyle = "#3d2716";
+      ctx.beginPath();
+      ctx.arc(headX, headY, r * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#1f1108";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      // Snout
+      ctx.fillStyle = "#5e3c22";
+      ctx.beginPath();
+      ctx.arc(headX + facingX * r * 0.28, headY + r * 0.08, r * 0.18, 0, Math.PI * 2);
+      ctx.fill();
+      // Two round ears
+      ctx.fillStyle = "#3d2716";
+      ctx.beginPath();
+      ctx.arc(headX - r * 0.22, headY - r * 0.3, r * 0.12, 0, Math.PI * 2);
+      ctx.arc(headX + r * 0.22, headY - r * 0.3, r * 0.12, 0, Math.PI * 2);
+      ctx.fill();
+      // Eyes
+      ctx.fillStyle = aggressive ? "#ffd84a" : "#1a1a1a";
+      ctx.beginPath();
+      ctx.arc(headX - r * 0.12, headY - r * 0.05, 2, 0, Math.PI * 2);
+      ctx.arc(headX + r * 0.12, headY - r * 0.05, 2, 0, Math.PI * 2);
+      ctx.fill();
+      if (aggressive) {
+        ctx.fillStyle = tint("");
+        ctx.beginPath();
+        ctx.ellipse(s.x, s.y - r * 0.5 + bob, r * 1.05, r * 0.85, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // Thin HP bar (only when wounded, to keep the world quiet).
+    if (e.hp < e.maxHp) {
+      const bw = r * 1.4;
+      const bh = 3;
+      const bx = s.x - bw / 2;
+      const by = s.y - r * 1.55;
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      ctx.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
+      ctx.fillStyle = "#333";
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.fillStyle = aggressive ? "#d04848" : "#a07a3a";
+      ctx.fillRect(bx, by, bw * Math.max(0, e.hp / e.maxHp), bh);
+    }
   }
 
   private drawTrap(e: Extract<Entity, { kind: "trap" }>, cam: Camera): void {

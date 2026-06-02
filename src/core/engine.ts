@@ -11,7 +11,8 @@ import type {
   Entity,
   PropEntity,
 } from "../core/entity";
-import { isCharacter, isProjectile, isTrap, isObjective, isProp, isExit, isStream, isCliff } from "../core/entity";
+import { isCharacter, isProjectile, isTrap, isObjective, isProp, isExit, isStream, isCliff, isAnimal } from "../core/entity";
+import type { AnimalEntity } from "../core/entity";
 import type { Vec2 } from "../core/math";
 import { add, scale, normalize, sub, len, dist, clamp, circlesOverlap, segmentsIntersect } from "../core/math";
 import { ABILITIES } from "../abilities/abilities";
@@ -243,6 +244,21 @@ export class Engine {
           break;
         }
       }
+      // Hit animals (neutral, any team's projectiles hurt them). On hit
+      // the animal records the shooter as its target and (if this is
+      // the first wound of the episode) rolls a flee-vs-chase reaction.
+      if (!e.dead) {
+        for (const a of world.entities) {
+          if (!isAnimal(a)) continue;
+          if (a.dead) continue;
+          if (circlesOverlap(e.pos, e.radius, a.pos, a.radius)) {
+            a.hp -= e.damage;
+            this.reactAnimalToAttack(a, e.ownerId, world);
+            e.dead = true;
+            break;
+          }
+        }
+      }
       // Hit props (block projectile)
       if (!e.dead) {
         for (const p of world.entities) {
@@ -318,11 +334,22 @@ export class Engine {
       }
     }
 
+    // 6c) Animal AI — wander / flee / chase + contact bite.
+    for (const a of world.entities) {
+      if (!isAnimal(a)) continue;
+      if (a.dead) continue;
+      this.tickAnimal(a, dt, world);
+    }
+
     // 7) Death check
     for (const c of world.allCharacters()) {
       if (c.hp <= 0 && !c.dead) {
         c.dead = true;
       }
+    }
+    for (const a of world.entities) {
+      if (!isAnimal(a)) continue;
+      if (a.hp <= 0 && !a.dead) a.dead = true;
     }
 
     world.cleanupDead();
@@ -340,12 +367,15 @@ export class Engine {
     const b = world.arena.bounds;
     p.x = clamp(p.x, b.minX + c.radius, b.maxX - c.radius);
     p.y = clamp(p.y, b.minY + c.radius, b.maxY - c.radius);
-    // Prop pushout (resolve up to a few iterations)
+    // Prop + animal pushout (resolve up to a few iterations). Animals
+    // act as moving blocking obstacles — characters can't walk
+    // through them, so bumping into a deer/bear pushes you back.
     for (let iter = 0; iter < 3; iter++) {
       let resolved = true;
       for (const e of world.entities) {
-        if (!isProp(e)) continue;
-        if (!e.blocking) continue;
+        const isBlocker =
+          (isProp(e) && e.blocking) || (isAnimal(e) && !e.dead);
+        if (!isBlocker) continue;
         const dx = p.x - e.pos.x;
         const dy = p.y - e.pos.y;
         const minDist = c.radius + e.radius;
@@ -364,6 +394,142 @@ export class Engine {
     p.x = clamp(p.x, b.minX + c.radius, b.maxX - c.radius);
     p.y = clamp(p.y, b.minY + c.radius, b.maxY - c.radius);
     return p;
+  }
+
+  // Roll the animal's reaction to taking damage from a character.
+  // Once per "wounded episode": 60% flee, 40% chase. Subsequent hits
+  // during the same episode keep the existing mood. The episode
+  // resets when the mood timer expires and the animal returns to
+  // wander.
+  private reactAnimalToAttack(a: AnimalEntity, attackerId: number, world: World): void {
+    a.targetId = attackerId;
+    if (a.reactionDecided) return;
+    a.reactionDecided = true;
+    // Bears chase more readily than deer (50/50 vs 30/70).
+    const chaseChance = a.species === "bear" ? 0.5 : 0.3;
+    if (Math.random() < chaseChance) {
+      a.mood = "chase";
+      a.moodTimer = 6;
+    } else {
+      a.mood = "flee";
+      a.moodTimer = 5;
+    }
+  }
+
+  // Per-frame animal AI + movement. Modes:
+  //   wander — head toward wanderTarget; on arrival, pick a new one
+  //            within wanderRadius of home. Slow stroll.
+  //   flee   — move away from targetId character until moodTimer 0.
+  //   chase  — move toward targetId character; on contact, bite.
+  // The mood timer counts down each tick; at 0 the animal returns to
+  // wander and clears reactionDecided.
+  private tickAnimal(a: AnimalEntity, dt: number, world: World): void {
+    // Cooldown on chase-bites so contact damage doesn't fire every
+    // frame.
+    if (a.biteCooldown > 0) a.biteCooldown = Math.max(0, a.biteCooldown - dt);
+    // Tick mood timer (chase / flee only — wander is open-ended).
+    if (a.mood !== "wander") {
+      a.moodTimer -= dt;
+      if (a.moodTimer <= 0) {
+        a.mood = "wander";
+        a.moodTimer = 0;
+        a.targetId = null;
+        a.reactionDecided = false;
+      }
+    }
+
+    // Resolve target character (for flee/chase).
+    let targetChar: { pos: Vec2; id: number; exited?: boolean } | null = null;
+    if (a.targetId != null) {
+      for (const c of world.allCharacters()) {
+        if (c.id === a.targetId && !c.dead && !c.exited) {
+          targetChar = c;
+          break;
+        }
+      }
+      // Target lost (dead / exited) — drop back to wander.
+      if (!targetChar) {
+        a.mood = "wander";
+        a.moodTimer = 0;
+        a.targetId = null;
+        a.reactionDecided = false;
+      }
+    }
+
+    // Compute desired velocity per mood.
+    let desiredX = 0;
+    let desiredY = 0;
+    let desiredSpeed = a.speed;
+    if (a.mood === "flee" && targetChar) {
+      const dx = a.pos.x - targetChar.pos.x;
+      const dy = a.pos.y - targetChar.pos.y;
+      const d = Math.hypot(dx, dy) || 1;
+      desiredX = dx / d;
+      desiredY = dy / d;
+      desiredSpeed = a.speed * 1.6;
+    } else if (a.mood === "chase" && targetChar) {
+      const dx = targetChar.pos.x - a.pos.x;
+      const dy = targetChar.pos.y - a.pos.y;
+      const d = Math.hypot(dx, dy) || 1;
+      desiredX = dx / d;
+      desiredY = dy / d;
+      desiredSpeed = a.speed * 1.3;
+      // Contact bite — short cooldown so big bears can't shred
+      // through invincibility status.
+      if (d < a.radius + 18 && a.biteCooldown <= 0) {
+        const targetEntity = world.allCharacters().find((c) => c.id === a.targetId) ?? null;
+        if (targetEntity && !targetEntity.invincible) {
+          targetEntity.hp -= a.species === "bear" ? 18 : 8;
+        }
+        a.biteCooldown = 0.7;
+      }
+    } else {
+      // Wander — head toward the current wanderTarget.
+      const dx = a.wanderTarget.x - a.pos.x;
+      const dy = a.wanderTarget.y - a.pos.y;
+      const d = Math.hypot(dx, dy);
+      if (d < 16) {
+        // Reached it — pick a new target near home.
+        const ang = Math.random() * Math.PI * 2;
+        const r = Math.random() * a.wanderRadius;
+        a.wanderTarget = {
+          x: a.home.x + Math.cos(ang) * r,
+          y: a.home.y + Math.sin(ang) * r,
+        };
+        desiredSpeed = 0; // brief pause
+      } else {
+        desiredX = dx / (d || 1);
+        desiredY = dy / (d || 1);
+        desiredSpeed = a.speed;
+      }
+    }
+
+    a.vel = { x: desiredX * desiredSpeed, y: desiredY * desiredSpeed };
+    if (Math.abs(a.vel.x) + Math.abs(a.vel.y) > 0.5) {
+      a.facing = Math.atan2(a.vel.y, a.vel.x);
+    }
+
+    // Apply movement + clamp to arena bounds. Animals don't push
+    // through props (treated like characters for prop collision).
+    const newPos = { x: a.pos.x + a.vel.x * dt, y: a.pos.y + a.vel.y * dt };
+    const b = world.arena.bounds;
+    newPos.x = Math.max(b.minX + a.radius, Math.min(b.maxX - a.radius, newPos.x));
+    newPos.y = Math.max(b.minY + a.radius, Math.min(b.maxY - a.radius, newPos.y));
+    // Prop pushout (single pass — animals don't squeeze through).
+    for (const p of world.entities) {
+      if (!isProp(p) || !p.blocking) continue;
+      const dx = newPos.x - p.pos.x;
+      const dy = newPos.y - p.pos.y;
+      const minDist = a.radius + p.radius;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < minDist * minDist) {
+        const d = Math.sqrt(d2) || 0.0001;
+        const push = minDist - d;
+        newPos.x += (dx / d) * push;
+        newPos.y += (dy / d) * push;
+      }
+    }
+    a.pos = newPos;
   }
 
   // Cliff cross check (Forest Map 3). For each cliff, see if the

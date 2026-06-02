@@ -15,7 +15,14 @@
 // register their own builders or per-map seeds / arena variations.
 
 import type { ArenaConfig, World } from "../core/world";
-import { FOREST_ARENA_CONFIG, buildForest, buildForest2, buildForest3 } from "../arenas/forest";
+import {
+  FOREST_ARENA_CONFIG,
+  buildForest,
+  buildForest2,
+  buildForest3,
+  buildForest4,
+  buildForest5,
+} from "../arenas/forest";
 
 // How many maps must be completed in a world to unlock the next via
 // the default "after-world" gate.
@@ -23,12 +30,19 @@ export const WORLDS_REQUIRED_MAPS = 5;
 
 export interface MapDef {
   id: string;          // unique across all worlds — profiles store ids
-  name: string;        // "Map 1", "The Glade", etc.
+  name: string;        // "The Glade", "Streams" — no "Map #" prefix
   worldId: string;     // parent world id (denormalized for cheap lookups)
   // Arena config + builder. The builder is called after `new World(config)`
   // to populate props/objectives; the engine spawns characters + the exit.
   arenaConfig: ArenaConfig;
   buildArena: (world: World, seed: number, objectiveCount: number) => void;
+  // Iso-style preview drawn into the map-select tile. Receives the
+  // canvas + the tile's content rect (already clipped by the caller).
+  // If omitted, the renderer falls back to a generic forest scene.
+  thumbnail?: (
+    ctx: CanvasRenderingContext2D,
+    x: number, y: number, w: number, h: number,
+  ) => void;
 }
 
 export type WorldUnlock =
@@ -51,29 +65,242 @@ export interface WorldDef {
 
 // ---- Forest World — only the first map exists today. ----
 
+// ---- Per-map iso-style thumbnails ----
+// All forest maps share a base tile (iso green ground + a few
+// trees + the exit portal in the SE corner) painted by drawForestBase.
+// Each map's thumbnail then layers its distinctive feature on top.
+function drawForestBase(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+): void {
+  // Ground tile painted in two iso bands for a hint of depth.
+  ctx.fillStyle = "#2a4626";
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = "#34522e";
+  ctx.beginPath();
+  ctx.moveTo(x, y + h * 0.4);
+  ctx.lineTo(x + w, y + h * 0.4);
+  ctx.lineTo(x + w, y + h);
+  ctx.lineTo(x, y + h);
+  ctx.closePath();
+  ctx.fill();
+  // Subtle iso grid in the foreground.
+  ctx.strokeStyle = "rgba(255,255,255,0.06)";
+  ctx.lineWidth = 1;
+  for (let i = -h; i < w + h; i += 18) {
+    ctx.beginPath();
+    ctx.moveTo(x + i, y + h);
+    ctx.lineTo(x + i + h * 2, y);
+    ctx.stroke();
+  }
+  // Scatter four iso trees (cones with brown trunks).
+  const treeSpots: [number, number][] = [
+    [0.18, 0.45], [0.62, 0.35], [0.36, 0.62], [0.85, 0.55],
+  ];
+  for (const [fx, fy] of treeSpots) {
+    drawIsoTree(ctx, x + w * fx, y + h * fy, w * 0.07);
+  }
+  // Exit portal — SE corner glow.
+  const ex = x + w * 0.86;
+  const ey = y + h * 0.82;
+  const eg = ctx.createRadialGradient(ex, ey, 0, ex, ey, w * 0.12);
+  eg.addColorStop(0, "rgba(170, 240, 180, 0.9)");
+  eg.addColorStop(1, "rgba(170, 240, 180, 0)");
+  ctx.fillStyle = eg;
+  ctx.beginPath();
+  ctx.ellipse(ex, ey, w * 0.13, w * 0.07, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+function drawIsoTree(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number, scale: number,
+): void {
+  // Trunk
+  ctx.fillStyle = "#3d2814";
+  ctx.fillRect(cx - scale * 0.4, cy, scale * 0.8, scale * 1.2);
+  // Cone canopy (two layered triangles for depth)
+  ctx.fillStyle = "#2a5a30";
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - scale * 1.8);
+  ctx.lineTo(cx - scale * 1.5, cy);
+  ctx.lineTo(cx + scale * 1.5, cy);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "#356e3a";
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - scale * 1.4);
+  ctx.lineTo(cx - scale * 1.1, cy - scale * 0.2);
+  ctx.lineTo(cx + scale * 1.1, cy - scale * 0.2);
+  ctx.closePath();
+  ctx.fill();
+}
+function thumbForest1(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+): void {
+  drawForestBase(ctx, x, y, w, h);
+}
+function thumbForest2(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+): void {
+  drawForestBase(ctx, x, y, w, h);
+  // Stream band — translucent blue ellipse across the middle.
+  ctx.fillStyle = "rgba(80, 150, 200, 0.7)";
+  ctx.beginPath();
+  ctx.ellipse(x + w * 0.5, y + h * 0.55, w * 0.5, h * 0.12, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(220, 240, 255, 0.5)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.ellipse(x + w * 0.5, y + h * 0.55, w * 0.5, h * 0.12, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  // Flow arrow
+  ctx.strokeStyle = "rgba(220, 240, 255, 0.8)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x + w * 0.32, y + h * 0.55);
+  ctx.lineTo(x + w * 0.68, y + h * 0.55);
+  ctx.moveTo(x + w * 0.62, y + h * 0.51);
+  ctx.lineTo(x + w * 0.68, y + h * 0.55);
+  ctx.lineTo(x + w * 0.62, y + h * 0.59);
+  ctx.stroke();
+}
+function thumbForest3(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+): void {
+  drawForestBase(ctx, x, y, w, h);
+  // Cliff edge — horizontal dark line + hatched shadow below.
+  const cy = y + h * 0.5;
+  ctx.fillStyle = "rgba(20, 14, 8, 0.55)";
+  ctx.fillRect(x + 4, cy, w - 8, h * 0.13);
+  ctx.strokeStyle = "#0a0806";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(x + 4, cy);
+  ctx.lineTo(x + w - 4, cy);
+  ctx.stroke();
+  ctx.strokeStyle = "rgba(40, 28, 18, 0.7)";
+  ctx.lineWidth = 1;
+  for (let s = 0; s < w; s += 8) {
+    ctx.beginPath();
+    ctx.moveTo(x + s, cy);
+    ctx.lineTo(x + s + 4, cy + h * 0.13);
+    ctx.stroke();
+  }
+}
+function thumbForest4(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+): void {
+  drawForestBase(ctx, x, y, w, h);
+  // Small bear (foreground) + small deer (mid-back).
+  drawThumbBear(ctx, x + w * 0.42, y + h * 0.72, w * 0.09);
+  drawThumbDeer(ctx, x + w * 0.7, y + h * 0.5, w * 0.07);
+}
+function thumbForest5(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+): void {
+  drawForestBase(ctx, x, y, w, h);
+  // Cliff in the upper third
+  const cy = y + h * 0.38;
+  ctx.fillStyle = "rgba(20, 14, 8, 0.5)";
+  ctx.fillRect(x + 4, cy, w - 8, h * 0.09);
+  ctx.strokeStyle = "#0a0806";
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(x + 4, cy);
+  ctx.lineTo(x + w - 4, cy);
+  ctx.stroke();
+  // Stream in the lower third
+  ctx.fillStyle = "rgba(80, 150, 200, 0.65)";
+  ctx.beginPath();
+  ctx.ellipse(x + w * 0.5, y + h * 0.75, w * 0.45, h * 0.08, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Animal centerpiece
+  drawThumbBear(ctx, x + w * 0.32, y + h * 0.62, w * 0.07);
+}
+function drawThumbBear(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number, scale: number,
+): void {
+  ctx.fillStyle = "#3d2716";
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, scale * 1.2, scale * 0.9, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx + scale * 0.7, cy - scale * 0.6, scale * 0.55, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#1a1a1a";
+  ctx.beginPath();
+  ctx.arc(cx + scale * 0.95, cy - scale * 0.65, scale * 0.1, 0, Math.PI * 2);
+  ctx.fill();
+}
+function drawThumbDeer(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number, scale: number,
+): void {
+  ctx.fillStyle = "#8a6033";
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, scale * 1.3, scale * 0.7, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx + scale * 0.9, cy - scale * 0.7, scale * 0.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#dccaa0";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx + scale * 0.85, cy - scale * 1);
+  ctx.lineTo(cx + scale * 0.8, cy - scale * 1.4);
+  ctx.moveTo(cx + scale * 1, cy - scale * 1);
+  ctx.lineTo(cx + scale * 1.05, cy - scale * 1.4);
+  ctx.stroke();
+}
+
 const FOREST_MAPS: MapDef[] = [
   {
     id: "forest_1",
-    name: "Map 1",
+    name: "The Glade",
     worldId: "forest",
     arenaConfig: FOREST_ARENA_CONFIG,
     // The current arena builder takes a (world, seed, objectiveCount).
     // HuntMode owns objective spawning so objectiveCount stays 0.
     buildArena: (w, seed) => buildForest(w, seed, 0),
+    thumbnail: thumbForest1,
   },
   {
     id: "forest_2",
-    name: "Map 2 · Streams",
+    name: "Streams",
     worldId: "forest",
     arenaConfig: FOREST_ARENA_CONFIG,
     buildArena: (w, seed) => buildForest2(w, seed, 0),
+    thumbnail: thumbForest2,
   },
   {
     id: "forest_3",
-    name: "Map 3 · Cliffs",
+    name: "Cliffs",
     worldId: "forest",
     arenaConfig: FOREST_ARENA_CONFIG,
     buildArena: (w, seed) => buildForest3(w, seed, 0),
+    thumbnail: thumbForest3,
+  },
+  {
+    id: "forest_4",
+    name: "Wildlife",
+    worldId: "forest",
+    arenaConfig: FOREST_ARENA_CONFIG,
+    buildArena: (w, seed) => buildForest4(w, seed, 0),
+    thumbnail: thumbForest4,
+  },
+  {
+    id: "forest_5",
+    name: "The Gauntlet",
+    worldId: "forest",
+    arenaConfig: FOREST_ARENA_CONFIG,
+    buildArena: (w, seed) => buildForest5(w, seed, 0),
+    thumbnail: thumbForest5,
   },
 ];
 

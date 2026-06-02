@@ -75,6 +75,29 @@ registerAbility({
         e.hp -= 18;
       }
     }
+    // Also damage animals in the arc — slashing wildlife triggers
+    // their flee/chase reaction (the engine's projectile hit path
+    // calls reactAnimalToAttack; here we replicate it inline for
+    // melee, since slash applies damage directly rather than via a
+    // moving projectile).
+    for (const e of world.entities) {
+      if (e.kind !== "animal" || e.dead) continue;
+      if (dist(e.pos, hitCenter) <= arcRadius + e.radius) {
+        e.hp -= 18;
+        e.targetId = caster.id;
+        if (!e.reactionDecided) {
+          e.reactionDecided = true;
+          const chaseChance = e.species === "bear" ? 0.5 : 0.3;
+          if (Math.random() < chaseChance) {
+            e.mood = "chase";
+            e.moodTimer = 6;
+          } else {
+            e.mood = "flee";
+            e.moodTimer = 5;
+          }
+        }
+      }
+    }
     // Visual: spawn a short-lived projectile-style marker (no collision)
     // for feedback. We use ttl<0.1 to render as a slash flash.
     world.spawn<ProjectileEntity>({

@@ -17,7 +17,8 @@ export type EntityKind =
   | "plate"
   | "exit"
   | "stream"
-  | "cliff";
+  | "cliff"
+  | "animal";
 
 export interface BaseEntity {
   id: EntityId;
@@ -161,6 +162,39 @@ export interface StreamEntity extends BaseEntity {
   slowFactor: number;
 }
 
+// Forest NPC (Forest Map 4+). Wanders around its spawn point; pushes
+// characters back on contact (blocking collision). When hp drops it
+// rolls a one-time reaction — sometimes flees from the attacker,
+// sometimes chases and bites them. Returns to wander after the
+// reaction window expires.
+export type AnimalSpecies = "deer" | "bear";
+export type AnimalMood = "wander" | "flee" | "chase";
+export interface AnimalEntity extends BaseEntity {
+  kind: "animal";
+  species: AnimalSpecies;
+  hp: number;
+  maxHp: number;
+  speed: number;             // base wander speed (units/sec)
+  facing: number;            // radians
+  vel: Vec2;
+  // AI state
+  mood: AnimalMood;
+  moodTimer: number;         // seconds remaining in current non-wander mood
+  // Current wander target (idle when within reach of it).
+  wanderTarget: Vec2;
+  // Anchor point — wander stays within wanderRadius of this.
+  home: Vec2;
+  wanderRadius: number;
+  // Entity id of the character the animal is reacting to (flee or
+  // chase). Cleared when the mood resets.
+  targetId: EntityId | null;
+  // Set true once we've rolled the flee-vs-chase reaction for the
+  // current "wounded" episode. Reset when mood returns to wander.
+  reactionDecided: boolean;
+  // Per-tick cooldown so chase-bites don't deal damage every frame.
+  biteCooldown: number;
+}
+
 // One-way drop edge (Forest Map 3). Movement that CROSSES the edge
 // in the direction OPPOSING `highNormal` is allowed but deals
 // `fallDamage` once on cross. Movement WITH `highNormal` (low side
@@ -185,7 +219,8 @@ export type Entity =
   | PlateEntity
   | ExitEntity
   | StreamEntity
-  | CliffEntity;
+  | CliffEntity
+  | AnimalEntity;
 
 // Type guards
 export function isCharacter(e: Entity): e is CharacterEntity {
@@ -214,4 +249,7 @@ export function isStream(e: Entity): e is StreamEntity {
 }
 export function isCliff(e: Entity): e is CliffEntity {
   return e.kind === "cliff";
+}
+export function isAnimal(e: Entity): e is AnimalEntity {
+  return e.kind === "animal";
 }

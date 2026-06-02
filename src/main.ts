@@ -2137,27 +2137,19 @@ function drawMapTile(
   roundRect({ x, y, w: size, h: size }, 8);
   ctx.stroke();
 
-  // Small generic map "preview" — a stylized tile of grass + a couple
-  // of trees + an exit dot. Per-map thumbnails can land later.
+  // Map preview — call the map's own iso-style thumbnail if it
+  // ships one. The content rect is the tile interior with a small
+  // pad so the rounded corners read.
   ctx.save();
   ctx.beginPath();
-  roundRect({ x: x + 4, y: y + 4, w: size - 8, h: size - 8 }, 6);
+  roundRect({ x: x + 4, y: y + 4, w: size - 8, h: size - 8 - 14 }, 6);
   ctx.clip();
-  // Ground
-  ctx.fillStyle = playable ? "#2a3e2c" : "rgba(60,60,60,0.4)";
-  ctx.fillRect(x + 4, y + 4, size - 8, size - 8);
-  // Two tiny "trees"
-  if (playable) {
-    ctx.fillStyle = "#3a6a3a";
-    ctx.beginPath();
-    ctx.arc(x + size * 0.32, y + size * 0.42, size * 0.1, 0, Math.PI * 2);
-    ctx.arc(x + size * 0.68, y + size * 0.55, size * 0.09, 0, Math.PI * 2);
-    ctx.fill();
-    // Exit dot
-    ctx.fillStyle = "rgba(170, 240, 180, 0.85)";
-    ctx.beginPath();
-    ctx.arc(x + size * 0.78, y + size * 0.78, size * 0.06, 0, Math.PI * 2);
-    ctx.fill();
+  if (playable && map.thumbnail) {
+    map.thumbnail(ctx, x + 4, y + 4, size - 8, size - 8 - 14);
+  } else {
+    // Locked or no-thumbnail fallback: muted ground swatch.
+    ctx.fillStyle = playable ? "#2a3e2c" : "rgba(40,40,40,0.5)";
+    ctx.fillRect(x + 4, y + 4, size - 8, size - 8 - 14);
   }
   ctx.restore();
 
@@ -2273,22 +2265,17 @@ function drawMapVoteTile(
   roundRect(r, 12);
   ctx.stroke();
 
-  // Stylized preview (same as the SP map tile)
+  // Map preview — dispatch to the map's iso thumbnail.
   ctx.save();
   ctx.beginPath();
   roundRect({ x: r.x + 8, y: r.y + 8, w: r.w - 16, h: r.h - 70 }, 8);
   ctx.clip();
-  ctx.fillStyle = "#2a3e2c";
-  ctx.fillRect(r.x + 8, r.y + 8, r.w - 16, r.h - 70);
-  ctx.fillStyle = "#3a6a3a";
-  ctx.beginPath();
-  ctx.arc(r.x + r.w * 0.3, r.y + r.h * 0.32, r.w * 0.07, 0, Math.PI * 2);
-  ctx.arc(r.x + r.w * 0.7, r.y + r.h * 0.45, r.w * 0.06, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "rgba(170, 240, 180, 0.85)";
-  ctx.beginPath();
-  ctx.arc(r.x + r.w * 0.78, r.y + r.h * 0.55, r.w * 0.05, 0, Math.PI * 2);
-  ctx.fill();
+  if (map.thumbnail) {
+    map.thumbnail(ctx, r.x + 8, r.y + 8, r.w - 16, r.h - 70);
+  } else {
+    ctx.fillStyle = "#2a3e2c";
+    ctx.fillRect(r.x + 8, r.y + 8, r.w - 16, r.h - 70);
+  }
   ctx.restore();
 
   // World + map name

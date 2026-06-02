@@ -2,7 +2,7 @@
 // with collision-aware spacing. Also places objectives.
 
 import type { World, ArenaConfig } from "../core/world";
-import type { PropEntity, ObjectiveEntity, StreamEntity, CliffEntity } from "../core/entity";
+import type { PropEntity, ObjectiveEntity, StreamEntity, CliffEntity, AnimalEntity, AnimalSpecies } from "../core/entity";
 
 export const FOREST_ARENA_CONFIG: ArenaConfig = {
   bounds: { minX: -700, minY: -500, maxX: 700, maxY: 500 },
@@ -155,6 +155,129 @@ export function buildForest2(world: World, seed: number, objectiveCount: number)
       dead: false,
     });
   }
+}
+
+// Spawn an animal NPC at a given world position. Wander radius
+// defines how far it strays from spawn. Bears are tankier + slower;
+// deer are nimbler.
+function spawnAnimal(
+  world: World,
+  pos: { x: number; y: number },
+  species: AnimalSpecies,
+  wanderRadius: number,
+): void {
+  const isBear = species === "bear";
+  world.spawn<AnimalEntity>({
+    kind: "animal",
+    species,
+    pos: { ...pos },
+    radius: isBear ? 22 : 16,
+    dead: false,
+    hp: isBear ? 60 : 25,
+    maxHp: isBear ? 60 : 25,
+    speed: isBear ? 60 : 80,
+    facing: Math.random() * Math.PI * 2,
+    vel: { x: 0, y: 0 },
+    mood: "wander",
+    moodTimer: 0,
+    wanderTarget: { ...pos },
+    home: { ...pos },
+    wanderRadius,
+    targetId: null,
+    reactionDecided: false,
+    biteCooldown: 0,
+  });
+}
+
+// Pick a non-overlapping spot for an animal — avoids props and
+// spawn zones. Uses mulberry32 for determinism per-seed.
+function tryPlaceAnimal(
+  world: World,
+  rng: () => number,
+  bounds: World["arena"]["bounds"],
+  species: AnimalSpecies,
+  wanderRadius: number,
+  margin: number,
+): boolean {
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const x = bounds.minX + margin + rng() * (bounds.maxX - bounds.minX - margin * 2);
+    const y = bounds.minY + margin + rng() * (bounds.maxY - bounds.minY - margin * 2);
+    let ok = true;
+    // Avoid sitting on top of a tree / rock / objective / plate /
+    // existing animal.
+    for (const e of world.entities) {
+      if (e.kind === "prop" && e.blocking) {
+        if (Math.hypot(x - e.pos.x, y - e.pos.y) < e.radius + 40) { ok = false; break; }
+      } else if (e.kind === "objective") {
+        if (Math.hypot(x - e.pos.x, y - e.pos.y) < 60) { ok = false; break; }
+      } else if (e.kind === "animal") {
+        if (Math.hypot(x - e.pos.x, y - e.pos.y) < 80) { ok = false; break; }
+      }
+    }
+    // Also avoid spawn zones (hardcoded from buildForest).
+    if (ok) {
+      const cx = (bounds.minX + bounds.maxX) / 2;
+      if (Math.hypot(x - cx, y - (bounds.maxY - 80)) < 130) ok = false;
+      if (Math.hypot(x - cx, y - (bounds.minY + 80)) < 130) ok = false;
+    }
+    if (ok) {
+      spawnAnimal(world, { x, y }, species, wanderRadius);
+      return true;
+    }
+  }
+  return false;
+}
+
+// Forest Map 4 — scattered wildlife. Three deer (skittish) plus two
+// bears (more aggressive on hit). Animals wander within ~200 units
+// of their spawn point and block movement on contact.
+export function buildForest4(world: World, seed: number, objectiveCount: number): void {
+  buildForest(world, seed, objectiveCount);
+  const rng = mulberry32(seed + 999);
+  for (let i = 0; i < 3; i++) tryPlaceAnimal(world, rng, world.arena.bounds, "deer", 220, 40);
+  for (let i = 0; i < 2; i++) tryPlaceAnimal(world, rng, world.arena.bounds, "bear", 180, 40);
+}
+
+// Forest Map 5 — the gauntlet. Combines the stream band from Map 2,
+// the cliff line from Map 3, and animals from Map 4 into one arena.
+// Stream/cliff placements are shifted so they don't bisect the
+// cliff line awkwardly.
+export function buildForest5(world: World, seed: number, objectiveCount: number): void {
+  buildForest(world, seed, objectiveCount);
+  // Stream band — south of the cliff (south half of map).
+  const radius = 90;
+  const flow = { x: 1, y: 0 };
+  const flowSpeed = 90;
+  const slowFactor = 0.55;
+  const xs = [-480, -240, 0, 240, 480];
+  for (const x of xs) {
+    world.spawn<StreamEntity>({
+      kind: "stream",
+      pos: { x, y: 180 },
+      radius,
+      flow,
+      flowSpeed,
+      slowFactor,
+      dead: false,
+    });
+  }
+  // Cliff — same north-of-middle position as Map 3.
+  const b = world.arena.bounds;
+  world.spawn<CliffEntity>({
+    kind: "cliff",
+    pos: { x: 0, y: -180 },
+    radius: Math.max(b.maxX - b.minX, 100),
+    a: { x: b.minX + 40, y: -180 },
+    b: { x: b.maxX - 40, y: -180 },
+    highNormal: { x: 0, y: -1 },
+    fallDamage: 25,
+    dead: false,
+  });
+  // Animals — two deer + one bear, fewer than Map 4 since the
+  // arena's already crowded with terrain.
+  const rng = mulberry32(seed + 7777);
+  for (let i = 0; i < 2; i++) tryPlaceAnimal(world, rng, b, "deer", 200, 60);
+  tryPlaceAnimal(world, rng, b, "bear", 160, 60);
 }
 
 // Forest Map 3 — adds a cliff edge running east-west across the
