@@ -3282,23 +3282,32 @@ function processAwards(
   // End-of-round: win + survive (one-shot).
   if (outcome !== "ongoing" && !state.endAwarded) {
     state.endAwarded = true;
-    if (state.lastSeenTeam) {
-      if (
+    const localTeamWon =
+      state.lastSeenTeam !== null && (
         (outcome === "hunter_win" && state.lastSeenTeam === "hunter") ||
         (outcome === "survivor_win" && state.lastSeenTeam === "survivor")
-      ) {
-        addPoints(POINTS_WIN);
-      }
-    }
+      );
+    if (localTeamWon) addPoints(POINTS_WIN);
     if (state.lastSeenTeam === "survivor" && me && me.hp > 0) {
       addPoints(POINTS_SURVIVE);
       // Untouchable: survivor finished alive AND never dropped below half
       // HP during the round.
       if (state.lowestHpRatio >= 0.5) earnAchievement("untouchable");
     }
-    // ---- Forest World · Map 1 completion ----
-    // Granted to each survivor who exited alive. Bonus tier stacks on
-    // top of POINTS_WIN + POINTS_SURVIVE:
+    // ---- Map completion (campaign progress) ----
+    // Any local team win counts as beating the map — picking the
+    // Hunter and winning gives campaign progression too, otherwise
+    // you'd be stuck replaying Map 1 forever. Works in SP (play.mapId)
+    // and MP (net.chosenMapId).
+    if (localTeamWon) {
+      const mapId = appMode === "local" && play
+        ? play.mapId
+        : net?.chosenMapId ?? null;
+      if (mapId) markMapCompleted(mapId);
+    }
+    // ---- Survivor-exit achievements + bonus tiers ----
+    // Survivor-exit-alive is still the specific condition for the
+    // forest_world_1 achievement and the exit bonus tiers:
     //  - Team exit  : all surviving survivors made it out (≥2 of them)
     //  - Lone exit  : only one survivor exited; others died or
     //                 didn't make it
@@ -3306,10 +3315,6 @@ function processAwards(
     //                  every nugget the team picked up
     if (me && me.team === "survivor" && me.exited) {
       earnAchievement("forest_world_1");
-      // Mark this map completed in campaign progress. Tied to the
-      // current play state in single-player; multiplayer marks via
-      // the mp-round-completion path below.
-      if (appMode === "local" && play) markMapCompleted(play.mapId);
       const allSurvivors: CharacterEntity[] = [];
       for (const e of world.entities) {
         if (e.kind === "character" && e.team === "survivor") allSurvivors.push(e);
