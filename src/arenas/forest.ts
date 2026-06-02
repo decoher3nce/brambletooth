@@ -3,6 +3,7 @@
 
 import type { World, ArenaConfig } from "../core/world";
 import type { PropEntity, ObjectiveEntity, StreamEntity, CliffEntity, AnimalEntity, AnimalSpecies } from "../core/entity";
+import { distToSegment } from "../core/math";
 
 export const FOREST_ARENA_CONFIG: ArenaConfig = {
   bounds: { minX: -700, minY: -500, maxX: 700, maxY: 500 },
@@ -162,6 +163,32 @@ function makeMeanderingPoints(
   return pts;
 }
 
+// Remove trees and stumps that ended up inside (or hugging) the
+// stream — real streams don't sprout trees through them. Rocks
+// stay; they look right sitting in the water. Called AFTER both
+// buildForest (which has already placed props randomly) and the
+// stream spawn so we can filter against the final centerline.
+function clearVegetationFromStream(
+  world: World,
+  points: { x: number; y: number }[],
+  width: number,
+): void {
+  // Padding past the stream edge: keeps a tree from poking into the
+  // water visually even if its trunk center is just outside the
+  // capsule. 6px gives a little riverbank.
+  const pad = 6;
+  world.entities = world.entities.filter((e) => {
+    if (e.kind !== "prop") return true;
+    if (e.shape !== "tree" && e.shape !== "stump") return true;
+    let minDist = Infinity;
+    for (let i = 0; i < points.length - 1; i++) {
+      const d = distToSegment(e.pos, points[i]!, points[i + 1]!);
+      if (d < minDist) minDist = d;
+    }
+    return minDist >= width + e.radius + pad;
+  });
+}
+
 // Bounding circle for a polyline (used for cheap broad-phase + the
 // floor-decal depth sort).
 function polylineBounds(
@@ -199,6 +226,7 @@ export function buildForest2(world: World, seed: number, objectiveCount: number)
     slowFactor: 0.55,
     dead: false,
   });
+  clearVegetationFromStream(world, points, 65);
 }
 
 // Spawn an animal NPC at a given world position. Wander radius
@@ -304,6 +332,7 @@ export function buildForest5(world: World, seed: number, objectiveCount: number)
     slowFactor: 0.55,
     dead: false,
   });
+  clearVegetationFromStream(world, streamPoints, 60);
   // Cliff — same north-of-middle position as Map 3.
   world.spawn<CliffEntity>({
     kind: "cliff",
