@@ -11,9 +11,9 @@ import type {
   Entity,
   PropEntity,
 } from "../core/entity";
-import { isCharacter, isProjectile, isTrap, isObjective, isProp, isExit } from "../core/entity";
+import { isCharacter, isProjectile, isTrap, isObjective, isProp, isExit, isStream, isCliff } from "../core/entity";
 import type { Vec2 } from "../core/math";
-import { add, scale, normalize, sub, len, dist, clamp, circlesOverlap } from "../core/math";
+import { add, scale, normalize, sub, len, dist, clamp, circlesOverlap, segmentsIntersect } from "../core/math";
 import { ABILITIES } from "../abilities/abilities";
 import { CHARACTERS } from "../characters/characters";
 import type { GameMode, RoundOutcome } from "../modes/mode";
@@ -134,10 +134,27 @@ export class Engine {
         c.facing = Math.atan2(c.vel.y, c.vel.x);
       }
 
+      // Stream: any stream the character's center overlaps slows
+      // their intent velocity and pushes them downstream. Pushes from
+      // multiple overlapping streams stack.
+      for (const s of world.entities) {
+        if (!isStream(s)) continue;
+        if (!circlesOverlap(c.pos, c.radius, s.pos, s.radius)) continue;
+        c.vel.x *= s.slowFactor;
+        c.vel.y *= s.slowFactor;
+        const fl = Math.hypot(s.flow.x, s.flow.y) || 1;
+        c.vel.x += (s.flow.x / fl) * s.flowSpeed;
+        c.vel.y += (s.flow.y / fl) * s.flowSpeed;
+      }
+
       // Apply movement with prop collision (simple slide-on-block)
       const newPos = add(c.pos, scale(c.vel, dt));
       const resolved = this.resolveCharacterMove(c, newPos);
-      c.pos = resolved;
+      // Cliff one-way collision: if the move crosses a cliff edge in
+      // the "uphill" direction it's blocked; in the "downhill"
+      // direction it's allowed and deals fall damage on cross.
+      const cliffResolved = this.resolveCliffCross(c, resolved, world);
+      c.pos = cliffResolved;
     }
 
     // 3) Fire abilities (after movement so aim is fresh)
@@ -346,6 +363,39 @@ export class Engine {
     // Re-clamp after pushout
     p.x = clamp(p.x, b.minX + c.radius, b.maxX - c.radius);
     p.y = clamp(p.y, b.minY + c.radius, b.maxY - c.radius);
+    return p;
+  }
+
+  // Cliff cross check (Forest Map 3). For each cliff, see if the
+  // segment (from → to) crosses the edge. If it does:
+  //   - high-side → low-side  : allow, deal fallDamage once
+  //   - low-side  → high-side  : block, return `from` unchanged
+  // Returns the final position after all cliffs resolve.
+  private resolveCliffCross(c: CharacterEntity, target: Vec2, world: World): Vec2 {
+    if (c.exited || c.transport) return target; // ignore mid-transport / escaped
+    let p = { ...target };
+    for (const cl of world.entities) {
+      if (!isCliff(cl)) continue;
+      if (!segmentsIntersect(c.pos, p, cl.a, cl.b)) continue;
+      // Direction of the character's move.
+      const mx = p.x - c.pos.x;
+      const my = p.y - c.pos.y;
+      // dot < 0 means moving AGAINST the high normal (falling DOWN).
+      const dot = mx * cl.highNormal.x + my * cl.highNormal.y;
+      if (dot > 0) {
+        // Uphill — wall. Revert to current pos.
+        p = { ...c.pos };
+      } else if (dot < 0) {
+        // Downhill — fall damage, but only if the character isn't
+        // already mid-air (no double-dipping on the same tick) and
+        // isn't invincible. Status "falling" briefly blocks repeat
+        // damage from hovering on the edge.
+        if (!c.invincible && !c.statuses["falling"]) {
+          c.hp -= cl.fallDamage;
+          c.statuses["falling"] = 0.4;
+        }
+      }
+    }
     return p;
   }
 }

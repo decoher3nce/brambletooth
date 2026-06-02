@@ -231,9 +231,20 @@ registerAbility({
     "Channel 1.2s to lock onto a random plate, then hurtle there on a 1.4s eased arc. Vulnerable in flight.",
   cooldown: 5.0,
   chargeTime: 1.2,
-  // Refuse the cast if Magnek has no plates placed. No cd applied,
-  // no channel started — feels like the button "didn't take."
-  canCast: ({ world, caster }) => platesOwnedBy(world, caster.id).length > 0,
+  // Refuse the cast if Magnek has no plates placed, OR he's standing
+  // in a stream — the water shorts out the magnetic pull. No cd
+  // applied either way; feels like the button "didn't take."
+  canCast: ({ world, caster }) => {
+    if (platesOwnedBy(world, caster.id).length === 0) return false;
+    for (const e of world.entities) {
+      if (e.kind !== "stream") continue;
+      const dx = caster.pos.x - e.pos.x;
+      const dy = caster.pos.y - e.pos.y;
+      const r = caster.radius + e.radius;
+      if (dx * dx + dy * dy <= r * r) return false;
+    }
+    return true;
+  },
   cast: () => {
     // No instant effect — the channel windup is the cast. Visual feedback
     // happens via the renderer reading caster.charging.

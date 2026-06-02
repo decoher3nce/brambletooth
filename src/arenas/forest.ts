@@ -2,7 +2,7 @@
 // with collision-aware spacing. Also places objectives.
 
 import type { World, ArenaConfig } from "../core/world";
-import type { PropEntity, ObjectiveEntity } from "../core/entity";
+import type { PropEntity, ObjectiveEntity, StreamEntity, CliffEntity } from "../core/entity";
 
 export const FOREST_ARENA_CONFIG: ArenaConfig = {
   bounds: { minX: -700, minY: -500, maxX: 700, maxY: 500 },
@@ -130,4 +130,51 @@ export function buildForest(world: World, seed: number, objectiveCount: number):
     });
     placed.push({ x: ox, y: oy, r: 30 });
   }
+}
+
+// Forest Map 2 — adds a chain of streams running east across the
+// middle band of the map. Characters that wade in get slowed and
+// pushed downstream; Magnesis won't fire while standing in one.
+export function buildForest2(world: World, seed: number, objectiveCount: number): void {
+  buildForest(world, seed, objectiveCount);
+  // Four overlapping stream circles forming a "river" mid-map.
+  // East-flowing (toward +x), moderate speed, half-speed slow.
+  const radius = 95;
+  const flow = { x: 1, y: 0 };
+  const flowSpeed = 90;
+  const slowFactor = 0.55;
+  const xs = [-450, -200, 60, 320, 560];
+  for (const x of xs) {
+    world.spawn<StreamEntity>({
+      kind: "stream",
+      pos: { x, y: -40 },
+      radius,
+      flow,
+      flowSpeed,
+      slowFactor,
+      dead: false,
+    });
+  }
+}
+
+// Forest Map 3 — adds a cliff edge running east-west across the
+// upper third of the map. Survivors spawn north (high ground) and
+// must drop south to access objectives and the exit, taking damage
+// on the fall. Hunters spawn south and CAN'T climb the cliff.
+export function buildForest3(world: World, seed: number, objectiveCount: number): void {
+  buildForest(world, seed, objectiveCount);
+  // One long horizontal cliff at y=-180. High side = north (-y in
+  // screen-down, but here "north" is -y in world-y per arena bounds
+  // minY < maxY). highNormal points toward decreasing y (north).
+  const b = world.arena.bounds;
+  world.spawn<CliffEntity>({
+    kind: "cliff",
+    pos: { x: 0, y: -180 },
+    radius: Math.max(b.maxX - b.minX, 100), // bounding-r for snapshot ordering
+    a: { x: b.minX + 40, y: -180 },
+    b: { x: b.maxX - 40, y: -180 },
+    highNormal: { x: 0, y: -1 },
+    fallDamage: 25,
+    dead: false,
+  });
 }

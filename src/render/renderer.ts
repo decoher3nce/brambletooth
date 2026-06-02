@@ -7,7 +7,7 @@
 
 import type { World } from "../core/world";
 import type { Entity } from "../core/entity";
-import { isCharacter, isProjectile, isTrap, isObjective, isProp, isPlate, isExit } from "../core/entity";
+import { isCharacter, isProjectile, isTrap, isObjective, isProp, isPlate, isExit, isStream, isCliff } from "../core/entity";
 import type { Vec2 } from "../core/math";
 import { CHARACTERS } from "../characters/characters";
 import { ABILITIES } from "../abilities/abilities";
@@ -159,12 +159,14 @@ export class Renderer {
   // line is blocked by a prop.
   drawEntities(world: World, cam: Camera, visible?: (e: Entity) => boolean): void {
     const sorted = [...world.entities].sort((a, b) => {
-      // Floor decals (plates, exit zone) push to a slightly lower
-      // sort y so a character standing on them always renders ON TOP
-      // (feet + shadow visible above the disk). Without this the
-      // x-tiebreak flips arbitrarily.
-      const isFloorA = a.kind === "plate" || a.kind === "exit";
-      const isFloorB = b.kind === "plate" || b.kind === "exit";
+      // Floor decals (plates, exit zone, streams, cliffs) push to a
+      // slightly lower sort y so characters standing on / near them
+      // always render ON TOP (feet + shadow visible). Without this
+      // the x-tiebreak flips arbitrarily at coincident positions.
+      const isFloorA = a.kind === "plate" || a.kind === "exit"
+        || a.kind === "stream" || a.kind === "cliff";
+      const isFloorB = b.kind === "plate" || b.kind === "exit"
+        || b.kind === "stream" || b.kind === "cliff";
       const ay = isFloorA ? a.pos.y - 0.5 : a.pos.y;
       const by = isFloorB ? b.pos.y - 0.5 : b.pos.y;
       if (ay !== by) return ay - by;
@@ -182,6 +184,8 @@ export class Renderer {
     else if (isTrap(e)) this.drawTrap(e, cam);
     else if (isPlate(e)) this.drawPlate(e, cam);
     else if (isExit(e)) this.drawExit(e, cam);
+    else if (isStream(e)) this.drawStream(e, cam);
+    else if (isCliff(e)) this.drawCliff(e, cam);
     else if (isProjectile(e)) this.drawProjectile(e, cam);
     else if (isCharacter(e)) this.drawCharacter(e, cam);
   }
@@ -392,6 +396,135 @@ export class Renderer {
     ctx.textBaseline = "alphabetic";
     ctx.fillText("EXIT", s.x, s.y - r * 0.7 - 4);
     ctx.textAlign = "left";
+  }
+
+  // Stream — flowing water disk. Translucent blue ellipse on the iso
+  // ground plane + animated chevron pattern showing flow direction.
+  private drawStream(
+    e: Extract<Entity, { kind: "stream" }>,
+    cam: Camera,
+  ): void {
+    const s = worldToScreen(e.pos, cam, this.cw, this.ch);
+    const ctx = this.ctx;
+    const r = e.radius;
+    ctx.save();
+    ctx.translate(s.x, s.y);
+    ctx.scale(1, 0.5); // iso-elliptical
+    // Body
+    ctx.fillStyle = "rgba(80, 150, 200, 0.55)";
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fill();
+    // Brighter inner shimmer
+    const grad = ctx.createRadialGradient(0, -r * 0.2, 0, 0, 0, r);
+    grad.addColorStop(0, "rgba(180, 220, 240, 0.45)");
+    grad.addColorStop(1, "rgba(180, 220, 240, 0)");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    // Animated flow chevrons drawn screen-aligned (no iso squish — so
+    // they read as a moving current rather than a squashed pattern).
+    const fl = Math.hypot(e.flow.x, e.flow.y) || 1;
+    const fx = e.flow.x / fl;
+    const fy = e.flow.y / fl;
+    const angle = Math.atan2(fy, fx);
+    const t = (performance.now() / 600) % 1;
+    ctx.save();
+    ctx.translate(s.x, s.y);
+    ctx.rotate(angle);
+    ctx.strokeStyle = "rgba(220, 240, 255, 0.55)";
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    // Chevrons march along the +x axis. Y compressed to feel iso.
+    const chevW = 14;
+    const chevH = 7;
+    const spacing = 32;
+    const yScale = 0.5;
+    const half = r;
+    for (let off = -half; off <= half; off += spacing) {
+      const x = off + t * spacing;
+      if (x < -half - chevW || x > half + chevW) continue;
+      ctx.beginPath();
+      ctx.moveTo(x - chevW * 0.5, (-chevH) * yScale);
+      ctx.lineTo(x, 0);
+      ctx.lineTo(x - chevW * 0.5, chevH * yScale);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Cliff — a one-way drop edge. Renders the cliff top as a bold
+  // dark line with a hatched "fall here" shadow band trailing in the
+  // anti-normal direction (low side).
+  private drawCliff(
+    e: Extract<Entity, { kind: "cliff" }>,
+    cam: Camera,
+  ): void {
+    const ctx = this.ctx;
+    const a = worldToScreen(e.a, cam, this.cw, this.ch);
+    const b = worldToScreen(e.b, cam, this.cw, this.ch);
+    // Compute screen-space perpendicular AWAY from the high side
+    // (i.e. toward the low / fall side). Use the world-space
+    // highNormal projected to screen-space via the same iso scale
+    // factor (~0.5 vertical). Cheap approximation.
+    const lowX = -e.highNormal.x;
+    const lowY = -e.highNormal.y * 0.5;
+    const lowLen = Math.hypot(lowX, lowY) || 1;
+    const lnx = lowX / lowLen;
+    const lny = lowY / lowLen;
+    const bandDepth = 24;
+    // Hatched fall band — semi-transparent dark trapezoid.
+    ctx.save();
+    ctx.fillStyle = "rgba(20, 14, 8, 0.45)";
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.lineTo(b.x + lnx * bandDepth, b.y + lny * bandDepth);
+    ctx.lineTo(a.x + lnx * bandDepth, a.y + lny * bandDepth);
+    ctx.closePath();
+    ctx.fill();
+    // Diagonal hatch lines across the band.
+    ctx.strokeStyle = "rgba(40, 28, 18, 0.75)";
+    ctx.lineWidth = 1.5;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const edgeLen = Math.hypot(dx, dy) || 1;
+    const ex = dx / edgeLen;
+    const ey = dy / edgeLen;
+    const hatchSpacing = 12;
+    for (let s = 0; s < edgeLen; s += hatchSpacing) {
+      const x0 = a.x + ex * s;
+      const y0 = a.y + ey * s;
+      const x1 = x0 + lnx * bandDepth + ex * 4;
+      const y1 = y0 + lny * bandDepth + ey * 4;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+    }
+    ctx.restore();
+    // Cliff top edge line — bold dark.
+    ctx.save();
+    ctx.strokeStyle = "#0a0806";
+    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    // Highlight along the very top — slim warm line on the high side.
+    const hiX = -lnx;
+    const hiY = -lny;
+    ctx.strokeStyle = "rgba(160, 130, 90, 0.7)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(a.x + hiX * 2, a.y + hiY * 2);
+    ctx.lineTo(b.x + hiX * 2, b.y + hiY * 2);
+    ctx.stroke();
+    ctx.restore();
   }
 
   private drawTrap(e: Extract<Entity, { kind: "trap" }>, cam: Camera): void {

@@ -15,7 +15,9 @@ export type EntityKind =
   | "objective"
   | "prop"
   | "plate"
-  | "exit";
+  | "exit"
+  | "stream"
+  | "cliff";
 
 export interface BaseEntity {
   id: EntityId;
@@ -143,6 +145,37 @@ export interface ExitEntity extends BaseEntity {
   kind: "exit";
 }
 
+// Flowing water (Forest Map 2). A circular patch of stream that
+// applies two effects to any character whose center overlaps it:
+//   - velocity is multiplied by `slowFactor` (e.g. 0.5)
+//   - velocity gains `flow * flowSpeed` (pushes downstream)
+// Magnek's Magnesis cast is also refused while standing in a stream
+// (the water shorts out the magnetic field, narratively).
+export interface StreamEntity extends BaseEntity {
+  kind: "stream";
+  // Flow direction unit vector. Engine normalizes defensively.
+  flow: Vec2;
+  // Push velocity magnitude (units/sec) added each tick.
+  flowSpeed: number;
+  // 0..1 multiplier applied to the character's intent velocity.
+  slowFactor: number;
+}
+
+// One-way drop edge (Forest Map 3). Movement that CROSSES the edge
+// in the direction OPPOSING `highNormal` is allowed but deals
+// `fallDamage` once on cross. Movement WITH `highNormal` (low side
+// → high side) is blocked, treated as a wall.
+//
+// The edge itself is the line segment a→b. `highNormal` is a unit
+// vector pointing from the edge toward the "high" (cliff-top) side.
+export interface CliffEntity extends BaseEntity {
+  kind: "cliff";
+  a: Vec2;
+  b: Vec2;
+  highNormal: Vec2;
+  fallDamage: number;
+}
+
 export type Entity =
   | CharacterEntity
   | ProjectileEntity
@@ -150,7 +183,9 @@ export type Entity =
   | ObjectiveEntity
   | PropEntity
   | PlateEntity
-  | ExitEntity;
+  | ExitEntity
+  | StreamEntity
+  | CliffEntity;
 
 // Type guards
 export function isCharacter(e: Entity): e is CharacterEntity {
@@ -173,4 +208,10 @@ export function isPlate(e: Entity): e is PlateEntity {
 }
 export function isExit(e: Entity): e is ExitEntity {
   return e.kind === "exit";
+}
+export function isStream(e: Entity): e is StreamEntity {
+  return e.kind === "stream";
+}
+export function isCliff(e: Entity): e is CliffEntity {
+  return e.kind === "cliff";
 }

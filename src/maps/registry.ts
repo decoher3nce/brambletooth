@@ -15,7 +15,7 @@
 // register their own builders or per-map seeds / arena variations.
 
 import type { ArenaConfig, World } from "../core/world";
-import { FOREST_ARENA_CONFIG, buildForest } from "../arenas/forest";
+import { FOREST_ARENA_CONFIG, buildForest, buildForest2, buildForest3 } from "../arenas/forest";
 
 // How many maps must be completed in a world to unlock the next via
 // the default "after-world" gate.
@@ -60,6 +60,20 @@ const FOREST_MAPS: MapDef[] = [
     // The current arena builder takes a (world, seed, objectiveCount).
     // HuntMode owns objective spawning so objectiveCount stays 0.
     buildArena: (w, seed) => buildForest(w, seed, 0),
+  },
+  {
+    id: "forest_2",
+    name: "Map 2 · Streams",
+    worldId: "forest",
+    arenaConfig: FOREST_ARENA_CONFIG,
+    buildArena: (w, seed) => buildForest2(w, seed, 0),
+  },
+  {
+    id: "forest_3",
+    name: "Map 3 · Cliffs",
+    worldId: "forest",
+    arenaConfig: FOREST_ARENA_CONFIG,
+    buildArena: (w, seed) => buildForest3(w, seed, 0),
   },
 ];
 

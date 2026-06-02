@@ -52,6 +52,25 @@ export function circlesOverlap(a: Vec2, ra: number, b: Vec2, rb: number): boolea
   return dx * dx + dy * dy <= r * r;
 }
 
+// Signed orientation of three points (sign of the 2D cross product).
+// Returns +1 / 0 / -1 — used by segmentsIntersect.
+function orient(p: Vec2, q: Vec2, r: Vec2): number {
+  const v = (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
+  return v > 0 ? 1 : v < 0 ? -1 : 0;
+}
+
+// Returns true when segment a-b properly crosses segment c-d. Used
+// by the cliff-cross detector in the engine. Co-linear / touching
+// cases return false (conservative; movement skims along the edge
+// without triggering a "cross").
+export function segmentsIntersect(a: Vec2, b: Vec2, c: Vec2, d: Vec2): boolean {
+  const o1 = orient(a, b, c);
+  const o2 = orient(a, b, d);
+  const o3 = orient(c, d, a);
+  const o4 = orient(c, d, b);
+  return o1 !== o2 && o3 !== o4;
+}
+
 // Perpendicular distance from point p to segment a-b (clamped at endpoints).
 // Used for line-of-sight tests and any line-segment-vs-circle check.
 export function distToSegment(p: Vec2, a: Vec2, b: Vec2): number {
