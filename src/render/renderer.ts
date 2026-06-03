@@ -286,6 +286,145 @@ export class Renderer {
       ctx.lineTo(s.x + 6, s.y + 4);
       ctx.closePath();
       ctx.fill();
+    } else if (e.shape === "crate") {
+      // Wooden warehouse crate — iso "cube" with darker right face
+      // and slat lines so it reads as planking.
+      const r = e.radius;
+      const topY = s.y - r * 1.5;
+      // Right face (shadow)
+      ctx.fillStyle = "#6a4a2a";
+      ctx.beginPath();
+      ctx.moveTo(s.x + r, s.y);
+      ctx.lineTo(s.x + r, topY + r * 0.5);
+      ctx.lineTo(s.x, topY);
+      ctx.lineTo(s.x, s.y - r * 0.5);
+      ctx.closePath();
+      ctx.fill();
+      // Left face (lit)
+      ctx.fillStyle = "#8a6b3d";
+      ctx.beginPath();
+      ctx.moveTo(s.x - r, s.y);
+      ctx.lineTo(s.x - r, topY + r * 0.5);
+      ctx.lineTo(s.x, topY);
+      ctx.lineTo(s.x, s.y - r * 0.5);
+      ctx.closePath();
+      ctx.fill();
+      // Top face
+      ctx.fillStyle = "#a07e4d";
+      ctx.beginPath();
+      ctx.moveTo(s.x - r, topY + r * 0.5);
+      ctx.lineTo(s.x, topY);
+      ctx.lineTo(s.x + r, topY + r * 0.5);
+      ctx.lineTo(s.x, topY + r);
+      ctx.closePath();
+      ctx.fill();
+      // Outline
+      ctx.strokeStyle = "#3d2814";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(s.x, topY);
+      ctx.lineTo(s.x - r, topY + r * 0.5);
+      ctx.lineTo(s.x - r, s.y);
+      ctx.lineTo(s.x, s.y + r * 0.3);
+      ctx.lineTo(s.x + r, s.y);
+      ctx.lineTo(s.x + r, topY + r * 0.5);
+      ctx.closePath();
+      ctx.stroke();
+      // Plank lines on the left face
+      ctx.strokeStyle = "#5a3f22";
+      ctx.beginPath();
+      ctx.moveTo(s.x - r, s.y - r * 0.25);
+      ctx.lineTo(s.x, s.y - r * 0.75);
+      ctx.stroke();
+    } else if (e.shape === "pipe") {
+      // Vertical steel pipe — a cylinder. Round cap on top, darker
+      // body, a single flange band near the base.
+      const r = e.radius;
+      const topY = s.y - r * 2.4;
+      // Body (rectangle)
+      ctx.fillStyle = "#6e7681";
+      ctx.fillRect(s.x - r * 0.6, topY, r * 1.2, r * 2.4);
+      // Highlight stripe
+      ctx.fillStyle = "#9aa3ad";
+      ctx.fillRect(s.x - r * 0.5, topY, r * 0.3, r * 2.4);
+      // Top ellipse cap
+      ctx.fillStyle = "#8a929c";
+      ctx.beginPath();
+      ctx.ellipse(s.x, topY, r * 0.6, r * 0.18, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#3a3e44";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.ellipse(s.x, topY, r * 0.6, r * 0.18, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      // Flange near the base
+      ctx.fillStyle = "#3a3e44";
+      ctx.fillRect(s.x - r * 0.72, s.y - r * 0.4, r * 1.44, r * 0.18);
+      // Outline of body
+      ctx.strokeStyle = "#2a2e34";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(s.x - r * 0.6, topY);
+      ctx.lineTo(s.x - r * 0.6, s.y);
+      ctx.moveTo(s.x + r * 0.6, topY);
+      ctx.lineTo(s.x + r * 0.6, s.y);
+      ctx.stroke();
+    } else if (e.shape === "oildrum") {
+      // 55-gallon-style oil drum — wider cylinder with two band
+      // rings around its midsection and a yellow-stripe accent.
+      const r = e.radius;
+      const topY = s.y - r * 1.7;
+      // Body
+      ctx.fillStyle = "#2f3338";
+      ctx.fillRect(s.x - r, topY, r * 2, r * 1.7);
+      // Highlight stripe
+      ctx.fillStyle = "#4a4f55";
+      ctx.fillRect(s.x - r * 0.85, topY, r * 0.5, r * 1.7);
+      // Top ellipse
+      ctx.fillStyle = "#3a3e44";
+      ctx.beginPath();
+      ctx.ellipse(s.x, topY, r, r * 0.35, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#1a1d20";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.ellipse(s.x, topY, r, r * 0.35, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      // Two ring bands
+      ctx.strokeStyle = "#1a1d20";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(s.x - r, s.y - r * 1.1);
+      ctx.lineTo(s.x + r, s.y - r * 1.1);
+      ctx.moveTo(s.x - r, s.y - r * 0.5);
+      ctx.lineTo(s.x + r, s.y - r * 0.5);
+      ctx.stroke();
+      // Yellow stripe accent
+      ctx.fillStyle = "rgba(255, 200, 80, 0.85)";
+      ctx.fillRect(s.x - r, s.y - r * 0.8, r * 2, 3);
+      // Side outlines
+      ctx.strokeStyle = "#1a1d20";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(s.x - r, topY);
+      ctx.lineTo(s.x - r, s.y);
+      ctx.moveTo(s.x + r, topY);
+      ctx.lineTo(s.x + r, s.y);
+      ctx.stroke();
+    } else if (e.shape === "pallet") {
+      // Floor pallet — flat slatted wood. Non-blocking decoration.
+      const r = e.radius;
+      ctx.save();
+      ctx.fillStyle = "rgba(140, 100, 60, 0.55)";
+      ctx.fillRect(s.x - r, s.y - r * 0.3, r * 2, r * 0.6);
+      ctx.fillStyle = "rgba(110, 75, 40, 0.6)";
+      for (let i = -r; i < r; i += r * 0.4) {
+        ctx.fillRect(s.x + i, s.y - r * 0.3, 2, r * 0.6);
+      }
+      ctx.strokeStyle = "rgba(60, 40, 20, 0.55)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(s.x - r, s.y - r * 0.3, r * 2, r * 0.6);
+      ctx.restore();
     }
   }
 

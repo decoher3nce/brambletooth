@@ -2357,7 +2357,7 @@ function frameShop(dims: { w: number; h: number }): void {
   );
 
   // ---- Tabs ----
-  const tabKinds: ShopItemKind[] = ["character", "outfit", "upgrade"];
+  const tabKinds: ShopItemKind[] = ["character", "outfit", "upgrade", "world"];
   const tabY = ch * 0.08 + 44;
   const tabH = 34;
   const tabGap = 8;

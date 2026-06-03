@@ -23,6 +23,7 @@ import {
   buildForest4,
   buildForest5,
 } from "../arenas/forest";
+import { FACTORY_ARENA_CONFIG, buildFactory } from "../arenas/factory";
 
 // How many maps must be completed in a world to unlock the next via
 // the default "after-world" gate.
@@ -52,7 +53,15 @@ export type WorldUnlock =
   // referenced earlier world.
   | { kind: "after-world"; previousWorldId: string; mapsNeeded: number }
   // Locked until the player owns this shop item (purchased token).
-  | { kind: "shop"; shopItemId: string };
+  | { kind: "shop"; shopItemId: string }
+  // Either path unlocks: complete the previous world OR buy the
+  // shop token. Useful for "skip the grind" content.
+  | {
+      kind: "after-world-or-shop";
+      previousWorldId: string;
+      mapsNeeded: number;
+      shopItemId: string;
+    };
 
 export interface WorldDef {
   id: string;
@@ -292,6 +301,73 @@ function drawThumbDeer(
   ctx.stroke();
 }
 
+// ---- Factory World thumbnails ----
+// Shared cold-industrial base: concrete floor + faint yellow safety
+// grid + steel-edge fence outline + SE-corner exit glow. Per-map
+// overlays layer specific factory features (machinery, etc.).
+function drawFactoryBase(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+): void {
+  // Concrete ground — gray with faint horizontal bands.
+  ctx.fillStyle = "#3a3e44";
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = "#43484f";
+  ctx.fillRect(x, y + h * 0.42, w, h * 0.58);
+  // Yellow safety stripe diagonals
+  ctx.strokeStyle = "rgba(255, 200, 80, 0.18)";
+  ctx.lineWidth = 1;
+  for (let i = -h; i < w + h; i += 14) {
+    ctx.beginPath();
+    ctx.moveTo(x + i, y + h);
+    ctx.lineTo(x + i + h * 1.4, y);
+    ctx.stroke();
+  }
+  // Iso crates scattered around
+  const crates: [number, number, number][] = [
+    [0.18, 0.40, 0.07], [0.55, 0.32, 0.08], [0.40, 0.66, 0.075], [0.78, 0.55, 0.065],
+  ];
+  for (const [fx, fy, fs] of crates) {
+    drawThumbCrate(ctx, x + w * fx, y + h * fy, w * fs);
+  }
+  // Exit glow SE corner
+  const ex = x + w * 0.86;
+  const ey = y + h * 0.82;
+  const eg = ctx.createRadialGradient(ex, ey, 0, ex, ey, w * 0.12);
+  eg.addColorStop(0, "rgba(170, 240, 180, 0.85)");
+  eg.addColorStop(1, "rgba(170, 240, 180, 0)");
+  ctx.fillStyle = eg;
+  ctx.beginPath();
+  ctx.ellipse(ex, ey, w * 0.13, w * 0.07, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+function drawThumbCrate(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number, scale: number,
+): void {
+  // Tiny iso "cube" — same construction as the in-world crate
+  // shrunk to thumb scale.
+  ctx.fillStyle = "#6a4a2a";
+  ctx.fillRect(cx - scale, cy - scale, scale * 2, scale * 1.6);
+  ctx.fillStyle = "#a07e4d";
+  ctx.beginPath();
+  ctx.moveTo(cx - scale, cy - scale);
+  ctx.lineTo(cx, cy - scale * 1.4);
+  ctx.lineTo(cx + scale, cy - scale);
+  ctx.lineTo(cx, cy - scale * 0.6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = "#3d2814";
+  ctx.lineWidth = 0.8;
+  ctx.strokeRect(cx - scale, cy - scale, scale * 2, scale * 1.6);
+}
+function thumbFactory1(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+): void {
+  drawFactoryBase(ctx, x, y, w, h);
+}
+
 const FOREST_MAPS: MapDef[] = [
   {
     id: "forest_1",
@@ -337,6 +413,17 @@ const FOREST_MAPS: MapDef[] = [
   },
 ];
 
+const FACTORY_MAPS: MapDef[] = [
+  {
+    id: "factory_1",
+    name: "Loading Dock",
+    worldId: "factory",
+    arenaConfig: FACTORY_ARENA_CONFIG,
+    buildArena: (w, seed) => buildFactory(w, seed, 0),
+    thumbnail: thumbFactory1,
+  },
+];
+
 export const WORLDS: WorldDef[] = [
   {
     id: "forest",
@@ -344,6 +431,20 @@ export const WORLDS: WorldDef[] = [
     maps: FOREST_MAPS,
     unlock: { kind: "default" },
     accentColor: "#3a7a3a",
+  },
+  {
+    id: "factory",
+    name: "Factory World",
+    maps: FACTORY_MAPS,
+    // Either path: beat 5 Forest maps OR buy the unlock token in
+    // the Shop. Gives players a grind path and a sink-points path.
+    unlock: {
+      kind: "after-world-or-shop",
+      previousWorldId: "forest",
+      mapsNeeded: WORLDS_REQUIRED_MAPS,
+      shopItemId: "factory_world_key",
+    },
+    accentColor: "#7a8a9a",
   },
 ];
 
@@ -395,6 +496,9 @@ export function isWorldUnlocked(worldId: string, p: ProfileProgress): boolean {
       return countCompletedInWorld(w.unlock.previousWorldId, p) >= w.unlock.mapsNeeded;
     case "shop":
       return p.purchasedItems.includes(w.unlock.shopItemId);
+    case "after-world-or-shop":
+      return countCompletedInWorld(w.unlock.previousWorldId, p) >= w.unlock.mapsNeeded
+        || p.purchasedItems.includes(w.unlock.shopItemId);
   }
 }
 

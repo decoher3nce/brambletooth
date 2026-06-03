@@ -10,7 +10,7 @@
 // end-to-end out of the box. Delete them by removing their entries
 // from SHOP_CATALOG and SHOP_ITEM_ORDER once real items exist.
 
-export type ShopItemKind = "character" | "outfit" | "upgrade";
+export type ShopItemKind = "character" | "outfit" | "upgrade" | "world";
 
 export interface ShopItem {
   id: string;
@@ -36,6 +36,7 @@ export const SHOP_ITEM_ORDER: string[] = [
   "sample_character",
   "sample_outfit",
   "sample_upgrade",
+  "factory_world_key",
 ];
 
 export const SHOP_CATALOG: Record<string, ShopItem> = {
@@ -66,6 +67,14 @@ export const SHOP_CATALOG: Record<string, ShopItem> = {
     abilityId: "slime_shot",
     iconColor: "#7c4a8b",
   },
+  factory_world_key: {
+    id: "factory_world_key",
+    kind: "world",
+    name: "Factory World Key",
+    description: "Skip the grind — unlocks Factory World immediately.",
+    price: 60,
+    iconColor: "#4a4f55",
+  },
 };
 
 export function getShopItem(id: string): ShopItem | undefined {
@@ -90,6 +99,7 @@ export function shopKindLabel(kind: ShopItemKind): string {
     case "character": return "Characters";
     case "outfit":    return "Outfits";
     case "upgrade":   return "Upgrades";
+    case "world":     return "Worlds";
   }
 }
 
@@ -133,6 +143,7 @@ function defaultColor(kind: ShopItemKind): string {
     case "character": return "#6b8e3b"; // mossy green
     case "outfit":    return "#a06a3e"; // bronze
     case "upgrade":   return "#7c4a8b"; // royal purple
+    case "world":     return "#4a4f55"; // steel-blue
   }
 }
 

@@ -119,7 +119,11 @@ export interface ObjectiveEntity extends BaseEntity {
   collectedBy?: EntityId;
 }
 
-export type PropShape = "tree" | "stump" | "rock";
+export type PropShape =
+  // Forest props
+  | "tree" | "stump" | "rock"
+  // Factory props
+  | "crate" | "pipe" | "oildrum" | "pallet";
 
 export interface PropEntity extends BaseEntity {
   kind: "prop";
