@@ -3080,9 +3080,20 @@ function localProgress(): ProfileProgress {
     const mapId = ACHIEVEMENT_IMPLIES_MAP[a.id];
     if (mapId) set.add(mapId);
   }
+  const purchased = getInventory().map((p) => p.id);
+  // Bigfoot god mode (testing): treat every map as completed AND
+  // every world-unlock shop token as owned, so Campaign / Vs Computer
+  // can play any map and every world is reachable. NOT written to
+  // localStorage — non-Bigfoot logins on the same device stay honest.
+  if (loggedIn && isInvincibleProfile(getName(), getPin())) {
+    for (const w of WORLDS) for (const m of w.maps) set.add(m.id);
+    for (const id of Object.keys(SHOP_CATALOG)) {
+      if (SHOP_CATALOG[id]?.kind === "world") purchased.push(id);
+    }
+  }
   return {
     completedMaps: [...set],
-    purchasedItems: getInventory().map((p) => p.id),
+    purchasedItems: purchased,
   };
 }
 
