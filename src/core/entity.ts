@@ -18,7 +18,8 @@ export type EntityKind =
   | "exit"
   | "stream"
   | "cliff"
-  | "animal";
+  | "animal"
+  | "conveyor";
 
 export interface BaseEntity {
   id: EntityId;
@@ -183,6 +184,24 @@ export interface StreamEntity extends BaseEntity {
   slowFactor: number;
 }
 
+// Industrial conveyor belt (Factory Map 2+). Capsule defined by line
+// segment a→b inflated by `width` on each side. Characters standing
+// on the belt move at FULL intent velocity AND get the belt push
+// added on top (so going with the belt is faster, going against
+// effectively halves your travel rate). No slow factor — mechanical
+// belts don't drag your feet the way streams do.
+export interface ConveyorEntity extends BaseEntity {
+  kind: "conveyor";
+  a: Vec2;
+  b: Vec2;
+  width: number;
+  // Flow direction unit vector (along the segment). Engine
+  // normalizes defensively.
+  flow: Vec2;
+  // Push velocity magnitude (units/sec) added each tick.
+  flowSpeed: number;
+}
+
 // Forest NPC (Forest Map 4+). Wanders around its spawn point; pushes
 // characters back on contact (blocking collision). When hp drops it
 // rolls a one-time reaction — sometimes flees from the attacker,
@@ -241,7 +260,8 @@ export type Entity =
   | ExitEntity
   | StreamEntity
   | CliffEntity
-  | AnimalEntity;
+  | AnimalEntity
+  | ConveyorEntity;
 
 // Type guards
 export function isCharacter(e: Entity): e is CharacterEntity {
@@ -273,4 +293,7 @@ export function isCliff(e: Entity): e is CliffEntity {
 }
 export function isAnimal(e: Entity): e is AnimalEntity {
   return e.kind === "animal";
+}
+export function isConveyor(e: Entity): e is ConveyorEntity {
+  return e.kind === "conveyor";
 }

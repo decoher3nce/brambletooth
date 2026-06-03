@@ -11,7 +11,7 @@ import type {
   Entity,
   PropEntity,
 } from "../core/entity";
-import { isCharacter, isProjectile, isTrap, isObjective, isProp, isExit, isStream, isCliff, isAnimal } from "../core/entity";
+import { isCharacter, isProjectile, isTrap, isObjective, isProp, isExit, isStream, isCliff, isAnimal, isConveyor } from "../core/entity";
 import type { AnimalEntity } from "../core/entity";
 import type { Vec2 } from "../core/math";
 import { add, scale, normalize, sub, len, dist, clamp, circlesOverlap, segmentsIntersect, distToSegment } from "../core/math";
@@ -164,6 +164,18 @@ export class Engine {
         c.vel.y *= s.slowFactor;
         c.vel.x += bestDirX * s.flowSpeed;
         c.vel.y += bestDirY * s.flowSpeed;
+      }
+      // Conveyor: same shape (segment + width) but no slow factor —
+      // mechanical belts don't drag your feet. Just adds the belt's
+      // push velocity to whatever the character is already doing.
+      for (const cv of world.entities) {
+        if (!isConveyor(cv)) continue;
+        if (!circlesOverlap(c.pos, c.radius, cv.pos, cv.radius)) continue;
+        const d = distToSegment(c.pos, cv.a, cv.b);
+        if (d > cv.width + c.radius) continue;
+        const fl = Math.hypot(cv.flow.x, cv.flow.y) || 1;
+        c.vel.x += (cv.flow.x / fl) * cv.flowSpeed;
+        c.vel.y += (cv.flow.y / fl) * cv.flowSpeed;
       }
 
       // Apply movement with prop collision (simple slide-on-block)

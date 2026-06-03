@@ -6,7 +6,8 @@
 // in without changes.
 
 import type { World, ArenaConfig } from "../core/world";
-import type { PropEntity } from "../core/entity";
+import type { PropEntity, ConveyorEntity } from "../core/entity";
+import { distToSegment } from "../core/math";
 
 export const FACTORY_ARENA_CONFIG: ArenaConfig = {
   bounds: { minX: -700, minY: -500, maxX: 700, maxY: 500 },
@@ -116,3 +117,67 @@ export function buildFactory(world: World, seed: number, _objectiveCount: number
     }
   }
 }
+
+// Remove blocking props (crates, pipes, drums) that overlap the
+// conveyor footprint. Pallets are decoration only and stay. Called
+// after buildFactory + conveyor spawn so the belts aren't running
+// through stacked crates.
+function clearPropsFromConveyor(
+  world: World,
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  width: number,
+): void {
+  const pad = 8;
+  world.entities = world.entities.filter((e) => {
+    if (e.kind !== "prop") return true;
+    if (!e.blocking) return true; // pallets stay
+    const d = distToSegment(e.pos, a, b);
+    return d >= width + e.radius + pad;
+  });
+}
+
+// Forest Map 2 analogue for Factory: TWO parallel conveyor belts
+// cutting across the middle of the map. The NORTH belt flows EAST
+// (toward the SE-corner exit) — survivor express lane. The SOUTH
+// belt flows WEST — hunter express lane, or a survivor trap if
+// they step on it accidentally. Both create positional drama:
+// jumping on a belt is a commit, and the wrong belt costs you
+// time.
+export function buildFactory2(world: World, seed: number, objectiveCount: number): void {
+  buildFactory(world, seed, objectiveCount);
+  const b = world.arena.bounds;
+  const beltWidth = 50;
+  const xMargin = 80;
+  // North belt — east flow, sits above center.
+  const nA = { x: b.minX + xMargin, y: -150 };
+  const nB = { x: b.maxX - xMargin, y: -150 };
+  world.spawn<ConveyorEntity>({
+    kind: "conveyor",
+    pos: { x: (nA.x + nB.x) / 2, y: nA.y },
+    radius: Math.hypot(nB.x - nA.x, 0) / 2 + beltWidth,
+    a: nA,
+    b: nB,
+    width: beltWidth,
+    flow: { x: 1, y: 0 }, // east, toward exit
+    flowSpeed: 110,
+    dead: false,
+  });
+  clearPropsFromConveyor(world, nA, nB, beltWidth);
+  // South belt — west flow, sits below center.
+  const sA = { x: b.minX + xMargin, y: 150 };
+  const sB = { x: b.maxX - xMargin, y: 150 };
+  world.spawn<ConveyorEntity>({
+    kind: "conveyor",
+    pos: { x: (sA.x + sB.x) / 2, y: sA.y },
+    radius: Math.hypot(sB.x - sA.x, 0) / 2 + beltWidth,
+    a: sA,
+    b: sB,
+    width: beltWidth,
+    flow: { x: -1, y: 0 }, // west, away from exit
+    flowSpeed: 110,
+    dead: false,
+  });
+  clearPropsFromConveyor(world, sA, sB, beltWidth);
+}
+

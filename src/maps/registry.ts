@@ -23,7 +23,7 @@ import {
   buildForest4,
   buildForest5,
 } from "../arenas/forest";
-import { FACTORY_ARENA_CONFIG, buildFactory } from "../arenas/factory";
+import { FACTORY_ARENA_CONFIG, buildFactory, buildFactory2 } from "../arenas/factory";
 
 // How many maps must be completed in a world to unlock the next via
 // the default "after-world" gate.
@@ -368,6 +368,65 @@ function thumbFactory1(
   drawFactoryBase(ctx, x, y, w, h);
 }
 
+// Helper: paint one conveyor belt strip on the thumbnail with
+// hazard stripes + flow arrow pointing in `dir` (+1 right, -1 left).
+function drawThumbBelt(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+  yFrac: number, dir: 1 | -1,
+): void {
+  const beltY = y + h * yFrac;
+  const beltH = h * 0.16;
+  const beltX0 = x + w * 0.06;
+  const beltX1 = x + w * 0.94;
+  // Black belt surface
+  ctx.fillStyle = "#1a1d20";
+  ctx.fillRect(beltX0, beltY - beltH / 2, beltX1 - beltX0, beltH);
+  // Hazard stripes on top + bottom edges
+  ctx.fillStyle = "rgba(255, 200, 80, 0.85)";
+  const stripeH = 2;
+  ctx.fillRect(beltX0, beltY - beltH / 2 - stripeH, beltX1 - beltX0, stripeH);
+  ctx.fillRect(beltX0, beltY + beltH / 2, beltX1 - beltX0, stripeH);
+  // Belt hash marks
+  ctx.strokeStyle = "rgba(180, 195, 210, 0.5)";
+  ctx.lineWidth = 1.5;
+  const stripeCount = 6;
+  for (let i = 0; i < stripeCount; i++) {
+    const sx = beltX0 + (beltX1 - beltX0) * (i + 0.5) / stripeCount;
+    ctx.beginPath();
+    ctx.moveTo(sx, beltY - beltH / 2 + 1);
+    ctx.lineTo(sx, beltY + beltH / 2 - 1);
+    ctx.stroke();
+  }
+  // Flow arrow in the center
+  ctx.strokeStyle = "#ffd84a";
+  ctx.lineWidth = 2;
+  ctx.lineCap = "round";
+  const midX = (beltX0 + beltX1) / 2;
+  ctx.beginPath();
+  ctx.moveTo(midX - w * 0.05 * dir, beltY);
+  ctx.lineTo(midX + w * 0.05 * dir, beltY);
+  ctx.moveTo(midX + w * 0.03 * dir, beltY - h * 0.025);
+  ctx.lineTo(midX + w * 0.05 * dir, beltY);
+  ctx.lineTo(midX + w * 0.03 * dir, beltY + h * 0.025);
+  ctx.stroke();
+  // Rollers at each end
+  ctx.fillStyle = "#3a3e44";
+  ctx.beginPath();
+  ctx.arc(beltX0, beltY, beltH * 0.55, 0, Math.PI * 2);
+  ctx.arc(beltX1, beltY, beltH * 0.55, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function thumbFactory2(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+): void {
+  drawFactoryBase(ctx, x, y, w, h);
+  drawThumbBelt(ctx, x, y, w, h, 0.36, 1);  // north belt — east
+  drawThumbBelt(ctx, x, y, w, h, 0.70, -1); // south belt — west
+}
+
 const FOREST_MAPS: MapDef[] = [
   {
     id: "forest_1",
@@ -421,6 +480,14 @@ const FACTORY_MAPS: MapDef[] = [
     arenaConfig: FACTORY_ARENA_CONFIG,
     buildArena: (w, seed) => buildFactory(w, seed, 0),
     thumbnail: thumbFactory1,
+  },
+  {
+    id: "factory_2",
+    name: "The Belt",
+    worldId: "factory",
+    arenaConfig: FACTORY_ARENA_CONFIG,
+    buildArena: (w, seed) => buildFactory2(w, seed, 0),
+    thumbnail: thumbFactory2,
   },
 ];
 

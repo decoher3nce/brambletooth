@@ -7,7 +7,7 @@
 
 import type { World } from "../core/world";
 import type { Entity } from "../core/entity";
-import { isCharacter, isProjectile, isTrap, isObjective, isProp, isPlate, isExit, isStream, isCliff, isAnimal } from "../core/entity";
+import { isCharacter, isProjectile, isTrap, isObjective, isProp, isPlate, isExit, isStream, isCliff, isAnimal, isConveyor } from "../core/entity";
 import type { Vec2 } from "../core/math";
 import { CHARACTERS } from "../characters/characters";
 import { ABILITIES } from "../abilities/abilities";
@@ -164,9 +164,9 @@ export class Renderer {
       // always render ON TOP (feet + shadow visible). Without this
       // the x-tiebreak flips arbitrarily at coincident positions.
       const isFloorA = a.kind === "plate" || a.kind === "exit"
-        || a.kind === "stream" || a.kind === "cliff";
+        || a.kind === "stream" || a.kind === "cliff" || a.kind === "conveyor";
       const isFloorB = b.kind === "plate" || b.kind === "exit"
-        || b.kind === "stream" || b.kind === "cliff";
+        || b.kind === "stream" || b.kind === "cliff" || b.kind === "conveyor";
       const ay = isFloorA ? a.pos.y - 0.5 : a.pos.y;
       const by = isFloorB ? b.pos.y - 0.5 : b.pos.y;
       if (ay !== by) return ay - by;
@@ -186,6 +186,7 @@ export class Renderer {
     else if (isExit(e)) this.drawExit(e, cam);
     else if (isStream(e)) this.drawStream(e, cam);
     else if (isCliff(e)) this.drawCliff(e, cam);
+    else if (isConveyor(e)) this.drawConveyor(e, cam);
     else if (isAnimal(e)) this.drawAnimal(e, cam);
     else if (isProjectile(e)) this.drawProjectile(e, cam);
     else if (isCharacter(e)) this.drawCharacter(e, cam);
@@ -652,6 +653,116 @@ export class Renderer {
       ctx.stroke();
     }
     ctx.restore();
+  }
+
+  // Conveyor belt — long rectangular strip on the factory floor.
+  // Hazard-striped frame, dark gray belt surface, perpendicular
+  // belt stripes that animate in the flow direction, and roller
+  // wheels at each end. Square-capped (no rounded ends) so it
+  // reads as a built mechanical thing rather than a river.
+  private drawConveyor(
+    e: Extract<Entity, { kind: "conveyor" }>,
+    cam: Camera,
+  ): void {
+    const ctx = this.ctx;
+    const a = worldToScreen(e.a, cam, this.cw, this.ch);
+    const b = worldToScreen(e.b, cam, this.cw, this.ch);
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1) return;
+    const ex = dx / len;
+    const ey = dy / len;
+    const px = -ey;
+    const py = ex;
+    const w = e.width;
+
+    ctx.save();
+    ctx.lineCap = "butt";
+    ctx.lineJoin = "miter";
+
+    // Hazard frame — yellow + black stripes along both edges.
+    const frameW = 4;
+    for (const sign of [-1, 1]) {
+      const ax = a.x + px * (w + frameW * 0.5) * sign;
+      const ay = a.y + py * (w + frameW * 0.5) * sign;
+      const bx = b.x + px * (w + frameW * 0.5) * sign;
+      const by = b.y + py * (w + frameW * 0.5) * sign;
+      // Solid black underlay.
+      ctx.strokeStyle = "#1a1d20";
+      ctx.lineWidth = frameW;
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      ctx.stroke();
+      // Yellow dashed overlay.
+      ctx.setLineDash([10, 10]);
+      ctx.strokeStyle = "rgba(255, 200, 80, 0.95)";
+      ctx.lineWidth = frameW - 1;
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Belt body — dark gray rubber surface.
+    ctx.lineWidth = w * 2;
+    ctx.strokeStyle = "#2a2e34";
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+
+    // Subtle center stripe (the seam of the belt).
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+
+    // Animated belt segments — perpendicular hash marks that march
+    // in the flow direction. Direction comes from the sign of
+    // flow's projection onto the segment.
+    const flowDotSeg = e.flow.x * ex + e.flow.y * ey;
+    const sign = flowDotSeg >= 0 ? 1 : -1;
+    const t = (performance.now() / 600) % 1;
+    const spacing = 28;
+    ctx.strokeStyle = "rgba(180, 195, 210, 0.55)";
+    ctx.lineWidth = 3;
+    ctx.lineCap = "round";
+    for (let off = 0; off <= len; off += spacing) {
+      const s = off + sign * t * spacing;
+      // Wrap into [0, len].
+      const sm = ((s % len) + len) % len;
+      const cx = a.x + ex * sm;
+      const cy = a.y + ey * sm;
+      ctx.beginPath();
+      ctx.moveTo(cx + px * (w - 4), cy + py * (w - 4));
+      ctx.lineTo(cx - px * (w - 4), cy - py * (w - 4));
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Rollers at each end — dark circles with metallic ring.
+    for (const end of [a, b]) {
+      ctx.save();
+      ctx.fillStyle = "#1a1d20";
+      ctx.beginPath();
+      ctx.arc(end.x, end.y, w * 0.55, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#5a6470";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(end.x, end.y, w * 0.55, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = "#3a3e44";
+      ctx.beginPath();
+      ctx.arc(end.x, end.y, w * 0.22, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
   }
 
   // Cliff — a one-way drop edge. Renders the cliff top as a bold
