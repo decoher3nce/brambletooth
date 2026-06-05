@@ -23,7 +23,7 @@ import {
   buildForest4,
   buildForest5,
 } from "../arenas/forest";
-import { FACTORY_ARENA_CONFIG, buildFactory, buildFactory2 } from "../arenas/factory";
+import { FACTORY_ARENA_CONFIG, buildFactory, buildFactory2, buildFactory3 } from "../arenas/factory";
 
 // How many maps must be completed in a world to unlock the next via
 // the default "after-world" gate.
@@ -427,6 +427,106 @@ function thumbFactory2(
   drawThumbBelt(ctx, x, y, w, h, 0.70, -1); // south belt — west
 }
 
+// Half-width belt strip: x0Frac and x1Frac as 0..1 of the tile.
+// Variant 'ground' draws a plain belt; 'catwalk' draws it darker
+// with a faint drop shadow + a small gear icon at the inner end
+// (to read as elevated machinery). 'showGears' draws a tiny gear
+// at each end. Mirrors the runtime renderer style at thumb scale.
+function drawThumbBeltSegment(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+  yFrac: number, x0Frac: number, x1Frac: number,
+  dir: 1 | -1,
+  variant: "ground" | "catwalk",
+): void {
+  const beltY = y + h * yFrac;
+  const beltH = h * 0.13;
+  const beltX0 = x + w * x0Frac;
+  const beltX1 = x + w * x1Frac;
+  // Drop shadow under catwalks.
+  if (variant === "catwalk") {
+    ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+    ctx.fillRect(beltX0 + 2, beltY - beltH / 2 + 4, beltX1 - beltX0, beltH);
+  }
+  // Belt body.
+  ctx.fillStyle = variant === "catwalk" ? "#15171a" : "#1a1d20";
+  ctx.fillRect(beltX0, beltY - beltH / 2, beltX1 - beltX0, beltH);
+  // Hazard stripes on top + bottom edges.
+  ctx.fillStyle = "rgba(255, 200, 80, 0.85)";
+  const stripeH = 2;
+  ctx.fillRect(beltX0, beltY - beltH / 2 - stripeH, beltX1 - beltX0, stripeH);
+  ctx.fillRect(beltX0, beltY + beltH / 2, beltX1 - beltX0, stripeH);
+  // Belt hash marks (fewer than full-belt thumbnail).
+  ctx.strokeStyle = "rgba(180, 195, 210, 0.5)";
+  ctx.lineWidth = 1.2;
+  const stripeCount = 4;
+  for (let i = 0; i < stripeCount; i++) {
+    const sx = beltX0 + (beltX1 - beltX0) * (i + 0.5) / stripeCount;
+    ctx.beginPath();
+    ctx.moveTo(sx, beltY - beltH / 2 + 1);
+    ctx.lineTo(sx, beltY + beltH / 2 - 1);
+    ctx.stroke();
+  }
+  // Tiny flow arrow.
+  ctx.strokeStyle = "#ffd84a";
+  ctx.lineWidth = 1.6;
+  ctx.lineCap = "round";
+  const midX = (beltX0 + beltX1) / 2;
+  ctx.beginPath();
+  ctx.moveTo(midX - w * 0.025 * dir, beltY);
+  ctx.lineTo(midX + w * 0.025 * dir, beltY);
+  ctx.moveTo(midX + w * 0.015 * dir, beltY - h * 0.02);
+  ctx.lineTo(midX + w * 0.025 * dir, beltY);
+  ctx.lineTo(midX + w * 0.015 * dir, beltY + h * 0.02);
+  ctx.stroke();
+  // Toothed gear at each end (small, decorative).
+  for (const ex of [beltX0, beltX1]) {
+    drawThumbGear(ctx, ex, beltY, beltH * 0.55);
+  }
+}
+
+// Small toothed gear glyph for thumbnail end caps.
+function drawThumbGear(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number, r: number,
+): void {
+  const teeth = 8;
+  const rO = r;
+  const rI = r * 0.72;
+  ctx.fillStyle = "#2a2e34";
+  ctx.beginPath();
+  const segCount = teeth * 2;
+  for (let i = 0; i < segCount; i++) {
+    const ang = (i / segCount) * Math.PI * 2;
+    const rr = i % 2 === 0 ? rO : rI;
+    const px = cx + Math.cos(ang) * rr;
+    const py = cy + Math.sin(ang) * rr;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = "#7a8490";
+  ctx.lineWidth = 0.6;
+  ctx.stroke();
+  ctx.fillStyle = "#5a6470";
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.28, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function thumbFactory3(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+): void {
+  drawFactoryBase(ctx, x, y, w, h);
+  // Top chain — west half ground → east half catwalk, both east-flow.
+  drawThumbBeltSegment(ctx, x, y, w, h, 0.32, 0.06, 0.50, 1, "ground");
+  drawThumbBeltSegment(ctx, x, y, w, h, 0.32, 0.50, 0.94, 1, "catwalk");
+  // Bottom chain — east half catwalk, west half ground, both west-flow.
+  drawThumbBeltSegment(ctx, x, y, w, h, 0.74, 0.50, 0.94, -1, "catwalk");
+  drawThumbBeltSegment(ctx, x, y, w, h, 0.74, 0.06, 0.50, -1, "ground");
+}
+
 const FOREST_MAPS: MapDef[] = [
   {
     id: "forest_1",
@@ -488,6 +588,14 @@ const FACTORY_MAPS: MapDef[] = [
     arenaConfig: FACTORY_ARENA_CONFIG,
     buildArena: (w, seed) => buildFactory2(w, seed, 0),
     thumbnail: thumbFactory2,
+  },
+  {
+    id: "factory_3",
+    name: "Catwalks",
+    worldId: "factory",
+    arenaConfig: FACTORY_ARENA_CONFIG,
+    buildArena: (w, seed) => buildFactory3(w, seed, 0),
+    thumbnail: thumbFactory3,
   },
 ];
 

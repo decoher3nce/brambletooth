@@ -89,6 +89,15 @@ export interface CharacterEntity extends BaseEntity {
   // for protocol simplicity; only set when the local human is the
   // Bigfoot special profile (see main.ts).
   invincible?: boolean;
+  // Multi-height conveyor system (Factory Map 3+). True = the
+  // character is on the catwalk layer; they get pushed by elevated
+  // conveyors and ignored by ground conveyors, and the renderer
+  // sorts them above the ground layer. Engine flips this flag at
+  // elevated-belt endpoints (step up onto belt → true; walk past
+  // last belt end → false). Defaults to falsy on every character
+  // spawn; the field is optional so older snapshots without it
+  // still parse.
+  elevated?: boolean;
 }
 
 export interface ProjectileEntity extends BaseEntity {
@@ -190,6 +199,15 @@ export interface StreamEntity extends BaseEntity {
 // added on top (so going with the belt is faster, going against
 // effectively halves your travel rate). No slow factor — mechanical
 // belts don't drag your feet the way streams do.
+//
+// Factory Map 3 introduces ELEVATED belts (catwalks). An elevated
+// belt only pushes characters whose `elevated` flag matches. Ground
+// characters under an elevated belt are unaffected (they pass
+// under). To get on an elevated belt a character must step onto one
+// of its endpoints (the "ramp" zone — see engine height-transition
+// block). They stay elevated as long as they overlap the body of
+// SOME elevated belt; walking off the end + onto open ground drops
+// them.
 export interface ConveyorEntity extends BaseEntity {
   kind: "conveyor";
   a: Vec2;
@@ -200,6 +218,19 @@ export interface ConveyorEntity extends BaseEntity {
   flow: Vec2;
   // Push velocity magnitude (units/sec) added each tick.
   flowSpeed: number;
+  // True = the belt sits on a catwalk above the floor. Ground
+  // characters can walk underneath without being pushed; only
+  // characters whose own `elevated` flag is also true get the
+  // push. Renderer draws elevated belts above characters and
+  // paints a drop shadow on the ground beneath. Optional for
+  // protocol compat with old Map-2 snapshots — `undefined`
+  // means ground level.
+  elevated?: boolean;
+  // True = render detailed spinning gear teeth at the end rollers
+  // instead of the plain metallic-ring rollers used on Map 2.
+  // Cosmetic only; spin rate is driven by flowSpeed in the
+  // renderer.
+  showGears?: boolean;
 }
 
 // Forest NPC (Forest Map 4+). Wanders around its spawn point; pushes

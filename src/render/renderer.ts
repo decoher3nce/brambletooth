@@ -157,25 +157,91 @@ export class Renderer {
   // visibility predicate lets the caller hide individual entities — used by
   // main.ts for line-of-sight: survivors don't render hunters whose sight
   // line is blocked by a prop.
+  //
+  // Three depth bands handle the multi-height layout introduced by Factory
+  // Map 3's catwalks:
+  //   band 0  floor decals (plates, exit, streams, cliffs, GROUND belts)
+  //   band 1  ground-layer entities (characters, props, projectiles, ...)
+  //   band 2  elevated layer (catwalk conveyors + elevated characters)
+  // Within each band the standard y → x tiebreak applies; elevated
+  // characters tie-break slightly AFTER elevated belts so a character
+  // riding the catwalk renders on top of it.
   drawEntities(world: World, cam: Camera, visible?: (e: Entity) => boolean): void {
+    const bandOf = (e: Entity): number => {
+      if (
+        e.kind === "plate" || e.kind === "exit" ||
+        e.kind === "stream" || e.kind === "cliff" ||
+        (e.kind === "conveyor" && !e.elevated)
+      ) {
+        return 0;
+      }
+      if (
+        (e.kind === "conveyor" && e.elevated) ||
+        (e.kind === "character" && e.elevated)
+      ) {
+        return 2;
+      }
+      return 1;
+    };
+    const sortYOf = (e: Entity): number => {
+      // Band 0 wants a touch lower than the band-1 entity at the same y
+      // so characters standing on floor decals draw on top.
+      if (bandOf(e) === 0) return e.pos.y - 0.5;
+      // Band-2 character beats a band-2 belt at the same y (riding it).
+      if (e.kind === "character" && e.elevated) return e.pos.y + 0.5;
+      return e.pos.y;
+    };
     const sorted = [...world.entities].sort((a, b) => {
-      // Floor decals (plates, exit zone, streams, cliffs) push to a
-      // slightly lower sort y so characters standing on / near them
-      // always render ON TOP (feet + shadow visible). Without this
-      // the x-tiebreak flips arbitrarily at coincident positions.
-      const isFloorA = a.kind === "plate" || a.kind === "exit"
-        || a.kind === "stream" || a.kind === "cliff" || a.kind === "conveyor";
-      const isFloorB = b.kind === "plate" || b.kind === "exit"
-        || b.kind === "stream" || b.kind === "cliff" || b.kind === "conveyor";
-      const ay = isFloorA ? a.pos.y - 0.5 : a.pos.y;
-      const by = isFloorB ? b.pos.y - 0.5 : b.pos.y;
+      const ba = bandOf(a);
+      const bb = bandOf(b);
+      if (ba !== bb) return ba - bb;
+      const ay = sortYOf(a);
+      const by = sortYOf(b);
       if (ay !== by) return ay - by;
       return a.pos.x - b.pos.x;
     });
+    // Pre-pass: paint the drop shadow of every ELEVATED conveyor onto
+    // the floor before the main sorted pass runs. The shadow is a
+    // capsule offset down-screen by a few pixels, drawn at ground
+    // level so it sits UNDER characters (band 1) walking beneath the
+    // catwalk. Cheap and gives the catwalk a convincing "above"
+    // feel.
+    for (const e of world.entities) {
+      if (e.kind !== "conveyor" || !e.elevated) continue;
+      this.drawElevatedConveyorShadow(e, cam);
+    }
     for (const e of sorted) {
       if (visible && !visible(e)) continue;
       this.drawEntity(e, cam);
     }
+  }
+
+  // Paint the soft drop shadow of an elevated conveyor onto the
+  // floor. Offset slightly down-and-right in screen space so the
+  // catwalk reads as airborne above the ground.
+  private drawElevatedConveyorShadow(
+    e: Extract<Entity, { kind: "conveyor" }>,
+    cam: Camera,
+  ): void {
+    const ctx = this.ctx;
+    const a = worldToScreen(e.a, cam, this.cw, this.ch);
+    const b = worldToScreen(e.b, cam, this.cw, this.ch);
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const L = Math.hypot(dx, dy);
+    if (L < 1) return;
+    const offX = 6;
+    const offY = 14;
+    ctx.save();
+    ctx.globalAlpha = 0.32;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = e.width * 2 + 6;
+    ctx.beginPath();
+    ctx.moveTo(a.x + offX, a.y + offY);
+    ctx.lineTo(b.x + offX, b.y + offY);
+    ctx.stroke();
+    ctx.restore();
   }
 
   drawEntity(e: Entity, cam: Camera): void {
@@ -745,21 +811,115 @@ export class Renderer {
     }
     ctx.restore();
 
-    // Rollers at each end — dark circles with metallic ring.
+    // End caps. Two modes:
+    //   showGears = true  → animated mechanical gears (teeth + hub
+    //                       + rotation driven by flowSpeed)
+    //   showGears = false → plain rollers (the Map-2 look)
+    if (e.showGears) {
+      this.drawConveyorGears(a, b, w, e.flowSpeed, sign);
+    } else {
+      for (const end of [a, b]) {
+        ctx.save();
+        ctx.fillStyle = "#1a1d20";
+        ctx.beginPath();
+        ctx.arc(end.x, end.y, w * 0.55, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#5a6470";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(end.x, end.y, w * 0.55, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = "#3a3e44";
+        ctx.beginPath();
+        ctx.arc(end.x, end.y, w * 0.22, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    // Elevated belts: add support pillars along the length to read as
+    // a catwalk. Small dark verticals on the floor, drawn after the
+    // shadow pass but before the belt body would be nice — but the
+    // belt itself is drawn in band-2 (above characters), so we paint
+    // the pillars HERE behind the belt body. They'll be over-painted
+    // by the belt body and rollers, leaving just the visible bases
+    // around the edges. That's actually the look we want (legs
+    // peeking out from under the deck).
+    if (e.elevated) {
+      ctx.save();
+      ctx.strokeStyle = "#1a1d20";
+      ctx.lineWidth = 2;
+      const pillarSpacing = 90;
+      for (let off = pillarSpacing; off < len - 10; off += pillarSpacing) {
+        const cx = a.x + ex * off;
+        const cy = a.y + ey * off;
+        ctx.beginPath();
+        ctx.moveTo(cx + px * w * 0.85, cy + py * w * 0.85);
+        ctx.lineTo(cx + px * w * 0.85 + 1, cy + py * w * 0.85 + 12);
+        ctx.moveTo(cx - px * w * 0.85, cy - py * w * 0.85);
+        ctx.lineTo(cx - px * w * 0.85 + 1, cy - py * w * 0.85 + 12);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+
+  // Spinning toothed gear at each conveyor endpoint. `flowSign` is
+  // the same direction sign the belt-hash march uses, so the gear
+  // rotates the way the belt visually moves. Speed scales with
+  // `flowSpeed` so faster belts spin faster.
+  private drawConveyorGears(
+    a: { x: number; y: number },
+    b: { x: number; y: number },
+    w: number,
+    flowSpeed: number,
+    flowSign: number,
+  ): void {
+    const ctx = this.ctx;
+    // Radians per second of gear rotation. 110 units/sec belt → ~2
+    // rad/sec gear (roughly one turn every 3s) feels about right.
+    const omega = (flowSpeed / 110) * 2.0 * flowSign;
+    const baseAngle = (performance.now() / 1000) * omega;
+    const teeth = 10;
+    const rOuter = w * 0.62;
+    const rInner = w * 0.46;
+    const rHub = w * 0.18;
     for (const end of [a, b]) {
       ctx.save();
+      ctx.translate(end.x, end.y);
+      // Toothed gear body — alternating outer-radius / inner-radius
+      // vertices around the circle forms a star-gear silhouette.
+      ctx.rotate(baseAngle);
+      ctx.fillStyle = "#2a2e34";
+      ctx.beginPath();
+      const segCount = teeth * 2;
+      for (let i = 0; i < segCount; i++) {
+        const ang = (i / segCount) * Math.PI * 2;
+        const r = i % 2 === 0 ? rOuter : rInner;
+        const x = Math.cos(ang) * r;
+        const y = Math.sin(ang) * r;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.fill();
+      // Metallic rim highlight.
+      ctx.strokeStyle = "#7a8490";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      // Inner darker ring around the hub for a milled look.
       ctx.fillStyle = "#1a1d20";
       ctx.beginPath();
-      ctx.arc(end.x, end.y, w * 0.55, 0, Math.PI * 2);
+      ctx.arc(0, 0, rInner * 0.72, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = "#5a6470";
-      ctx.lineWidth = 1.5;
+      // Central hub bolt — fixed (no rotation, looks like an axle).
+      ctx.rotate(-baseAngle);
+      ctx.fillStyle = "#5a6470";
       ctx.beginPath();
-      ctx.arc(end.x, end.y, w * 0.55, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.fillStyle = "#3a3e44";
+      ctx.arc(0, 0, rHub, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#1a1d20";
       ctx.beginPath();
-      ctx.arc(end.x, end.y, w * 0.22, 0, Math.PI * 2);
+      ctx.arc(0, 0, rHub * 0.4, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
     }

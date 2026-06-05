@@ -181,3 +181,105 @@ export function buildFactory2(world: World, seed: number, objectiveCount: number
   clearPropsFromConveyor(world, sA, sB, beltWidth);
 }
 
+// Factory Map 3 — "The Catwalks". Two BELT CHAINS cut across the map,
+// each one a slow GROUND segment that hands off to a fast ELEVATED
+// segment at the midpoint. Every belt has spinning gear rollers for
+// the factory-machinery vibe.
+//
+// Layout:
+//   y = -200  (top half)
+//     G1: ground belt, west half, flows EAST   (slow, 80)
+//     E1: catwalk belt, east half, flows EAST  (fast, 165)
+//     ↳ G1's east endpoint and E1's west endpoint coincide at x=0,
+//       so a survivor riding G1 east hits the entry zone of E1 and
+//       gets lifted onto the catwalk without losing momentum.
+//
+//   y = 200   (bottom half)
+//     E2: catwalk belt, east half, flows WEST  (fast, 165)
+//     G2: ground belt, west half, flows WEST   (slow, 80)
+//     ↳ Mirror — entry at x=0, west-bound express lane for whoever
+//       can use it (hunter chasing back to the spawn pen, or a
+//       confused survivor losing all their distance).
+//
+// Walking UNDER an elevated belt: just walk through the belt's
+// footprint at ground level — the height-match check in the
+// engine ignores the push. You'll see the shadow over your head.
+//
+// Walking ON the elevated belt from another belt: step onto the
+// shared endpoint at x=0 to get lifted; ride the fast lane; walk
+// off the far end to drop back to the floor.
+export function buildFactory3(world: World, seed: number, objectiveCount: number): void {
+  buildFactory(world, seed, objectiveCount);
+  const b = world.arena.bounds;
+  const beltWidth = 50;
+  const xMargin = 80;
+
+  // Top chain — both segments flow east. G1 hands to E1 at x=0.
+  const g1A = { x: b.minX + xMargin, y: -200 };
+  const g1B = { x: 0, y: -200 };
+  world.spawn<ConveyorEntity>({
+    kind: "conveyor",
+    pos: { x: (g1A.x + g1B.x) / 2, y: g1A.y },
+    radius: Math.hypot(g1B.x - g1A.x, 0) / 2 + beltWidth,
+    a: g1A,
+    b: g1B,
+    width: beltWidth,
+    flow: { x: 1, y: 0 },
+    flowSpeed: 80,
+    elevated: false,
+    showGears: true,
+    dead: false,
+  });
+  clearPropsFromConveyor(world, g1A, g1B, beltWidth);
+  const e1A = { x: 0, y: -200 };
+  const e1B = { x: b.maxX - xMargin, y: -200 };
+  world.spawn<ConveyorEntity>({
+    kind: "conveyor",
+    pos: { x: (e1A.x + e1B.x) / 2, y: e1A.y },
+    radius: Math.hypot(e1B.x - e1A.x, 0) / 2 + beltWidth,
+    a: e1A,
+    b: e1B,
+    width: beltWidth,
+    flow: { x: 1, y: 0 },
+    flowSpeed: 165,
+    elevated: true,
+    showGears: true,
+    dead: false,
+  });
+  // No clearProps on the catwalk — it's overhead, props on the
+  // floor below are fine. Floor stays cluttered for cover.
+
+  // Bottom chain — both segments flow west. E2 hands to G2 at x=0.
+  const e2A = { x: b.maxX - xMargin, y: 200 };
+  const e2B = { x: 0, y: 200 };
+  world.spawn<ConveyorEntity>({
+    kind: "conveyor",
+    pos: { x: (e2A.x + e2B.x) / 2, y: e2A.y },
+    radius: Math.hypot(e2B.x - e2A.x, 0) / 2 + beltWidth,
+    a: e2A,
+    b: e2B,
+    width: beltWidth,
+    flow: { x: -1, y: 0 },
+    flowSpeed: 165,
+    elevated: true,
+    showGears: true,
+    dead: false,
+  });
+  const g2A = { x: 0, y: 200 };
+  const g2B = { x: b.minX + xMargin, y: 200 };
+  world.spawn<ConveyorEntity>({
+    kind: "conveyor",
+    pos: { x: (g2A.x + g2B.x) / 2, y: g2A.y },
+    radius: Math.hypot(g2B.x - g2A.x, 0) / 2 + beltWidth,
+    a: g2A,
+    b: g2B,
+    width: beltWidth,
+    flow: { x: -1, y: 0 },
+    flowSpeed: 80,
+    elevated: false,
+    showGears: true,
+    dead: false,
+  });
+  clearPropsFromConveyor(world, g2A, g2B, beltWidth);
+}
+

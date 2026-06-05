@@ -168,8 +168,13 @@ export class Engine {
       // Conveyor: same shape (segment + width) but no slow factor —
       // mechanical belts don't drag your feet. Just adds the belt's
       // push velocity to whatever the character is already doing.
+      // Heights must MATCH — ground characters are unaffected by
+      // catwalk belts (they walk under), elevated characters are
+      // unaffected by ground belts (they're above them).
+      const cElev = !!c.elevated;
       for (const cv of world.entities) {
         if (!isConveyor(cv)) continue;
+        if (!!cv.elevated !== cElev) continue;
         if (!circlesOverlap(c.pos, c.radius, cv.pos, cv.radius)) continue;
         const d = distToSegment(c.pos, cv.a, cv.b);
         if (d > cv.width + c.radius) continue;
@@ -186,6 +191,43 @@ export class Engine {
       // direction it's allowed and deals fall damage on cross.
       const cliffResolved = this.resolveCliffCross(c, resolved, world);
       c.pos = cliffResolved;
+
+      // ---- Multi-height conveyor transitions (Factory Map 3+) ----
+      // After the character's new position is finalized, look at
+      // every elevated conveyor:
+      //   - onElevatedBelt = char's center is within (width + radius)
+      //     of any elevated belt's body
+      //   - nearElevatedEntry = char's center is within (radius + 25)
+      //     of any elevated belt's endpoint
+      // Then:
+      //   if already elevated and NOT on a belt body → drop to ground
+      //     (walked past the end / off the side)
+      //   if not elevated and near an endpoint → step up
+      //     (climbing onto the belt from the ramp zone)
+      // Walking the body of an elevated belt without entering at an
+      // endpoint is impossible — the belt is overhead. The endpoint
+      // is the ONLY transition point in either direction.
+      const ENTRY_PAD = 25;
+      let onElevatedBelt = false;
+      let nearElevatedEntry = false;
+      for (const cv of world.entities) {
+        if (!isConveyor(cv)) continue;
+        if (!cv.elevated) continue;
+        // Cheap broad-phase.
+        if (!circlesOverlap(c.pos, c.radius + ENTRY_PAD, cv.pos, cv.radius)) continue;
+        const dBody = distToSegment(c.pos, cv.a, cv.b);
+        if (dBody <= cv.width + c.radius) onElevatedBelt = true;
+        const dA = dist(c.pos, cv.a);
+        const dB = dist(c.pos, cv.b);
+        if (dA <= c.radius + ENTRY_PAD || dB <= c.radius + ENTRY_PAD) {
+          nearElevatedEntry = true;
+        }
+      }
+      if (c.elevated) {
+        if (!onElevatedBelt) c.elevated = false;
+      } else {
+        if (nearElevatedEntry) c.elevated = true;
+      }
     }
 
     // 3) Fire abilities (after movement so aim is fresh)
