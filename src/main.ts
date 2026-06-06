@@ -201,7 +201,16 @@ function addPoints(n: number): void {
 const PROFILE_API_LOGIN = () => `${profileApiBase()}/api/login`;
 const PROFILE_API_SYNC = () => `${profileApiBase()}/api/profile/sync`;
 function profileApiBase(): string {
-  // Same host as the WS server (8787). Vite (5173) on the same hostname.
+  // Mirrors resolveServerUrl()'s three modes:
+  //   1. ?server=... override → use that host:port for HTTP too.
+  //   2. Behind the public reverse-proxy gateway (no explicit port
+  //      in the URL) → use the proxy-relative base so /api/login
+  //      becomes /brambletooth/api/login.
+  //   3. Dev mode (explicit non-default port like :5173) → hit the
+  //      WS server's port (8787) on the same host directly.
+  // Scheme tracks the page so HTTPS pages don't fall into a
+  // mixed-content trap. Hostname is read from `location` at
+  // runtime — never hardcoded — so the build is host-agnostic.
   const params = new URLSearchParams(location.search);
   const override = params.get("server");
   if (override) {
@@ -209,7 +218,13 @@ function profileApiBase(): string {
     const trimmed = override.replace(/^wss?:\/\//, "");
     return `http://${trimmed}`;
   }
-  return `http://${location.hostname}:8787`;
+  const httpScheme = location.protocol === "https:" ? "https" : "http";
+  const port = location.port;
+  const isProxied = port === "" || port === "80" || port === "443";
+  if (isProxied) {
+    return `${httpScheme}://${location.host}/brambletooth`;
+  }
+  return `${httpScheme}://${location.hostname}:8787`;
 }
 
 let loggedIn = false;

@@ -42,6 +42,20 @@ export interface NoticeEntry {
   bornAt: number;
 }
 
+// Where the client dials the WS game server. Three modes:
+//
+//   1. `?server=...` URL override — full precedence. Useful for
+//      pointing a built page at a different backend during testing.
+//   2. Behind the public reverse-proxy gateway — detected by a
+//      default-port URL (location.port empty / 80 / 443). Dial the
+//      proxy-relative path  wss://<host>/brambletooth/ws .
+//   3. Direct dev mode (Vite dev on :5173, etc) — detected by an
+//      explicit non-default port. Dial the WS server's well-known
+//      port  ws://<hostname>:8787 .
+//
+// Scheme tracks the page: HTTPS page → wss, HTTP page → ws. The
+// hostname is read from `location` at runtime — never hardcoded —
+// so the build is host-agnostic.
 export function resolveServerUrl(): string {
   const params = new URLSearchParams(location.search);
   const override = params.get("server");
@@ -49,7 +63,13 @@ export function resolveServerUrl(): string {
     if (override.startsWith("ws://") || override.startsWith("wss://")) return override;
     return `ws://${override}`;
   }
-  return `ws://${location.hostname}:${DEFAULT_PORT}`;
+  const wsScheme = location.protocol === "https:" ? "wss" : "ws";
+  const port = location.port;
+  const isProxied = port === "" || port === "80" || port === "443";
+  if (isProxied) {
+    return `${wsScheme}://${location.host}/brambletooth/ws`;
+  }
+  return `${wsScheme}://${location.hostname}:${DEFAULT_PORT}`;
 }
 
 export class NetClient {

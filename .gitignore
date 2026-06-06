@@ -6,3 +6,8 @@ dist
 # Server-side profile store (PINs, player names — never commit).
 data/
 profiles.json
+# Per-deployment env (PUBLIC_HOST etc.) — never commit. The repo
+# tracks .env.example only as a template.
+.env
+.env.local
+.env.*.local
