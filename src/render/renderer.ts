@@ -83,6 +83,12 @@ export class Renderer {
   private fovMask: HTMLCanvasElement | null = null;
   private fovMaskCtx: CanvasRenderingContext2D | null = null;
 
+  // Lazily-generated rough-stone floor texture, used by the cave
+  // (any arena with groundTexture === "rough-stone"). Built once
+  // as a 512×512 tile of pixel noise + splotches, then served as
+  // a CanvasPattern via fillStyle for cheap repeated rendering.
+  private roughStonePattern: CanvasPattern | null = null;
+
   constructor(
     public ctx: CanvasRenderingContext2D,
     public canvas: HTMLCanvasElement,
@@ -115,7 +121,8 @@ export class Renderer {
     ];
     const ctx = this.ctx;
 
-    // Ground fill
+    // Ground fill — flat color, then optional procedural texture
+    // layered on top.
     ctx.fillStyle = world.arena.groundColor;
     ctx.beginPath();
     ctx.moveTo(c[0].x, c[0].y);
@@ -123,25 +130,59 @@ export class Renderer {
     ctx.closePath();
     ctx.fill();
 
-    // Grid lines (subtle)
-    ctx.strokeStyle = world.arena.gridColor;
-    ctx.lineWidth = 1;
-    const step = 100;
-    for (let x = b.minX; x <= b.maxX; x += step) {
-      const a = worldToScreen({ x, y: b.minY }, cam, this.cw, this.ch);
-      const z = worldToScreen({ x, y: b.maxY }, cam, this.cw, this.ch);
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(z.x, z.y);
-      ctx.stroke();
-    }
-    for (let y = b.minY; y <= b.maxY; y += step) {
-      const a = worldToScreen({ x: b.minX, y }, cam, this.cw, this.ch);
-      const z = worldToScreen({ x: b.maxX, y }, cam, this.cw, this.ch);
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(z.x, z.y);
-      ctx.stroke();
+    if (world.arena.groundTexture === "rough-stone") {
+      // Cave: overlay the cached rough-stone noise pattern. The
+      // pattern is anchored to world coords (not screen) so the
+      // texture appears to scroll under the camera correctly.
+      const pat = this.getRoughStonePattern();
+      if (pat) {
+        ctx.save();
+        ctx.fillStyle = pat;
+        // Translate so the pattern aligns with the world-space
+        // origin under the camera. worldToScreen({0,0}) gives
+        // us where (0,0) lands on screen; translate by that and
+        // the pattern's tile origin tracks the camera.
+        const origin = worldToScreen({ x: 0, y: 0 }, cam, this.cw, this.ch);
+        ctx.translate(origin.x, origin.y);
+        ctx.translate(-origin.x, -origin.y);
+        ctx.beginPath();
+        ctx.moveTo(c[0].x, c[0].y);
+        for (let i = 1; i < 4; i++) ctx.lineTo(c[i].x, c[i].y);
+        ctx.closePath();
+        // Set the pattern's transform matrix so its origin
+        // tracks the world (0,0). Without this the pattern is
+        // anchored to the canvas, which makes it visibly slide
+        // independent of the playfield when the camera moves
+        // — wrong feel.
+        try {
+          (pat as unknown as { setTransform?: (m: DOMMatrix) => void }).setTransform?.(
+            new DOMMatrix().translate(origin.x, origin.y),
+          );
+        } catch { /* DOMMatrix unavailable on very old browsers — fall through */ }
+        ctx.fill();
+        ctx.restore();
+      }
+    } else {
+      // Default: subtle grid lines on the floor.
+      ctx.strokeStyle = world.arena.gridColor;
+      ctx.lineWidth = 1;
+      const step = 100;
+      for (let x = b.minX; x <= b.maxX; x += step) {
+        const a = worldToScreen({ x, y: b.minY }, cam, this.cw, this.ch);
+        const z = worldToScreen({ x, y: b.maxY }, cam, this.cw, this.ch);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(z.x, z.y);
+        ctx.stroke();
+      }
+      for (let y = b.minY; y <= b.maxY; y += step) {
+        const a = worldToScreen({ x: b.minX, y }, cam, this.cw, this.ch);
+        const z = worldToScreen({ x: b.maxX, y }, cam, this.cw, this.ch);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(z.x, z.y);
+        ctx.stroke();
+      }
     }
 
     // Fence — drawn as a thick stroked diamond, with vertical posts on top
@@ -294,18 +335,24 @@ export class Renderer {
     // ---- Carve light into the offscreen ----
     mctx.globalCompositeOperation = "destination-out";
 
-    // Crystal ambient circles — wall-lamp style: bright pocket
-    // around each crystal so players have stable landmarks even
-    // when their own beam is pointing away.
+    // Crystal ambient circles — wall-lamp style. Per-crystal
+    // variation drives both visual halo AND this mask pocket
+    // from the same hash, so a bright big crystal carves a
+    // big bright hole in the darkness and a dim small one
+    // carves a smaller one.
     for (const e of world.entities) {
       if (e.kind !== "prop" || e.shape !== "crystal") continue;
       const s = worldToScreen(e.pos, cam, cw, ch);
-      const lightR = 170;
+      const v = crystalVariation(e.id);
+      const lightR = v.glowRadius;
+      // Center peak alpha scales with the crystal's glow
+      // brightness — a dim crystal carves a softer pocket.
+      const peak = Math.min(1, v.glowBrightness);
       const grad = mctx.createRadialGradient(s.x, s.y, 12, s.x, s.y, lightR);
-      grad.addColorStop(0, "rgba(255, 255, 255, 1)");
-      grad.addColorStop(0.35, "rgba(255, 255, 255, 0.85)");
-      grad.addColorStop(0.7, "rgba(255, 255, 255, 0.45)");
-      grad.addColorStop(1, "rgba(255, 255, 255, 0)");
+      grad.addColorStop(0,    `rgba(255, 255, 255, ${peak})`);
+      grad.addColorStop(0.35, `rgba(255, 255, 255, ${peak * 0.85})`);
+      grad.addColorStop(0.70, `rgba(255, 255, 255, ${peak * 0.45})`);
+      grad.addColorStop(1,    `rgba(255, 255, 255, 0)`);
       mctx.fillStyle = grad;
       mctx.beginPath();
       mctx.arc(s.x, s.y, lightR, 0, Math.PI * 2);
@@ -397,6 +444,60 @@ export class Renderer {
       ctx.closePath();
     }
     ctx.fill();
+  }
+
+  // Build the cave's rough-stone tile pattern on first use, then
+  // cache it. 512×512 tile of two layers:
+  //   1. Per-pixel grey noise (±15 luminance) so the floor isn't
+  //      a perfectly uniform color.
+  //   2. ~80 splotches at varied sizes + low alpha — uneven
+  //      patches of darker/lighter stone that read as worn
+  //      cavern floor instead of a clean tile.
+  // The tile is deterministically generated each session (no
+  // seed across reloads — the player won't notice and it keeps
+  // the code simple).
+  private getRoughStonePattern(): CanvasPattern | null {
+    if (this.roughStonePattern) return this.roughStonePattern;
+    const SIZE = 512;
+    const off = document.createElement("canvas");
+    off.width = SIZE;
+    off.height = SIZE;
+    const tctx = off.getContext("2d");
+    if (!tctx) return null;
+    // Per-pixel noise — build directly via ImageData for speed.
+    const img = tctx.createImageData(SIZE, SIZE);
+    const data = img.data;
+    for (let i = 0; i < data.length; i += 4) {
+      // Triangular noise (sum of two uniforms) gives a softer
+      // distribution than uniform — fewer extreme outliers,
+      // reads as gentle grain.
+      const n = ((Math.random() + Math.random()) - 1) * 22;
+      const v = Math.max(0, Math.min(255, 154 + n)); // base ~ #9aa0a8 brightness
+      data[i]     = v;     // R
+      data[i + 1] = v + 2; // G (cool shift)
+      data[i + 2] = v + 6; // B (cool shift)
+      data[i + 3] = 255;   // A
+    }
+    tctx.putImageData(img, 0, 0);
+    // Splotches — soft darker/lighter blobs scattered across.
+    for (let i = 0; i < 80; i++) {
+      const x = Math.random() * SIZE;
+      const y = Math.random() * SIZE;
+      const r = 8 + Math.random() * 38;
+      const dark = Math.random() < 0.55;
+      const grad = tctx.createRadialGradient(x, y, r * 0.1, x, y, r);
+      const tint = dark
+        ? `rgba(40, 50, 60, ${0.18 + Math.random() * 0.22})`
+        : `rgba(220, 225, 235, ${0.10 + Math.random() * 0.15})`;
+      grad.addColorStop(0, tint);
+      grad.addColorStop(1, "rgba(0,0,0,0)");
+      tctx.fillStyle = grad;
+      tctx.beginPath();
+      tctx.arc(x, y, r, 0, Math.PI * 2);
+      tctx.fill();
+    }
+    this.roughStonePattern = this.ctx.createPattern(off, "repeat");
+    return this.roughStonePattern;
   }
 
   // Paint the soft drop shadow of an elevated conveyor onto the
@@ -810,39 +911,35 @@ export class Renderer {
       ctx.closePath();
       ctx.fill();
     } else if (e.shape === "crystal") {
-      // Crystal cluster — three hexagonal shards in a glowing
-      // violet/cyan palette. Pulses softly. The FOV mask pass
-      // separately cuts ambient light around this entity; THIS
-      // glow is the in-world light-source effect — a big soft
-      // violet halo painted additively so it visibly brightens
-      // and tints whatever floor / props are nearby. Makes the
-      // crystal feel like a real light source instead of a
-      // brightly-colored crystal floating in an unlit alcove.
-      const r = e.radius;
-      const t = (performance.now() / 800) % (Math.PI * 2);
+      // Crystal cluster — varied per instance via crystalVariation(id).
+      // Hue stays in the BLUE band (190-250), but size / brightness /
+      // glow radius all jitter so each crystal is distinct: some are
+      // dim little outcrops, others are big bright wall-lamps.
+      // The FOV mask pass reads the SAME variation hash so the
+      // light pool it carves matches what's painted here.
+      const v = crystalVariation(e.id);
+      const r = e.radius * v.scale;
+      const t = (performance.now() / 800 + v.phaseOffset) % (Math.PI * 2);
       const pulse = 0.7 + 0.3 * Math.sin(t);
-      // BIG soft additive glow around the crystal — fades from
-      // bright center to fully transparent at ~9× the crystal
-      // radius. globalCompositeOperation 'lighter' adds light
-      // to whatever's underneath instead of overwriting, so
-      // floor color shows through tinted.
+      // BIG soft additive glow. Radius and brightness driven by
+      // the variation hash so the visual halo and the FOV mask
+      // pocket agree.
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
-      const glowR = r * 9;
+      const glowR = v.glowRadius;
+      const hueDeg = v.hue;
       const glow = ctx.createRadialGradient(s.x, s.y, r * 0.5, s.x, s.y, glowR);
-      glow.addColorStop(0,   `rgba(180, 130, 255, ${0.85 * pulse})`);
-      glow.addColorStop(0.25, `rgba(160, 110, 240, ${0.50 * pulse})`);
-      glow.addColorStop(0.55, `rgba(120, 80, 200, ${0.22 * pulse})`);
-      glow.addColorStop(1,   `rgba(80, 60, 160, 0)`);
+      glow.addColorStop(0,    `hsla(${hueDeg}, 90%, 68%, ${0.85 * pulse * v.glowBrightness})`);
+      glow.addColorStop(0.25, `hsla(${hueDeg}, 85%, 60%, ${0.50 * pulse * v.glowBrightness})`);
+      glow.addColorStop(0.55, `hsla(${hueDeg}, 80%, 48%, ${0.22 * pulse * v.glowBrightness})`);
+      glow.addColorStop(1,    `hsla(${hueDeg}, 70%, 35%, 0)`);
       ctx.fillStyle = glow;
       ctx.beginPath();
       ctx.arc(s.x, s.y, glowR, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
-      // Small ground-shadow halo under the crystal — a darker
-      // ellipse to anchor it visually now that the additive
-      // glow brightens everything else.
-      ctx.fillStyle = `rgba(40, 25, 70, ${0.40 * pulse})`;
+      // Ground shadow.
+      ctx.fillStyle = `hsla(${hueDeg}, 50%, 12%, ${0.40 * pulse})`;
       ctx.beginPath();
       ctx.ellipse(s.x, s.y + 4, r * 1.1, r * 0.4, 0, 0, Math.PI * 2);
       ctx.fill();
@@ -873,12 +970,18 @@ export class Renderer {
         ctx.closePath();
         ctx.fill();
       };
-      // Three shards — left short, center tall, right medium.
-      shard(s.x - r * 0.55, s.y, r * 1.1, r * 0.45, "#a070ff", "#5a3da8");
-      shard(s.x + r * 0.5, s.y, r * 1.3, r * 0.5, "#9e6cff", "#52379d");
-      shard(s.x, s.y, r * 1.9, r * 0.55, "#c69aff", "#7152bf");
+      // Three shards in the per-crystal hue, varying brightness.
+      const shardLit = `hsl(${hueDeg}, 85%, 65%)`;
+      const shardLitMid = `hsl(${hueDeg}, 82%, 60%)`;
+      const shardLitBright = `hsl(${hueDeg}, 90%, 72%)`;
+      const shardDark = `hsl(${hueDeg}, 60%, 35%)`;
+      const shardDarkMid = `hsl(${hueDeg}, 58%, 30%)`;
+      const shardDarkBright = `hsl(${hueDeg}, 65%, 42%)`;
+      shard(s.x - r * 0.55, s.y, r * 1.1, r * 0.45, shardLit, shardDark);
+      shard(s.x + r * 0.5, s.y, r * 1.3, r * 0.5, shardLitMid, shardDarkMid);
+      shard(s.x, s.y, r * 1.9, r * 0.55, shardLitBright, shardDarkBright);
       // Bright inner highlight on center shard.
-      ctx.fillStyle = `rgba(255, 240, 255, ${0.6 * pulse})`;
+      ctx.fillStyle = `hsla(${hueDeg}, 100%, 92%, ${0.6 * pulse})`;
       ctx.beginPath();
       ctx.moveTo(s.x - r * 0.1, s.y - r * 1.6);
       ctx.lineTo(s.x + r * 0.05, s.y - r * 1.6);
@@ -904,50 +1007,66 @@ export class Renderer {
     const t = (performance.now() / 400) % (Math.PI * 2);
     const glow = 0.7 + 0.3 * Math.sin(t);
 
-    // Gem variant — faceted cyan crystal cluster. Used by the
-    // Cave world via ArenaConfig.objectiveStyle. Same pickup
-    // mechanics; just a different visual to match the biome.
+    // Gem variant — rainbow faceted crystal that cycles through
+    // the hue wheel. Used by the Cave world via
+    // ArenaConfig.objectiveStyle. A small additive halo (~4×
+    // the gem radius) in the current hue brightens the floor
+    // around it — same wall-lamp pattern as crystals but
+    // smaller, so a single gem doesn't outshine a crystal
+    // cluster.
     if (this.activeWorld?.arena.objectiveStyle === "gem") {
-      // Cool-toned halo on the ground.
-      ctx.fillStyle = `rgba(120, 220, 255, ${0.30 * glow})`;
-      ctx.beginPath();
-      ctx.ellipse(s.x, s.y + 3, 20, 9, 0, 0, Math.PI * 2);
-      ctx.fill();
-      // Faceted diamond — top point, two side points, bottom point.
       const r = 11;
+      // Hue cycles through the full wheel every 4 seconds.
+      // performance.now() is wall-clock so all clients see the
+      // same rainbow phase, no protocol traffic required.
+      const hue = (performance.now() / 11) % 360;
+      // Additive rainbow halo on the floor.
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const haloR = r * 4;
+      const haloGrad = ctx.createRadialGradient(s.x, s.y, r * 0.5, s.x, s.y, haloR);
+      haloGrad.addColorStop(0,    `hsla(${hue}, 95%, 70%, ${0.80 * glow})`);
+      haloGrad.addColorStop(0.35, `hsla(${hue}, 90%, 60%, ${0.45 * glow})`);
+      haloGrad.addColorStop(1,    `hsla(${hue}, 80%, 40%, 0)`);
+      ctx.fillStyle = haloGrad;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, haloR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      // Faceted diamond.
       const gemPath = new Path2D();
       gemPath.moveTo(s.x, s.y - r);
       gemPath.lineTo(s.x + r * 0.75, s.y - r * 0.15);
       gemPath.lineTo(s.x, s.y + r * 0.95);
       gemPath.lineTo(s.x - r * 0.75, s.y - r * 0.15);
       gemPath.closePath();
-      // Light face (upper-left).
-      ctx.fillStyle = "#a8e6ff";
+      // Light face (upper-left) — bright rainbow hue.
+      ctx.fillStyle = `hsl(${hue}, 95%, 75%)`;
       ctx.fill(gemPath);
-      // Shadow face (right) clipped to the gem.
+      // Shadow face (right) — darker shade of same hue.
       ctx.save();
       ctx.clip(gemPath);
-      ctx.fillStyle = "#3a8db8";
+      ctx.fillStyle = `hsl(${hue}, 75%, 42%)`;
       ctx.beginPath();
       ctx.moveTo(s.x, s.y - r);
       ctx.lineTo(s.x + r * 0.75, s.y - r * 0.15);
       ctx.lineTo(s.x, s.y + r * 0.95);
       ctx.closePath();
       ctx.fill();
-      // Center facet line (top to bottom).
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.65)";
+      // Center facet line.
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.70)";
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(s.x, s.y - r);
       ctx.lineTo(s.x, s.y + r * 0.95);
       ctx.stroke();
       ctx.restore();
-      // Outline + sparkle highlight.
-      ctx.strokeStyle = "#0d3a5a";
+      // Dark outline + bright sparkle.
+      ctx.strokeStyle = `hsl(${hue}, 60%, 20%)`;
       ctx.lineWidth = 1.4;
       ctx.lineJoin = "round";
       ctx.stroke(gemPath);
-      ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+      ctx.fillStyle = "rgba(255, 255, 255, 0.90)";
       ctx.beginPath();
       ctx.ellipse(s.x - r * 0.3, s.y - r * 0.55, 2.5, 1.2, -0.5, 0, Math.PI * 2);
       ctx.fill();
@@ -1889,4 +2008,37 @@ export class Renderer {
     ctx.fill();
     ctx.restore();
   }
+}
+
+// ---- Crystal per-instance variation ----
+// Deterministic hash from a crystal's entity id into a bundle of
+// visual variation knobs. Used by drawProp(crystal) AND by
+// drawFlashlightMask so the visual halo and the FOV light pool
+// agree (same crystal -> same glow size).
+//
+// Hue stays in the BLUE band (190-250°) for the cave biome — cyans
+// through deep blues and violet-blue. Scale, glow radius, and glow
+// brightness vary so each crystal looks distinct.
+export interface CrystalVariation {
+  scale: number;          // 0.75 .. 1.35 — body size multiplier
+  hue: number;            // 190..250 degrees on the HSL wheel
+  glowRadius: number;     // 100..240 px — the additive halo radius
+  glowBrightness: number; // 0.55..1.10 — multiplier on glow alpha
+  phaseOffset: number;    // 0..2π — desyncs the pulse between crystals
+}
+export function crystalVariation(id: number): CrystalVariation {
+  // Simple multiplicative hash; slice the 32-bit output into
+  // independent 0..1 values per knob. Same id always gives the
+  // same numbers across reloads + clients.
+  const seed = (id * 2654435761) >>> 0;
+  const rand = (slice: number): number => {
+    const x = ((seed >>> (slice * 5)) ^ (seed >>> (slice * 7 + 3))) >>> 0;
+    return (x % 100000) / 100000;
+  };
+  const scale = 0.75 + rand(0) * 0.60;       // 0.75..1.35
+  const hue = 190 + rand(1) * 60;            // 190..250 (cyan -> deep blue)
+  const glowRadius = 100 + rand(2) * 140;    // 100..240
+  const glowBrightness = 0.55 + rand(3) * 0.55; // 0.55..1.10
+  const phaseOffset = rand(4) * Math.PI * 2;
+  return { scale, hue, glowRadius, glowBrightness, phaseOffset };
 }

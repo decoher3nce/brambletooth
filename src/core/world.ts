@@ -23,6 +23,11 @@ export interface ArenaConfig {
   // flashlight cone and any crystal-prop ambient light circles.
   // Used by the Cave world to deliver the "low vision" gameplay.
   useFlashlightFOV?: boolean;
+  // Optional procedural floor texture. "rough-stone" overlays a
+  // pre-baked noise + splotch pattern on top of groundColor and
+  // suppresses the regular grid lines, giving the cave a rough
+  // cavern-floor read instead of straight grid tiles.
+  groundTexture?: "rough-stone";
 }
 
 export class World {
