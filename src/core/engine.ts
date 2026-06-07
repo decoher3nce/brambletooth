@@ -700,7 +700,14 @@ export class Engine {
       // shredding them in a single tick. Bite ignores invincible
       // (Bigfoot test mode) for consistency with other contact dmg.
       if (d < z.radius + target.radius + 4 && z.biteCooldown <= 0) {
-        if (!target.invincible) target.hp -= 4;
+        // Necromantic pact: a zombie never bites its own summoner.
+        // pickCommandTarget already excludes the caster, so this
+        // can't trigger via a normal cast — kept as defense in
+        // depth against any future AI path or bug that points
+        // targetId at the owner.
+        if (target.id !== z.ownerId && !target.invincible) {
+          target.hp -= 4;
+        }
         z.biteCooldown = 0.7;
       }
     } else {

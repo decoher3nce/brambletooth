@@ -313,13 +313,16 @@ function livingZombiesOwnedBy(world: World, ownerId: number): ZombieEntity[] {
 // Pick the character closest to `aim` (any team), within
 // PICK_RANGE world units of it. Returns null if no character is
 // near the aim point — the command_attack ability uses this to
-// refuse a cast aimed at empty ground.
+// refuse a cast aimed at empty ground. The caster is EXCLUDED:
+// Necro can never command her own swarm onto herself, even if her
+// aim happens to land near her own body during a panicked cast.
 const COMMAND_PICK_RANGE = 220;
-function pickCommandTarget(world: World, aim: Vec2): CharacterEntity | null {
+function pickCommandTarget(world: World, aim: Vec2, casterId: number): CharacterEntity | null {
   let best: CharacterEntity | null = null;
   let bestD = Infinity;
   for (const c of world.allCharacters()) {
     if (c.dead || c.exited) continue;
+    if (c.id === casterId) continue;
     const d = dist(c.pos, aim);
     if (d < bestD && d <= COMMAND_PICK_RANGE) {
       best = c;
@@ -378,10 +381,10 @@ registerAbility({
   cooldown: 5,
   canCast: ({ world, caster, aim }) => {
     if (livingZombiesOwnedBy(world, caster.id).length === 0) return false;
-    return pickCommandTarget(world, aim) != null;
+    return pickCommandTarget(world, aim, caster.id) != null;
   },
   cast: ({ world, caster, aim }) => {
-    const target = pickCommandTarget(world, aim);
+    const target = pickCommandTarget(world, aim, caster.id);
     if (!target) return;
     for (const z of livingZombiesOwnedBy(world, caster.id)) {
       z.mode = "chase";
