@@ -317,13 +317,24 @@ export class Renderer {
       const s = worldToScreen(c.pos, cam, cw, ch);
       const isViewer = c.id === viewerId;
       if (isViewer) {
-        // Viewer's beam: total 90° wide (±45°). Three stacked
-        // cones approximate an angular brightness gradient —
-        // brightest in the inner ±15°, dimmer through ±30°,
-        // dim rim at ±45°.
-        this.drawConeLight(mctx, s.x, s.y, c.facing, 320, Math.PI / 4,  0.20);
-        this.drawConeLight(mctx, s.x, s.y, c.facing, 320, Math.PI / 6,  0.55);
-        this.drawConeLight(mctx, s.x, s.y, c.facing, 320, Math.PI / 12, 0.85);
+        // Viewer's beam. FOUR stacked cones now (was three) —
+        // the extra outer halo at ±70° with very low peak alpha
+        // softens the rim. Without it the ±45° cone had a
+        // visible "knife edge" where the cone ended and the
+        // ambient darkness began.
+        //
+        // Layers, outer → inner:
+        //   ±70° peak 0.08  (faint halo, hides the rim edge)
+        //   ±45° peak 0.30  (rim, slightly brighter than before)
+        //   ±30° peak 0.55  (mid)
+        //   ±15° peak 0.85  (bright core)
+        // Stacked with destination-out, the alphas compound
+        // multiplicatively so the inner core is much brighter
+        // than the rim, with a smooth angular falloff.
+        this.drawConeLight(mctx, s.x, s.y, c.facing, 340, (Math.PI / 180) * 70, 0.08);
+        this.drawConeLight(mctx, s.x, s.y, c.facing, 340, Math.PI / 4,  0.30);
+        this.drawConeLight(mctx, s.x, s.y, c.facing, 340, Math.PI / 6,  0.55);
+        this.drawConeLight(mctx, s.x, s.y, c.facing, 340, Math.PI / 12, 0.85);
       } else {
         // Other characters: small full-circle halo so you can
         // spot them when they're close, even if your beam is
@@ -361,10 +372,15 @@ export class Renderer {
     facing: number, range: number, halfAngle: number,
     peak: number = 1.0,
   ): void {
+    // Tighter distance falloff than v1 so the angular cone edge
+    // in mid-range is dimmer (less visible "knife edge"). At
+    // 50% range the alpha is already at 50% of peak, and by
+    // 85% range it's down to 15%.
     const grad = ctx.createRadialGradient(cx, cy, 6, cx, cy, range);
-    grad.addColorStop(0,   `rgba(255, 255, 255, ${peak})`);
-    grad.addColorStop(0.6, `rgba(255, 255, 255, ${peak * 0.55})`);
-    grad.addColorStop(1,   `rgba(255, 255, 255, 0)`);
+    grad.addColorStop(0,    `rgba(255, 255, 255, ${peak})`);
+    grad.addColorStop(0.5,  `rgba(255, 255, 255, ${peak * 0.5})`);
+    grad.addColorStop(0.85, `rgba(255, 255, 255, ${peak * 0.15})`);
+    grad.addColorStop(1,    `rgba(255, 255, 255, 0)`);
     ctx.fillStyle = grad;
     ctx.beginPath();
     if (halfAngle >= Math.PI - 0.01) {
