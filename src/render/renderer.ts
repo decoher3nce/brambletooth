@@ -72,6 +72,17 @@ export class Renderer {
   // a wider signature change. Cleared after the draw pass.
   private activeWorld: World | null = null;
 
+  // Offscreen canvas used by drawFlashlightMask. The dark overlay +
+  // carved light cutouts are rendered to this offscreen first, then
+  // composited onto the main canvas with source-over so the carved
+  // regions correctly reveal the entities below. Carving directly
+  // on the main canvas with destination-out would punch holes
+  // through the entities AND the canvas itself — the carved
+  // regions would become transparent and show the page background.
+  // Recreated when canvas dimensions change.
+  private fovMask: HTMLCanvasElement | null = null;
+  private fovMaskCtx: CanvasRenderingContext2D | null = null;
+
   constructor(
     public ctx: CanvasRenderingContext2D,
     public canvas: HTMLCanvasElement,
@@ -240,37 +251,64 @@ export class Renderer {
     viewerId: number | null,
   ): void {
     if (!world.arena.useFlashlightFOV) return;
-    const ctx = this.ctx;
     const cw = this.cw;
     const ch = this.ch;
-    ctx.save();
-    // Base darkness overlay. Lower alpha (0.72) gives a "low
-    // ambient glow" — the playfield is dim but not pitch-black,
-    // so a player can squint and pick out prop silhouettes even
-    // outside a beam. Crystal lamps + flashlight cones then cut
-    // brighter pockets out of this.
-    ctx.fillStyle = "rgba(0, 0, 8, 0.72)";
-    ctx.fillRect(0, 0, cw, ch);
-    // Cut light out of the overlay.
-    ctx.globalCompositeOperation = "destination-out";
 
-    // Crystal ambient circles — bigger, brighter than v1. Each
-    // crystal acts as a wall lamp lighting a wide pocket so
-    // players have stable landmarks to navigate by even when
-    // their own beam is pointing away.
+    // ---- Ensure an offscreen mask canvas sized to match the main
+    // canvas backing store. We render the dark overlay + carve
+    // light cutouts onto this offscreen first, then drawImage
+    // onto the main canvas. Carving directly on the main canvas
+    // with destination-out punches through the entities AND the
+    // canvas pixels themselves — the cutout becomes transparent
+    // and shows the page background, which is exactly the cave
+    // bug the user reported (Slagy + crystals invisible inside
+    // their own cone). The offscreen indirection fixes it.
+    const W = this.canvas.width;
+    const H = this.canvas.height;
+    if (!this.fovMask || this.fovMask.width !== W || this.fovMask.height !== H) {
+      this.fovMask = document.createElement("canvas");
+      this.fovMask.width = W;
+      this.fovMask.height = H;
+      this.fovMaskCtx = this.fovMask.getContext("2d");
+    }
+    const mctx = this.fovMaskCtx;
+    if (!mctx) return;
+
+    // Match the main canvas's DPR transform so all lighting math
+    // happens in CSS pixels (same coord system as worldToScreen).
+    const sx = W / cw;
+    const sy = H / ch;
+    mctx.setTransform(sx, 0, 0, sy, 0, 0);
+
+    // ---- Base darkness overlay on the offscreen ----
+    // Wipe the offscreen first (carry over from last frame would
+    // be additive otherwise), then paint the dim ambient layer.
+    // Lower alpha (0.72) gives a "low ambient glow" — the
+    // playfield is dim but not pitch-black, so a player can
+    // squint and pick out prop silhouettes even outside any beam.
+    mctx.globalCompositeOperation = "copy";
+    mctx.fillStyle = "rgba(0, 0, 8, 0.72)";
+    mctx.fillRect(0, 0, cw, ch);
+
+    // ---- Carve light into the offscreen ----
+    mctx.globalCompositeOperation = "destination-out";
+
+    // Crystal ambient circles — wall-lamp style: bright pocket
+    // around each crystal so players have stable landmarks even
+    // when their own beam is pointing away.
     for (const e of world.entities) {
       if (e.kind !== "prop" || e.shape !== "crystal") continue;
       const s = worldToScreen(e.pos, cam, cw, ch);
       const lightR = 170;
-      const grad = ctx.createRadialGradient(s.x, s.y, 12, s.x, s.y, lightR);
+      const grad = mctx.createRadialGradient(s.x, s.y, 12, s.x, s.y, lightR);
       grad.addColorStop(0, "rgba(255, 255, 255, 1)");
       grad.addColorStop(0.35, "rgba(255, 255, 255, 0.85)");
       grad.addColorStop(0.7, "rgba(255, 255, 255, 0.45)");
       grad.addColorStop(1, "rgba(255, 255, 255, 0)");
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, lightR, 0, Math.PI * 2);
-      ctx.fill();
+      mctx.fillStyle = grad;
+      mctx.beginPath();
+      mctx.arc(s.x, s.y, lightR, 0, Math.PI * 2);
+      mctx.fill();
     }
 
     // Per-character flashlight cones.
@@ -279,38 +317,50 @@ export class Renderer {
       const s = worldToScreen(c.pos, cam, cw, ch);
       const isViewer = c.id === viewerId;
       if (isViewer) {
-        // Viewer's beam: total 90° wide (±45°). 85% brightness
-        // in the inner 30° (±15°); falls off linearly to 0% at
-        // ±45°. Implemented as three stacked cones — wide rim,
-        // mid band, bright core — using destination-out so the
-        // brighter inner stamps remove more darkness than the
-        // outer rim. Approximates the angular gradient cleanly
-        // enough for Canvas 2D.
-        this.drawConeLight(s.x, s.y, c.facing, 320, Math.PI / 4,  0.20); // ±45° rim
-        this.drawConeLight(s.x, s.y, c.facing, 320, Math.PI / 6,  0.55); // ±30° mid
-        this.drawConeLight(s.x, s.y, c.facing, 320, Math.PI / 12, 0.85); // ±15° core
+        // Viewer's beam: total 90° wide (±45°). Three stacked
+        // cones approximate an angular brightness gradient —
+        // brightest in the inner ±15°, dimmer through ±30°,
+        // dim rim at ±45°.
+        this.drawConeLight(mctx, s.x, s.y, c.facing, 320, Math.PI / 4,  0.20);
+        this.drawConeLight(mctx, s.x, s.y, c.facing, 320, Math.PI / 6,  0.55);
+        this.drawConeLight(mctx, s.x, s.y, c.facing, 320, Math.PI / 12, 0.85);
       } else {
         // Other characters: small full-circle halo so you can
         // spot them when they're close, even if your beam is
         // pointing the wrong way.
-        this.drawConeLight(s.x, s.y, c.facing, 60, Math.PI, 0.55);
+        this.drawConeLight(mctx, s.x, s.y, c.facing, 60, Math.PI, 0.55);
       }
     }
 
+    // ---- Composite the mask onto the main canvas ----
+    // The mask's transparent regions (carved by destination-out)
+    // let the entities below show through; the still-opaque dark
+    // regions tint the playfield. drawImage uses source-over by
+    // default which is exactly what we want.
+    //
+    // We bypass the main canvas's DPR transform here because the
+    // offscreen is sized to actual pixels and we want a 1:1
+    // copy.
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(this.fovMask, 0, 0);
     ctx.restore();
   }
 
   // Stamp a single radial-gradient cone (or full circle when
-  // halfAngle = π) into the active destination-out compositor.
-  // `peak` is the alpha at the center of the gradient — controls
-  // how much darkness gets removed. 1.0 = fully bright, 0.0 = no
-  // change.
+  // halfAngle = π) onto an arbitrary context (the offscreen FOV
+  // mask). `peak` is the alpha at the center of the gradient —
+  // higher peak removes more darkness when this is rendered
+  // with destination-out. Pulled out as a helper so both the
+  // 3-stacked viewer beam and the simpler other-character halo
+  // share one path.
   private drawConeLight(
+    ctx: CanvasRenderingContext2D,
     cx: number, cy: number,
     facing: number, range: number, halfAngle: number,
     peak: number = 1.0,
   ): void {
-    const ctx = this.ctx;
     const grad = ctx.createRadialGradient(cx, cy, 6, cx, cy, range);
     grad.addColorStop(0,   `rgba(255, 255, 255, ${peak})`);
     grad.addColorStop(0.6, `rgba(255, 255, 255, ${peak * 0.55})`);
