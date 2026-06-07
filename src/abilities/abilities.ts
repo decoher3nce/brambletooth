@@ -360,8 +360,12 @@ registerAbility({
       pos: { x: caster.pos.x + offX, y: caster.pos.y + offY },
       radius: 14,
       ownerId: caster.id,
-      hp: 30,
-      maxHp: 30,
+      // Glass minions — one Slagy slash or trap kills cleanly, a
+      // slime shot takes two. Keeps the swarm a threat that has to
+      // be re-summoned, not a damage-sponge that survives an entire
+      // engagement.
+      hp: 15,
+      maxHp: 15,
       speed: 130,
       facing: caster.facing,
       vel: { x: 0, y: 0 },
