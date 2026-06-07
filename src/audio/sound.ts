@@ -324,15 +324,29 @@ const SOUND_DEFS: Record<SoundId, SoundDef> = {
   // Each is short (~80-150ms) so retriggering at high cadence
   // sounds like a soft continuous loop. Callers pass volumeMul
   // tied to current brush depth (deeper = louder).
-  // Tree rustle: high-frequency filtered noise burst, the
-  // leaves-against-cloth sound.
+  // Tree "shush" — sibilant noise band centered in the speech
+  // sibilant range, with a slower attack/decay so it reads as
+  // shhhhh rather than a leafy crackle. Long enough (~0.45s)
+  // to feel like a single soft exhale through the branches.
   brush_rustle: (c, dest) => {
-    envNoise(c, dest, 0.13, 0.45, 7000);
+    // Pre-filter noise to the 3-7kHz band via two layered bursts
+    // — a wider envelope shaped via the existing lowpass helper.
+    envNoise(c, dest, 0.45, 0.32, 6500);    // upper sibilance
+    envNoise(c, dest, 0.45, 0.20, 4200);    // mid body fills it
+    // Subtle low-end whisper to anchor the shush so it doesn't
+    // float — barely audible but adds body.
+    envNoise(c, dest, 0.40, 0.08, 900);
   },
-  // Rock crunch: low-passed gritty noise — small stones grinding.
+  // Rock "thud + crunch" — two-stage: a low impact thud lands
+  // first, then a gritty crunch ride trails out behind it.
   brush_crunch: (c, dest) => {
-    envNoise(c, dest, 0.11, 0.50, 1800);
-    envNoise(c, dest, 0.05, 0.30, 600, 0.02);
+    // Thud — low sine impact at the leading edge.
+    envOsc(c, dest, "sine", 110, 60, 0.10, 0.55);
+    envOsc(c, dest, "triangle", 220, 100, 0.08, 0.20);
+    // Crunch — low-pass gritty noise that starts a hair later
+    // so the ear hears the thud first, then the grind on top.
+    envNoise(c, dest, 0.16, 0.45, 1600, 0.04);
+    envNoise(c, dest, 0.10, 0.28, 600, 0.06);
   },
   // Metal pipe: sharp clang with a ringing partial.
   brush_clang: (c, dest) => {

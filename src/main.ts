@@ -2967,7 +2967,12 @@ const FOOTSTEP_MOVING_SPEED = 30;     // velocity magnitude above which we count
 // between rounds, which the next entry hash collision will catch
 // (no explicit reset needed for v1).
 const lastBrushFire = new Map<string, number>();
-const BRUSH_RETRIGGER_INTERVAL = 0.15; // seconds between retriggers per obstacle
+// Cadence between repeated brush samples for the same
+// (viewer, obstacle) pair. 2 seconds reads as ambient
+// "you're still in contact with this" rather than a buzzy loop —
+// each sample lands as a discrete cue against the silence
+// before it.
+const BRUSH_RETRIGGER_INTERVAL = 2.0;
 
 function detectBrushSounds(
   _engine: Engine | null,
