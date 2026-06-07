@@ -3080,9 +3080,35 @@ function markMapCompleted(id: string): void {
 // achievement as authoritative truth that you've beaten the map.
 // Catches any drift where the credit path missed for an old build,
 // a sync race, or anything else stale.
+//
+// Every map gets an entry pointing to a `<world>_world_<n>`
+// achievement id. The catalog only ships forest_world_1 today, so
+// the other entries are inert until those achievements are added —
+// but having them mapped here means the day they go in the catalog
+// they instantly become a self-healing backfill source for any
+// drift the sync clobber bug (now fixed) may have caused.
 const ACHIEVEMENT_IMPLIES_MAP: Record<string, string> = {
   forest_world_1: "forest_1",
+  forest_world_2: "forest_2",
+  forest_world_3: "forest_3",
+  forest_world_4: "forest_4",
+  forest_world_5: "forest_5",
+  factory_world_1: "factory_1",
+  factory_world_2: "factory_2",
+  factory_world_3: "factory_3",
 };
+
+// Map id → the achievement id that says "you've beaten this map".
+// Inverse of ACHIEVEMENT_IMPLIES_MAP, computed once at module load.
+// processAwards reads this on a survivor exit so the achievement
+// granted matches the map the player actually finished.
+const MAP_TO_ACHIEVEMENT: Record<string, string> = (() => {
+  const out: Record<string, string> = {};
+  for (const [ach, map] of Object.entries(ACHIEVEMENT_IMPLIES_MAP)) {
+    out[map] = ach;
+  }
+  return out;
+})();
 
 // Snapshot of the local profile's progress, used by the registry's
 // pure unlock-check helpers (isWorldUnlocked, isMapPlayable*, etc.).
@@ -3345,7 +3371,16 @@ function processAwards(
     // LONE banner here overwrites it within the same tick and the
     // player never sees the unlock callout.
     if (me && me.team === "survivor" && me.exited) {
-      earnAchievement("forest_world_1");
+      // Map-specific completion achievement. Falls back to nothing
+      // if the current map has no achievement assigned (earnAchievement
+      // no-ops on unknown ids, so it's safe even with a stale catalog).
+      const currentMapId = appMode === "local" && play
+        ? play.mapId
+        : net?.chosenMapId ?? null;
+      if (currentMapId) {
+        const ach = MAP_TO_ACHIEVEMENT[currentMapId];
+        if (ach) earnAchievement(ach);
+      }
       const allSurvivors: CharacterEntity[] = [];
       for (const e of world.entities) {
         if (e.kind === "character" && e.team === "survivor") allSurvivors.push(e);
