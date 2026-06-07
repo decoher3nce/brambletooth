@@ -1016,6 +1016,11 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
     const localVis = visibilityFilter(p.world, p.world.playerCharacter()?.id);
     renderer.drawEntities(p.world, p.cam, localVis);
     drawClientEffects(p.cam);
+    // Cave-world low-vision mask (no-op when arena doesn't request
+    // it). Paints darkness with cut-outs for the local player's
+    // flashlight cone + crystal ambient circles + a small halo
+    // around every other character.
+    renderer.drawFlashlightMask(p.world, p.cam, p.world.playerCharacter()?.id ?? null);
     drawHUD(ctx, canvas, p.world, {
       outcome: p.engine.outcome,
       paused: p.engine.paused,
@@ -1224,6 +1229,7 @@ function drawNetGameScene(dt: number, dims: { w: number; h: number }, n: NetClie
   const netVis = visibilityFilter(netViewWorld, n.yourEntityId);
   renderer.drawEntities(netViewWorld, netCam, netVis);
   drawClientEffects(netCam);
+  renderer.drawFlashlightMask(netViewWorld, netCam, n.yourEntityId);
   drawHUD(ctx, canvas, netViewWorld, {
     outcome: n.outcome,
     paused: n.paused,

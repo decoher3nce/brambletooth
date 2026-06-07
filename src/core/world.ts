@@ -13,6 +13,16 @@ export interface ArenaConfig {
   groundColor: string;
   // Optional grid line color for ground texture.
   gridColor: string;
+  // Visual variant for objective entities. "nugget" is the default
+  // (golden lump used by Forest + Factory); "gem" paints a faceted
+  // crystal cluster used by the Cave world. Both pick up + count
+  // the same way at the engine layer; this only switches the art.
+  objectiveStyle?: "nugget" | "gem";
+  // When true, the renderer paints a heavy darkness overlay over
+  // the playfield with cut-outs for each character's forward
+  // flashlight cone and any crystal-prop ambient light circles.
+  // Used by the Cave world to deliver the "low vision" gameplay.
+  useFlashlightFOV?: boolean;
 }
 
 export class World {

@@ -134,7 +134,11 @@ export type PropShape =
   // Forest props
   | "tree" | "stump" | "rock"
   // Factory props
-  | "crate" | "pipe" | "oildrum" | "pallet";
+  | "crate" | "pipe" | "oildrum" | "pallet"
+  // Cave props — caverock is a chunky stalagmite / boulder pile
+  // (blocking, no light). crystal is a glowing geode cluster
+  // (blocking, emits ambient light in cave FOV mode).
+  | "caverock" | "crystal";
 
 export interface PropEntity extends BaseEntity {
   kind: "prop";

@@ -67,6 +67,11 @@ export class Renderer {
   // DPR-scaled but we want to draw using CSS pixels.
   private dimSource: (() => { w: number; h: number }) | null = null;
 
+  // Active world cached during drawEntities so per-entity draw methods
+  // (e.g. drawObjective) can read ArenaConfig.objectiveStyle without
+  // a wider signature change. Cleared after the draw pass.
+  private activeWorld: World | null = null;
+
   constructor(
     public ctx: CanvasRenderingContext2D,
     public canvas: HTMLCanvasElement,
@@ -167,6 +172,7 @@ export class Renderer {
   // characters tie-break slightly AFTER elevated belts so a character
   // riding the catwalk renders on top of it.
   drawEntities(world: World, cam: Camera, visible?: (e: Entity) => boolean): void {
+    this.activeWorld = world;
     const bandOf = (e: Entity): number => {
       if (
         e.kind === "plate" || e.kind === "exit" ||
@@ -214,6 +220,91 @@ export class Renderer {
       if (visible && !visible(e)) continue;
       this.drawEntity(e, cam);
     }
+    this.activeWorld = null;
+  }
+
+  // Cave-world flashlight FOV mask. Paints a heavy darkness overlay
+  // over the playfield with cut-outs for:
+  //   - viewer's forward flashlight cone (long wedge in facing dir)
+  //   - every other character's short flashlight cone (so you can
+  //     spot them by their own light when they're nearby)
+  //   - every crystal-prop's soft ambient circle
+  // The whole pass is a single composite-out stamp on top of an
+  // overlay, so it's cheap regardless of entity count.
+  //
+  // Called from main.ts AFTER drawEntities + client effects, BEFORE
+  // drawHUD, so the HUD remains fully bright over the darkness.
+  drawFlashlightMask(
+    world: World,
+    cam: Camera,
+    viewerId: number | null,
+  ): void {
+    if (!world.arena.useFlashlightFOV) return;
+    const ctx = this.ctx;
+    const cw = this.cw;
+    const ch = this.ch;
+    ctx.save();
+    // Lay down the darkness overlay. Heavy but not pitch-black so
+    // the playfield grid + arena frame still feel present.
+    ctx.fillStyle = "rgba(0, 0, 8, 0.88)";
+    ctx.fillRect(0, 0, cw, ch);
+    // Cut light out of the overlay.
+    ctx.globalCompositeOperation = "destination-out";
+
+    // Crystal ambient circles — read every crystal-prop position.
+    for (const e of world.entities) {
+      if (e.kind !== "prop" || e.shape !== "crystal") continue;
+      const s = worldToScreen(e.pos, cam, cw, ch);
+      const lightR = 110; // ambient radius
+      const grad = ctx.createRadialGradient(s.x, s.y, 8, s.x, s.y, lightR);
+      grad.addColorStop(0, "rgba(255, 255, 255, 1)");
+      grad.addColorStop(0.55, "rgba(255, 255, 255, 0.55)");
+      grad.addColorStop(1, "rgba(255, 255, 255, 0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, lightR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Per-character flashlight cones.
+    for (const c of world.entities) {
+      if (c.kind !== "character" || c.dead || c.exited) continue;
+      const s = worldToScreen(c.pos, cam, cw, ch);
+      const isViewer = c.id === viewerId;
+      // Cone length: viewer gets a long beam; others get a short
+      // halo of light so they're spottable in the dark when near.
+      const range = isViewer ? 260 : 50;
+      // Half-angle of cone (radians).
+      const halfAng = isViewer ? Math.PI / 6 : Math.PI; // others = full circle
+      this.drawConeLight(s.x, s.y, c.facing, range, halfAng);
+    }
+
+    ctx.restore();
+  }
+
+  // Stamp a single radial-gradient cone (or full circle when
+  // halfAngle = π) into the active destination-out compositor.
+  private drawConeLight(
+    cx: number, cy: number,
+    facing: number, range: number, halfAngle: number,
+  ): void {
+    const ctx = this.ctx;
+    const grad = ctx.createRadialGradient(cx, cy, 6, cx, cy, range);
+    grad.addColorStop(0, "rgba(255, 255, 255, 1)");
+    grad.addColorStop(0.6, "rgba(255, 255, 255, 0.45)");
+    grad.addColorStop(1, "rgba(255, 255, 255, 0)");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    if (halfAngle >= Math.PI - 0.01) {
+      // Full circle — used for non-viewer characters.
+      ctx.arc(cx, cy, range, 0, Math.PI * 2);
+    } else {
+      // Wedge path: from the character outward to the cone arc.
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, range, facing - halfAngle, facing + halfAngle);
+      ctx.closePath();
+    }
+    ctx.fill();
   }
 
   // Paint the soft drop shadow of an elevated conveyor onto the
@@ -585,6 +676,99 @@ export class Renderer {
       ctx.lineWidth = 1;
       ctx.strokeRect(s.x - r, s.y - r * 0.3, r * 2, r * 0.6);
       ctx.restore();
+    } else if (e.shape === "caverock") {
+      // Stalagmite cluster — three jagged dark spikes rising from
+      // a stone base. Flat-shaded with a darker right side.
+      const r = e.radius;
+      // Base shadow
+      ctx.fillStyle = "#1a1a22";
+      ctx.beginPath();
+      ctx.ellipse(s.x, s.y + 2, r * 0.95, r * 0.32, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Tall middle spike
+      ctx.fillStyle = "#3a3a48";
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y - r * 1.8);
+      ctx.lineTo(s.x - r * 0.55, s.y);
+      ctx.lineTo(s.x + r * 0.55, s.y);
+      ctx.closePath();
+      ctx.fill();
+      // Shadow side on middle spike
+      ctx.fillStyle = "#1f1f28";
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y - r * 1.8);
+      ctx.lineTo(s.x + r * 0.55, s.y);
+      ctx.lineTo(s.x + r * 0.1, s.y);
+      ctx.closePath();
+      ctx.fill();
+      // Short left spike
+      ctx.fillStyle = "#2e2e3a";
+      ctx.beginPath();
+      ctx.moveTo(s.x - r * 0.7, s.y - r * 0.95);
+      ctx.lineTo(s.x - r * 1.0, s.y);
+      ctx.lineTo(s.x - r * 0.4, s.y);
+      ctx.closePath();
+      ctx.fill();
+      // Short right spike
+      ctx.fillStyle = "#252530";
+      ctx.beginPath();
+      ctx.moveTo(s.x + r * 0.7, s.y - r * 1.0);
+      ctx.lineTo(s.x + r * 0.4, s.y);
+      ctx.lineTo(s.x + r * 1.0, s.y);
+      ctx.closePath();
+      ctx.fill();
+    } else if (e.shape === "crystal") {
+      // Crystal cluster — three hexagonal shards in a glowing
+      // violet/cyan palette. Pulses softly. The FOV mask pass
+      // separately cuts ambient light around this entity.
+      const r = e.radius;
+      const t = (performance.now() / 800) % (Math.PI * 2);
+      const pulse = 0.6 + 0.4 * Math.sin(t);
+      // Halo on the ground.
+      ctx.fillStyle = `rgba(170, 120, 255, ${0.28 * pulse})`;
+      ctx.beginPath();
+      ctx.ellipse(s.x, s.y + 2, r * 1.4, r * 0.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Rock base.
+      ctx.fillStyle = "#22222a";
+      ctx.beginPath();
+      ctx.ellipse(s.x, s.y, r * 0.7, r * 0.22, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Center shard (tall).
+      const shard = (cx: number, cy: number, h: number, w: number, fill: string, dark: string) => {
+        ctx.fillStyle = fill;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - h);
+        ctx.lineTo(cx + w * 0.55, cy - h * 0.55);
+        ctx.lineTo(cx + w * 0.55, cy - h * 0.15);
+        ctx.lineTo(cx, cy);
+        ctx.lineTo(cx - w * 0.55, cy - h * 0.15);
+        ctx.lineTo(cx - w * 0.55, cy - h * 0.55);
+        ctx.closePath();
+        ctx.fill();
+        // Shadow side (right).
+        ctx.fillStyle = dark;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - h);
+        ctx.lineTo(cx + w * 0.55, cy - h * 0.55);
+        ctx.lineTo(cx + w * 0.55, cy - h * 0.15);
+        ctx.lineTo(cx, cy);
+        ctx.closePath();
+        ctx.fill();
+      };
+      // Three shards — left short, center tall, right medium.
+      shard(s.x - r * 0.55, s.y, r * 1.1, r * 0.45, "#a070ff", "#5a3da8");
+      shard(s.x + r * 0.5, s.y, r * 1.3, r * 0.5, "#9e6cff", "#52379d");
+      shard(s.x, s.y, r * 1.9, r * 0.55, "#c69aff", "#7152bf");
+      // Bright inner highlight on center shard.
+      ctx.fillStyle = `rgba(255, 240, 255, ${0.6 * pulse})`;
+      ctx.beginPath();
+      ctx.moveTo(s.x - r * 0.1, s.y - r * 1.6);
+      ctx.lineTo(s.x + r * 0.05, s.y - r * 1.6);
+      ctx.lineTo(s.x + r * 0.08, s.y - r * 0.6);
+      ctx.lineTo(s.x - r * 0.08, s.y - r * 0.6);
+      ctx.closePath();
+      ctx.fill();
     }
   }
 
@@ -602,6 +786,58 @@ export class Renderer {
     // Pulsing ground glow.
     const t = (performance.now() / 400) % (Math.PI * 2);
     const glow = 0.7 + 0.3 * Math.sin(t);
+
+    // Gem variant — faceted cyan crystal cluster. Used by the
+    // Cave world via ArenaConfig.objectiveStyle. Same pickup
+    // mechanics; just a different visual to match the biome.
+    if (this.activeWorld?.arena.objectiveStyle === "gem") {
+      // Cool-toned halo on the ground.
+      ctx.fillStyle = `rgba(120, 220, 255, ${0.30 * glow})`;
+      ctx.beginPath();
+      ctx.ellipse(s.x, s.y + 3, 20, 9, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Faceted diamond — top point, two side points, bottom point.
+      const r = 11;
+      const gemPath = new Path2D();
+      gemPath.moveTo(s.x, s.y - r);
+      gemPath.lineTo(s.x + r * 0.75, s.y - r * 0.15);
+      gemPath.lineTo(s.x, s.y + r * 0.95);
+      gemPath.lineTo(s.x - r * 0.75, s.y - r * 0.15);
+      gemPath.closePath();
+      // Light face (upper-left).
+      ctx.fillStyle = "#a8e6ff";
+      ctx.fill(gemPath);
+      // Shadow face (right) clipped to the gem.
+      ctx.save();
+      ctx.clip(gemPath);
+      ctx.fillStyle = "#3a8db8";
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y - r);
+      ctx.lineTo(s.x + r * 0.75, s.y - r * 0.15);
+      ctx.lineTo(s.x, s.y + r * 0.95);
+      ctx.closePath();
+      ctx.fill();
+      // Center facet line (top to bottom).
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.65)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y - r);
+      ctx.lineTo(s.x, s.y + r * 0.95);
+      ctx.stroke();
+      ctx.restore();
+      // Outline + sparkle highlight.
+      ctx.strokeStyle = "#0d3a5a";
+      ctx.lineWidth = 1.4;
+      ctx.lineJoin = "round";
+      ctx.stroke(gemPath);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+      ctx.beginPath();
+      ctx.ellipse(s.x - r * 0.3, s.y - r * 0.55, 2.5, 1.2, -0.5, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
+
+    // Default nugget variant.
     ctx.fillStyle = `rgba(255, 200, 80, ${0.22 * glow})`;
     ctx.beginPath();
     ctx.ellipse(s.x, s.y + 3, 22, 10, 0, 0, Math.PI * 2);

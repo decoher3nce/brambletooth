@@ -24,6 +24,7 @@ import {
   buildForest5,
 } from "../arenas/forest";
 import { FACTORY_ARENA_CONFIG, buildFactory, buildFactory2, buildFactory3 } from "../arenas/factory";
+import { CAVE_ARENA_CONFIG, buildCave1 } from "../arenas/cave";
 
 // How many maps must be completed in a world to unlock the next via
 // the default "after-world" gate.
@@ -599,6 +600,81 @@ const FACTORY_MAPS: MapDef[] = [
   },
 ];
 
+// Cave Map base tile: black floor with a few stalagmites and one
+// purple crystal cluster. Distinct silhouette so the map-select
+// reads as "low vision biome" without needing an in-game preview.
+function drawCaveBase(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+): void {
+  ctx.fillStyle = "#0a0a14";
+  ctx.fillRect(x, y, w, h);
+  // Subtle vignette toward the corners.
+  ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+  ctx.fillRect(x, y, w, h);
+  // Stalagmites (small jagged spikes).
+  ctx.fillStyle = "#2e2e3a";
+  for (const [px, py, ph] of [
+    [0.2, 0.55, 0.18],
+    [0.36, 0.7, 0.13],
+    [0.66, 0.6, 0.16],
+    [0.82, 0.78, 0.11],
+  ] as const) {
+    ctx.beginPath();
+    ctx.moveTo(x + w * px, y + h * py);
+    ctx.lineTo(x + w * (px - 0.04), y + h * (py + ph));
+    ctx.lineTo(x + w * (px + 0.04), y + h * (py + ph));
+    ctx.closePath();
+    ctx.fill();
+  }
+  // Glowing crystal cluster.
+  const cx = x + w * 0.52;
+  const cy = y + h * 0.68;
+  ctx.fillStyle = "rgba(170, 120, 255, 0.45)";
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 4, w * 0.13, h * 0.06, 0, 0, Math.PI * 2);
+  ctx.fill();
+  for (const [dx, dy, dh, fill] of [
+    [-0.06, 0, 0.14, "#a070ff"],
+    [ 0.06, -0.02, 0.16, "#9e6cff"],
+    [ 0.00, -0.06, 0.20, "#c69aff"],
+  ] as const) {
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.moveTo(cx + w * dx, cy + h * dy - h * dh);
+    ctx.lineTo(cx + w * (dx + 0.025), cy + h * (dy - dh * 0.55));
+    ctx.lineTo(cx + w * (dx + 0.025), cy + h * (dy - dh * 0.15));
+    ctx.lineTo(cx + w * dx, cy + h * dy);
+    ctx.lineTo(cx + w * (dx - 0.025), cy + h * (dy - dh * 0.15));
+    ctx.lineTo(cx + w * (dx - 0.025), cy + h * (dy - dh * 0.55));
+    ctx.closePath();
+    ctx.fill();
+  }
+  // Exit pocket in SE corner (cool teal glow).
+  ctx.fillStyle = "rgba(80, 200, 220, 0.4)";
+  ctx.beginPath();
+  ctx.ellipse(x + w * 0.88, y + h * 0.88, w * 0.07, h * 0.04, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function thumbCave1(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+): void {
+  drawCaveBase(ctx, x, y, w, h);
+}
+
+const CAVE_MAPS: MapDef[] = [
+  {
+    id: "cave_1",
+    name: "The Glow",
+    worldId: "cave",
+    arenaConfig: CAVE_ARENA_CONFIG,
+    buildArena: (w, seed) => buildCave1(w, seed, 0),
+    thumbnail: thumbCave1,
+  },
+];
+
 export const WORLDS: WorldDef[] = [
   {
     id: "forest",
@@ -620,6 +696,16 @@ export const WORLDS: WorldDef[] = [
       shopItemId: "factory_world_key",
     },
     accentColor: "#7a8a9a",
+  },
+  {
+    id: "cave",
+    name: "Cave World",
+    maps: CAVE_MAPS,
+    // Default-unlocked foundation: kids can play it immediately.
+    // We can tighten to after-factory-or-shop in a follow-up when
+    // more cave maps ship.
+    unlock: { kind: "default" },
+    accentColor: "#a070ff",
   },
 ];
 
