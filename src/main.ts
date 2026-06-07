@@ -46,7 +46,7 @@ import {
 import type { MapDef, ProfileProgress, WorldDef } from "./maps/registry";
 import type { Camera } from "./render/renderer";
 import { HuntMode } from "./modes/hunt";
-import { FFAMode } from "./modes/ffa";
+import { FFAMode, FFA_MAX_PLAYERS } from "./modes/ffa";
 import { FOREST_ARENA_CONFIG, buildForest } from "./arenas/forest";
 import { createAIController } from "./ai/ai";
 import { HumanController } from "./core/humanController";
@@ -1023,19 +1023,35 @@ function goToSelect(): void {
   if (prior) selectScreen.setSelected(prior);
 }
 
-// Spin up a single-player FFA round: human picks any character +
-// three random AI bots from the other characters. Reuses Forest
-// Map 1 as the v1 arena. The win condition is picked at random by
-// FFAMode itself at construction.
+// Pool of characters the player is allowed to use in FFA. Today
+// every character in the CHARACTERS registry is unlocked for
+// everyone (no character-locking shop items have shipped); when
+// they do, this is the single place to filter by the inventory.
+// Returned in CHARACTERS-declaration order so the AI roster
+// composition stays deterministic per registry.
+function availableFFACharacters(): string[] {
+  return Object.keys(CHARACTERS);
+}
+
+// Spin up a single-player FFA round. Total fighters = min(8,
+// number of unlocked characters); the human takes slot 0 and AI
+// bots fill the remaining slots with random picks from the same
+// pool (duplicates allowed — fighting your own mirror is fine
+// and lets the swarm fill up even when only a few characters
+// exist). Reuses Forest Map 1 as the v1 arena. Win condition is
+// picked at random by FFAMode itself.
 function startFFARound(chosenId: string): void {
   const def = CHARACTERS[chosenId];
   if (!def) return;
   const mapDef = getMap("forest_1") ?? getMap(defaultMapId())!;
-  // Pick 3 random AI bot characters, can repeat the player's pick.
-  const allIds = Object.keys(CHARACTERS);
+  const pool = availableFFACharacters();
+  // Total cap: 8, but never more than the pool itself (so a
+  // 4-character roster ships 4 fighters, not 8 clones).
+  const total = Math.min(FFA_MAX_PLAYERS, pool.length);
+  const botCount = Math.max(0, total - 1);
   const botIds: string[] = [];
-  for (let i = 0; i < 3; i++) {
-    botIds.push(allIds[Math.floor(Math.random() * allIds.length)]!);
+  for (let i = 0; i < botCount; i++) {
+    botIds.push(pool[Math.floor(Math.random() * pool.length)]!);
   }
   const world = new World(mapDef.arenaConfig, TIME_LIMIT_SECONDS);
   mapDef.buildArena(world, Math.floor(Math.random() * 1e9), 0);
@@ -1666,7 +1682,7 @@ function frameTitle(dims: { w: number; h: number }): void {
   drawModeButton(vs, "VS COMPUTER", "Pick any unlocked map · vs AI", true, "yellow");
   drawModeButton(two, "MULTIPLAYER", "1 vs Many · vote on a map", true, "yellow");
   drawModeButton(shop, "SHOP", "Characters · Outfits · Upgrades", true, "purple");
-  drawModeButton(ffa, "FREE FOR ALL", "Pick any character · random win condition · vs AI", true, "red");
+  drawModeButton(ffa, "FREE FOR ALL", "Up to 8 fighters · random win condition · vs AI", true, "red");
 }
 
 function drawLoginForm(dims: { w: number; h: number }, top: number): void {

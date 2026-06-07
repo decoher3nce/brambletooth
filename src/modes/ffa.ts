@@ -52,16 +52,27 @@ export interface FFAConfig {
 const OBJECTIVE_RADIUS = 22;
 const SPAWN_MARGIN = 100;
 const MIN_OBJECTIVE_CLEARANCE = 60;
-// Four spawn corners (NW, NE, SW, SE). The human always lands at NW
-// so the player's camera target is predictable; bots fill the rest
-// in order. With more than 4 total participants we wrap around the
-// edges — fine for v1.
+// Eight spawn slots around the arena perimeter — corners + edge
+// midpoints. The human always lands at slot 0 (NW corner) so the
+// camera target is predictable; bots fill the remainder in order.
+// With more participants than slots we wrap, but FFAMode is capped
+// at FFA_MAX_PLAYERS = 8 so wrapping shouldn't happen in practice.
 const CORNERS = [
-  { fx: 0.18, fy: 0.18 },
-  { fx: 0.82, fy: 0.18 },
-  { fx: 0.18, fy: 0.82 },
-  { fx: 0.82, fy: 0.82 },
+  { fx: 0.18, fy: 0.18 }, // NW corner (human)
+  { fx: 0.82, fy: 0.82 }, // SE corner — opposite the human, the natural rival slot
+  { fx: 0.82, fy: 0.18 }, // NE corner
+  { fx: 0.18, fy: 0.82 }, // SW corner
+  { fx: 0.50, fy: 0.12 }, // N edge
+  { fx: 0.50, fy: 0.88 }, // S edge
+  { fx: 0.12, fy: 0.50 }, // W edge
+  { fx: 0.88, fy: 0.50 }, // E edge
 ];
+// Hard cap on FFA participants. The launcher in main.ts further
+// clamps this to the number of characters currently available to
+// the player (see availableFFACharacters / startFFARound), so
+// rosters with fewer than 8 unlocked characters fill all the way
+// up — they just stop short of 8.
+export const FFA_MAX_PLAYERS = 8;
 
 export class FFAMode implements GameMode {
   id = "ffa";
