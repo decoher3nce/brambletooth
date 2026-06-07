@@ -84,6 +84,7 @@ export type SoundId =
   | "achievement"
   | "heartbeat"
   | "footsteps"
+  | "caw"
   // UI sounds (crisp, short — under ~100ms — so they don't pile up).
   | "ui_click"
   | "ui_pick"
@@ -289,6 +290,21 @@ const SOUND_DEFS: Record<SoundId, SoundDef> = {
   footsteps: (c, dest) => {
     envOsc(c, dest, "sine", 130, 70, 0.07, 0.32);
     envNoise(c, dest, 0.05, 0.16, 600);
+  },
+  // Necro's caw — harsh raspy descending call. Real crow caws have
+  // a sharp noise-burst attack plus a strongly pitched harmonic
+  // tail that drops fast. Sawtooth on top of band-passed noise gets
+  // the rasp; the rapid frequency drop on the saw gives it the
+  // "cah" inflection. Two beats per call for a "cah-cah."
+  caw: (c, dest) => {
+    // First call.
+    envNoise(c, dest, 0.06, 0.32, 2400, 0);    // breathy attack
+    envOsc(c, dest, "sawtooth", 520, 220, 0.20, 0.32, 0);
+    envOsc(c, dest, "square", 260, 110, 0.18, 0.16, 0);
+    // Brief pause, then a slightly lower second call.
+    envNoise(c, dest, 0.05, 0.26, 2200, 0.22);
+    envOsc(c, dest, "sawtooth", 480, 200, 0.22, 0.28, 0.22);
+    envOsc(c, dest, "square", 240, 100, 0.20, 0.14, 0.22);
   },
 };
 

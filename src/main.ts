@@ -2769,6 +2769,12 @@ function abilitySoundFor(abilityId: string): SoundId | null {
     // (cooldown 0 -> >0). The transport-launch sound fires separately
     // when the transport state appears on the entity.
     case "magnesis": return "magnesis";
+    // Necro: every ability cast is voiced by his "cah-cah" call.
+    // Resurrect fires the caw at cast-start (cooldown 0 -> >0) so
+    // it matches the 0.7s windup; command_attack fires it
+    // instantly when zombies receive the order.
+    case "resurrect": return "caw";
+    case "command_attack": return "caw";
     default: return null;
   }
 }
