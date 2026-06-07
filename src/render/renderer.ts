@@ -281,13 +281,14 @@ export class Renderer {
     mctx.setTransform(sx, 0, 0, sy, 0, 0);
 
     // ---- Base darkness overlay on the offscreen ----
-    // Wipe the offscreen first (carry over from last frame would
-    // be additive otherwise), then paint the dim ambient layer.
-    // Lower alpha (0.72) gives a "low ambient glow" — the
-    // playfield is dim but not pitch-black, so a player can
-    // squint and pick out prop silhouettes even outside any beam.
+    // Near-opaque black: 95% alpha. The reference flashlight
+    // game has true pitch-black outside the cone, with full
+    // color inside. We leave the last 5% as a faint silhouette
+    // hint so a player who pauses can pick out the closest
+    // crystals + the arena fence even without their beam
+    // pointing — keeps the cave navigable when standing still.
     mctx.globalCompositeOperation = "copy";
-    mctx.fillStyle = "rgba(0, 0, 8, 0.72)";
+    mctx.fillStyle = "rgba(0, 0, 8, 0.95)";
     mctx.fillRect(0, 0, cw, ch);
 
     // ---- Carve light into the offscreen ----
@@ -317,24 +318,27 @@ export class Renderer {
       const s = worldToScreen(c.pos, cam, cw, ch);
       const isViewer = c.id === viewerId;
       if (isViewer) {
-        // Viewer's beam. FOUR stacked cones now (was three) —
-        // the extra outer halo at ±70° with very low peak alpha
-        // softens the rim. Without it the ±45° cone had a
-        // visible "knife edge" where the cone ended and the
-        // ambient darkness began.
+        // Viewer's beam. Four stacked cones with the inner core
+        // at peak 1.00 — destination-out fully erases the dark
+        // overlay there, so the lit area shows the underlying
+        // entities in FULL COLOR (matches the reference
+        // flashlight game where inside-cone is unmodified
+        // gameplay color, outside-cone is pitch black).
         //
         // Layers, outer → inner:
-        //   ±70° peak 0.08  (faint halo, hides the rim edge)
-        //   ±45° peak 0.30  (rim, slightly brighter than before)
-        //   ±30° peak 0.55  (mid)
-        //   ±15° peak 0.85  (bright core)
-        // Stacked with destination-out, the alphas compound
-        // multiplicatively so the inner core is much brighter
-        // than the rim, with a smooth angular falloff.
-        this.drawConeLight(mctx, s.x, s.y, c.facing, 340, (Math.PI / 180) * 70, 0.08);
-        this.drawConeLight(mctx, s.x, s.y, c.facing, 340, Math.PI / 4,  0.30);
-        this.drawConeLight(mctx, s.x, s.y, c.facing, 340, Math.PI / 6,  0.55);
-        this.drawConeLight(mctx, s.x, s.y, c.facing, 340, Math.PI / 12, 0.85);
+        //   ±60° peak 0.18  (faint halo, softens the rim edge
+        //                    against the near-opaque dark)
+        //   ±45° peak 0.55  (rim)
+        //   ±30° peak 0.85  (mid)
+        //   ±15° peak 1.00  (full-color core)
+        // Stacked with destination-out the alphas compound
+        // multiplicatively, so the inner core compounds to
+        // essentially full reveal while the rim still leaves
+        // some dim.
+        this.drawConeLight(mctx, s.x, s.y, c.facing, 340, (Math.PI / 180) * 60, 0.18);
+        this.drawConeLight(mctx, s.x, s.y, c.facing, 340, Math.PI / 4,  0.55);
+        this.drawConeLight(mctx, s.x, s.y, c.facing, 340, Math.PI / 6,  0.85);
+        this.drawConeLight(mctx, s.x, s.y, c.facing, 340, Math.PI / 12, 1.00);
       } else {
         // Other characters: small full-circle halo so you can
         // spot them when they're close, even if your beam is
