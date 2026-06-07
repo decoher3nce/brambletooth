@@ -24,6 +24,8 @@ export const ACHIEVEMENT_ORDER = [
   "untouchable",
   "ghost",
   "veteran",
+  "hunter_slayer",
+  "pacifist",
   "forest_world_1",
 ];
 
@@ -288,6 +290,112 @@ function drawForestArch(
   ctx.restore();
 }
 
+// Hunter Slayer — skull with crossed daggers behind it. Dark
+// silhouette, white teeth.
+function drawSkull(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, s: number, locked: boolean,
+): void {
+  ctx.save();
+  ctx.translate(x, y);
+  const a = alpha(locked);
+  // Crossed daggers behind.
+  ctx.strokeStyle = `rgba(170, 180, 190, ${a * 0.85})`;
+  ctx.lineWidth = s * 0.07;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(s * 0.12, s * 0.18);
+  ctx.lineTo(s * 0.88, s * 0.82);
+  ctx.moveTo(s * 0.88, s * 0.18);
+  ctx.lineTo(s * 0.12, s * 0.82);
+  ctx.stroke();
+  // Skull body.
+  ctx.fillStyle = `rgba(240, 235, 220, ${a})`;
+  ctx.beginPath();
+  ctx.arc(s * 0.5, s * 0.42, s * 0.30, 0, Math.PI * 2);
+  ctx.fill();
+  // Jaw rectangle.
+  ctx.fillRect(s * 0.30, s * 0.55, s * 0.40, s * 0.20);
+  // Eye sockets.
+  ctx.fillStyle = `rgba(20, 20, 25, ${a})`;
+  ctx.beginPath();
+  ctx.arc(s * 0.39, s * 0.42, s * 0.08, 0, Math.PI * 2);
+  ctx.arc(s * 0.61, s * 0.42, s * 0.08, 0, Math.PI * 2);
+  ctx.fill();
+  // Nose triangle.
+  ctx.beginPath();
+  ctx.moveTo(s * 0.5, s * 0.45);
+  ctx.lineTo(s * 0.46, s * 0.55);
+  ctx.lineTo(s * 0.54, s * 0.55);
+  ctx.closePath();
+  ctx.fill();
+  // Teeth slits.
+  for (let i = 0; i < 4; i++) {
+    ctx.fillRect(s * (0.34 + i * 0.085), s * 0.60, s * 0.04, s * 0.13);
+  }
+  ctx.restore();
+}
+
+// Pacifist — dove in flight with an olive branch. Soft white body,
+// outstretched wing.
+function drawDove(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, s: number, locked: boolean,
+): void {
+  ctx.save();
+  ctx.translate(x, y);
+  const a = alpha(locked);
+  // Soft halo.
+  ctx.fillStyle = `rgba(255, 245, 220, ${a * 0.25})`;
+  ctx.beginPath();
+  ctx.arc(s * 0.55, s * 0.50, s * 0.40, 0, Math.PI * 2);
+  ctx.fill();
+  // Wing (the prominent shape).
+  ctx.fillStyle = `rgba(245, 248, 252, ${a})`;
+  ctx.beginPath();
+  ctx.moveTo(s * 0.45, s * 0.52);
+  ctx.quadraticCurveTo(s * 0.20, s * 0.18, s * 0.05, s * 0.45);
+  ctx.quadraticCurveTo(s * 0.25, s * 0.60, s * 0.40, s * 0.62);
+  ctx.closePath();
+  ctx.fill();
+  // Body.
+  ctx.beginPath();
+  ctx.ellipse(s * 0.62, s * 0.55, s * 0.22, s * 0.14, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Head.
+  ctx.beginPath();
+  ctx.arc(s * 0.80, s * 0.45, s * 0.10, 0, Math.PI * 2);
+  ctx.fill();
+  // Beak.
+  ctx.fillStyle = `rgba(230, 175, 80, ${a})`;
+  ctx.beginPath();
+  ctx.moveTo(s * 0.88, s * 0.44);
+  ctx.lineTo(s * 0.96, s * 0.46);
+  ctx.lineTo(s * 0.88, s * 0.49);
+  ctx.closePath();
+  ctx.fill();
+  // Eye.
+  ctx.fillStyle = `rgba(20, 20, 25, ${a})`;
+  ctx.beginPath();
+  ctx.arc(s * 0.82, s * 0.43, s * 0.018, 0, Math.PI * 2);
+  ctx.fill();
+  // Olive branch.
+  ctx.strokeStyle = `rgba(80, 130, 60, ${a})`;
+  ctx.lineWidth = 1.5;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(s * 0.95, s * 0.48);
+  ctx.lineTo(s * 1.04, s * 0.55);
+  ctx.stroke();
+  // Two leaves.
+  ctx.fillStyle = `rgba(110, 170, 80, ${a})`;
+  ctx.beginPath();
+  ctx.ellipse(s * 1.00, s * 0.50, s * 0.04, s * 0.018, -0.5, 0, Math.PI * 2);
+  ctx.ellipse(s * 1.02, s * 0.56, s * 0.04, s * 0.018, 0.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 export const ACHIEVEMENT_CATALOG: Record<string, AchievementDef> = {
   noob: {
     id: "noob",
@@ -324,6 +432,18 @@ export const ACHIEVEMENT_CATALOG: Record<string, AchievementDef> = {
     name: "Veteran",
     description: "Reach 100 lifetime points",
     draw: drawCrown,
+  },
+  hunter_slayer: {
+    id: "hunter_slayer",
+    name: "Hunter Slayer",
+    description: "Be on the surviving team when a hunter falls",
+    draw: drawSkull,
+  },
+  pacifist: {
+    id: "pacifist",
+    name: "Pacifist",
+    description: "Win a round without casting a single ability",
+    draw: drawDove,
   },
   forest_world_1: {
     id: "forest_world_1",

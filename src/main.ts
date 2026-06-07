@@ -3274,20 +3274,35 @@ export const POINTS_LEAVE_PENALTY = 15;
 
 interface RoundAwardState {
   prevSurvivorIds: Set<number>;
+  // Hunter ids alive last frame — used to detect a hunter falling
+  // (Hunter Slayer achievement). Survivors who are alive when a
+  // hunter dies are credited.
+  prevHunterIds: Set<number>;
   collectedIds: Set<number>;
   endAwarded: boolean;
   lastSeenTeam: "hunter" | "survivor" | null;
   // Lowest hp/maxHp ratio observed for "me" this round — used to detect
   // Untouchable (never dropped below half HP and survived to round end).
   lowestHpRatio: number;
+  // Last-frame cooldowns map for the local character. Per-key
+  // 0 -> >0 transitions count as an ability cast (Pacifist
+  // achievement requires this to stay empty for the whole round).
+  myPrevCooldowns: Record<string, number>;
+  // Number of abilities the local character has cast this round.
+  // Pacifist awards iff this is 0 at round end AND the local team
+  // won.
+  myAbilityCasts: number;
 }
 function newAwardState(): RoundAwardState {
   return {
     prevSurvivorIds: new Set(),
+    prevHunterIds: new Set(),
     collectedIds: new Set(),
     endAwarded: false,
     lastSeenTeam: null,
     lowestHpRatio: 1,
+    myPrevCooldowns: {},
+    myAbilityCasts: 0,
   };
 }
 let localAwards = newAwardState();
@@ -3305,9 +3320,12 @@ function processAwards(
   // "ongoing" frame is the new round's first opportunity.
   if (outcome === "ongoing" && state.endAwarded) {
     state.prevSurvivorIds = new Set();
+    state.prevHunterIds = new Set();
     state.collectedIds = new Set();
     state.endAwarded = false;
     state.lowestHpRatio = 1;
+    state.myPrevCooldowns = {};
+    state.myAbilityCasts = 0;
   }
 
   // Find / refresh my own entity + team. Cast retains exit + collect
@@ -3319,9 +3337,37 @@ function processAwards(
       state.lastSeenTeam = e.team;
       const ratio = e.hp / e.maxHp;
       if (ratio < state.lowestHpRatio) state.lowestHpRatio = ratio;
+      // Pacifist tracking: an ability is "cast" when its cooldown
+      // transitions from 0 (or absent) to > 0 on the local
+      // character. Mirrors the snapshot-diff pattern the audio
+      // module uses for ability sounds.
+      const cdNow = e.cooldowns;
+      for (const k of Object.keys(cdNow)) {
+        const before = state.myPrevCooldowns[k] ?? 0;
+        const after = cdNow[k] ?? 0;
+        if (before <= 0 && after > 0) state.myAbilityCasts += 1;
+      }
+      state.myPrevCooldowns = { ...cdNow };
       break;
     }
   }
+
+  // Hunter Slayer detection: if a hunter was alive last frame and
+  // is gone this frame (engine cleanupDead removes corpses), grant
+  // the achievement to the local player IFF they're currently on
+  // the survivor team. Awarded immediately on first hunter death;
+  // doesn't require the round to end.
+  const currentHunterIds = new Set<number>();
+  for (const e of world.entities) {
+    if (e.kind === "character" && e.team === "hunter") currentHunterIds.add(e.id);
+  }
+  for (const hid of state.prevHunterIds) {
+    if (!currentHunterIds.has(hid) && state.lastSeenTeam === "survivor") {
+      earnAchievement("hunter_slayer");
+      break;
+    }
+  }
+  state.prevHunterIds = currentHunterIds;
 
   // Catch detection (hunter only): entities that vanished since last frame
   // got killed. (Engine cleanupDead removes corpses; AI takeover keeps a
@@ -3373,6 +3419,14 @@ function processAwards(
       // Untouchable: survivor finished alive AND never dropped below half
       // HP during the round.
       if (state.lowestHpRatio >= 0.5) earnAchievement("untouchable");
+    }
+    // Pacifist: win the round without casting a single ability.
+    // Counter is reset to 0 on round re-arm and incremented on
+    // every 0->>0 cooldown transition seen on the local
+    // character. Granted regardless of team (a no-cast hunter
+    // win counts too) — the badge rewards the discipline.
+    if (localTeamWon && state.myAbilityCasts === 0) {
+      earnAchievement("pacifist");
     }
     // ---- Survivor-exit achievements + bonus tiers ----
     // Run this BEFORE the map-completion block so the
