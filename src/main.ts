@@ -84,7 +84,7 @@ const TIME_LIMIT_SECONDS = 3 * 60 + 30;
 // Objectives spawn one at a time and respawn on collect.
 const OBJECTIVES_REQUIRED = 5;
 const AI_HUNTERS = ["slagy"];
-const AI_SURVIVORS = ["match", "magnek"];
+const AI_SURVIVORS = ["match", "magnek", "necro"];
 
 function pickRandom<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
