@@ -44,7 +44,13 @@ export const CORE_FRAC = 0.30;
 // Slowest the brush zone can drag a character. depth=1 (at the
 // core boundary) maps to this multiplier; depth=0 (at the outer
 // edge) maps to 1.0. Linear in between.
-export const BRUSH_MIN_MULT = 0.30;
+//
+// Originally 0.30 (max brush cost a 70% speed reduction). Per
+// playtest the slow was too punishing — bumped to 0.50, which
+// makes max brush a 50% reduction (roughly 30% less of a slow
+// than v1: 0.70 reduction * 0.70 = 0.49 reduction → multiplier
+// 0.51, rounded to 0.50 for a clean floor).
+export const BRUSH_MIN_MULT = 0.50;
 // How close to an arena wall (in pixels, beyond the character's
 // radius) before a brush effect kicks in. Walls are hard at
 // d <= 0; brush ramps in across this band.
