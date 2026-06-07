@@ -2771,9 +2771,71 @@ function drawTopBar(dims: { w: number; h: number }): void {
     topBarProfileBtn = null;
   }
 
+  // ---- Gamepad status badge ----
+  // Always drawn (visible on every non-playing page) so the
+  // player can verify at a glance whether their controller has
+  // registered. Three states:
+  //   GREEN  CONTROLLER     — pad currently connected & registered
+  //   AMBER  CONTROLLER     — was seen earlier but not connected now
+  //                           (e.g. battery died or unpaired)
+  //   GRAY   NO CONTROLLER  — nothing seen yet; hint asks the player
+  //                           to press any button on a paired pad
+  // The browser may not fire gamepadconnected until the first
+  // button press on some controllers — the gray-state hint
+  // tells the player to do that.
+  {
+    const badgeW = 124;
+    xCursor -= badgeW;
+    const r: Rect = { x: xCursor, y: margin, w: badgeW, h: btnH };
+    let fill: string;
+    let textColor: string;
+    let label: string;
+    if (input.gamepadConnected) {
+      fill = "rgba(20, 90, 50, 0.85)"; // green
+      textColor = "#c7f5c7";
+      label = "🎮 CONNECTED";
+    } else if (input.isGamepadMode) {
+      fill = "rgba(110, 75, 30, 0.85)"; // amber
+      textColor = "#ffe0b8";
+      label = "🎮 OFFLINE";
+    } else {
+      fill = "rgba(40, 40, 48, 0.85)"; // dim gray
+      textColor = "rgba(255,255,255,0.5)";
+      label = "🎮 NO PAD";
+    }
+    ctx.fillStyle = fill;
+    roundRect(r, pillRadius);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
+    ctx.lineWidth = 1;
+    roundRect(r, pillRadius);
+    ctx.stroke();
+    ctx.fillStyle = textColor;
+    ctx.fillText(label, r.x + badgeW / 2, r.y + btnH / 2);
+    xCursor -= gap;
+  }
+
   ctx.restore();
   ctx.textBaseline = "alphabetic";
   ctx.textAlign = "left";
+
+  // Hint under the badge when no gamepad has been seen this
+  // session — most off-brand pads require the player to press a
+  // button before the browser's gamepadconnected event fires.
+  // Only shown on title main so it doesn't clutter every page.
+  if (!input.isGamepadMode && !started && titleSubScene === "main") {
+    ctx.save();
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.fillStyle = "rgba(255,255,255,0.45)";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(
+      "Bluetooth pad? Press any button to register",
+      w - margin,
+      margin + btnH + 14,
+    );
+    ctx.restore();
+  }
 }
 
 // Whether the current scene has a meaningful "back" destination.

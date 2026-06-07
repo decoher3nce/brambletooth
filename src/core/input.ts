@@ -146,13 +146,32 @@ const BTN_NORTH = 3;
 const BTN_START = 9;
 
 export function pollGamepad(input: InputState): void {
-  if (!input.gamepadConnected) return;
+  // ALWAYS scan, even if gamepadConnected is false. Some browsers
+  // delay the gamepadconnected event until the first button or
+  // axis activity (Safari especially); polling here picks up the
+  // pad the instant it appears in the gamepad list, even if the
+  // connect event hasn't fired yet. The gamepadconnected event
+  // is still the trigger for the one-shot toast banner.
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
   let pad: Gamepad | null = null;
   for (const p of pads) {
     if (p && p.connected) { pad = p; break; }
   }
-  if (!pad) return;
+  // Update the lit-pill state from polling — true while a pad is
+  // discoverable, false the instant it goes away.
+  const hadConnection = input.gamepadConnected;
+  input.gamepadConnected = !!pad;
+  if (!pad) {
+    if (hadConnection) {
+      input.gamepadMove = { x: 0, y: 0 };
+      input.gamepadAim = { x: 0, y: 0 };
+    }
+    return;
+  }
+  // First time we see a pad via polling (the connect event may
+  // not have fired yet) — latch gamepad mode so the badge updates
+  // immediately, before any button is pressed.
+  input.isGamepadMode = true;
 
   // ---- Sticks ----
   const lx = applyDeadzone(pad.axes[0] ?? 0);
