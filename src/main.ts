@@ -10,7 +10,7 @@
 
 import "./abilities/abilities"; // ensure abilities are registered
 import { World } from "./core/world";
-import { createInput, bindInput } from "./core/input";
+import { createInput, bindInput, pollGamepad, setOnGamepadConnect } from "./core/input";
 import { Engine, CORE_FRAC, WALL_BRUSH_BAND } from "./core/engine";
 import type { BrushKind } from "./core/engine";
 import { Renderer, createCamera, screenToWorld } from "./render/renderer";
@@ -425,6 +425,15 @@ async function autoLoginIfPossible(): Promise<void> {
 // --- Persistent singletons ---
 const input = createInput();
 bindInput(canvas, input);
+// Toast on first gamepad connect so the player knows the
+// controller registered. Re-uses the achievement banner since
+// it's already a top-screen "something just happened" cue.
+setOnGamepadConnect((pad) => {
+  // pad.id is a long manufacturer-prefixed string; trim to
+  // something readable for the banner.
+  const shortId = pad.id.split("(")[0]!.trim() || "Controller";
+  fireAchievementBanner(`CONTROLLER CONNECTED · ${shortId}`);
+});
 const renderer = new Renderer(ctx, canvas);
 renderer.setDimensionSource(() => logicalSize());
 
@@ -3743,6 +3752,19 @@ let last = performance.now();
 function frame(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
+  // Poll the gamepad ONCE at the top of the frame so every
+  // downstream reader (HumanController, Start->pause below, the
+  // touch-mode latch checks) sees the same per-frame snapshot.
+  pollGamepad(input);
+  // Start button on a controller toggles pause when we're in
+  // active local gameplay. Multiplayer pause goes through its
+  // own server-side path so we leave that alone for v1.
+  if (input.gamepadStartPressed) {
+    input.gamepadStartPressed = false;
+    if (appMode === "local" && play && scene === "playing") {
+      play.engine.paused = !play.engine.paused;
+    }
+  }
   // Hide DOM inputs whenever we're not on the main title sub-scene. The
   // frame draws re-show them when needed.
   const inputsShouldHide = started || titleSubScene !== "main" || loggedIn;

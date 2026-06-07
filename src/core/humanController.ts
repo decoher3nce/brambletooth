@@ -25,7 +25,28 @@ export class HumanController implements Controller {
     let moveDir: Vec2 = { x: 0, y: 0 };
     let aim: Vec2;
 
-    if (input.isTouchMode) {
+    if (input.isGamepadMode) {
+      // Gamepad: twin-stick. Left stick = move, right stick =
+      // aim direction projected GAMEPAD_AIM_RANGE units from the
+      // character. Right stick at rest holds the previous facing
+      // so abilities stay aimed where you last pointed.
+      moveDir = { x: input.gamepadMove.x, y: input.gamepadMove.y };
+      const aimMag = Math.hypot(input.gamepadAim.x, input.gamepadAim.y);
+      if (aimMag > 0.05) {
+        aim = {
+          x: self.pos.x + (input.gamepadAim.x / aimMag) * 200,
+          y: self.pos.y + (input.gamepadAim.y / aimMag) * 200,
+        };
+      } else {
+        // No aim input → reuse facing so the engine's
+        // facing-follows-aim logic keeps the character pointed
+        // the same way.
+        aim = {
+          x: self.pos.x + Math.cos(self.facing) * 100,
+          y: self.pos.y + Math.sin(self.facing) * 100,
+        };
+      }
+    } else if (input.isTouchMode) {
       // Touch: joystick supplies an analog move vector. No separate aim
       // input in v0.1, so aim is derived from the move direction; standing
       // still falls back to current facing.
@@ -62,9 +83,15 @@ export class HumanController implements Controller {
         if (aId) fired.push(aId);
       }
     }
-    // Mouse click = first ability. Skipped in touch mode — the slot-0
-    // touch button already covers it via the pressedAbilities path.
-    if (!input.isTouchMode && input.mouseDown && def.abilities[0]) {
+    // Mouse click = first ability. Skipped in touch + gamepad
+    // modes — those have their own dedicated buttons for slot 0
+    // (touch row + face-south respectively).
+    if (
+      !input.isTouchMode &&
+      !input.isGamepadMode &&
+      input.mouseDown &&
+      def.abilities[0]
+    ) {
       fired.push(def.abilities[0]);
     }
 
