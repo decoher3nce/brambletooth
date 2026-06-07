@@ -812,14 +812,39 @@ export class Renderer {
     } else if (e.shape === "crystal") {
       // Crystal cluster — three hexagonal shards in a glowing
       // violet/cyan palette. Pulses softly. The FOV mask pass
-      // separately cuts ambient light around this entity.
+      // separately cuts ambient light around this entity; THIS
+      // glow is the in-world light-source effect — a big soft
+      // violet halo painted additively so it visibly brightens
+      // and tints whatever floor / props are nearby. Makes the
+      // crystal feel like a real light source instead of a
+      // brightly-colored crystal floating in an unlit alcove.
       const r = e.radius;
       const t = (performance.now() / 800) % (Math.PI * 2);
-      const pulse = 0.6 + 0.4 * Math.sin(t);
-      // Halo on the ground.
-      ctx.fillStyle = `rgba(170, 120, 255, ${0.28 * pulse})`;
+      const pulse = 0.7 + 0.3 * Math.sin(t);
+      // BIG soft additive glow around the crystal — fades from
+      // bright center to fully transparent at ~9× the crystal
+      // radius. globalCompositeOperation 'lighter' adds light
+      // to whatever's underneath instead of overwriting, so
+      // floor color shows through tinted.
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const glowR = r * 9;
+      const glow = ctx.createRadialGradient(s.x, s.y, r * 0.5, s.x, s.y, glowR);
+      glow.addColorStop(0,   `rgba(180, 130, 255, ${0.85 * pulse})`);
+      glow.addColorStop(0.25, `rgba(160, 110, 240, ${0.50 * pulse})`);
+      glow.addColorStop(0.55, `rgba(120, 80, 200, ${0.22 * pulse})`);
+      glow.addColorStop(1,   `rgba(80, 60, 160, 0)`);
+      ctx.fillStyle = glow;
       ctx.beginPath();
-      ctx.ellipse(s.x, s.y + 2, r * 1.4, r * 0.5, 0, 0, Math.PI * 2);
+      ctx.arc(s.x, s.y, glowR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      // Small ground-shadow halo under the crystal — a darker
+      // ellipse to anchor it visually now that the additive
+      // glow brightens everything else.
+      ctx.fillStyle = `rgba(40, 25, 70, ${0.40 * pulse})`;
+      ctx.beginPath();
+      ctx.ellipse(s.x, s.y + 4, r * 1.1, r * 0.4, 0, 0, Math.PI * 2);
       ctx.fill();
       // Rock base.
       ctx.fillStyle = "#22222a";

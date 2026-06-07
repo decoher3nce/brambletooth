@@ -14,11 +14,17 @@ import type { PropEntity } from "../core/entity";
 export const CAVE_ARENA_CONFIG: ArenaConfig = {
   bounds: { minX: -700, minY: -500, maxX: 700, maxY: 500 },
   // Charcoal cave wall around the perimeter.
-  fenceColor: "#1a1a22",
-  // Near-black floor — only crystal glow + flashlight cuts the dark.
-  groundColor: "#0a0a14",
-  // Very faint cool grid — barely visible, enough to anchor scale.
-  gridColor: "rgba(120, 140, 180, 0.04)",
+  fenceColor: "#3a3a44",
+  // LIGHT grey cave floor. The flashlight needs something visible
+  // to land on — a near-black floor swallows the cone entirely.
+  // This stone tone is light enough that the lit cone reads as
+  // "here's the cave floor I'm walking on" rather than a vague
+  // brighter patch over darkness.
+  groundColor: "#9aa0a8",
+  // Visible cool-grey grid for stone-tile texture. Stronger than
+  // the other arenas because the cave needs SOMETHING in the lit
+  // area for the eye to read as floor.
+  gridColor: "rgba(70, 80, 95, 0.45)",
   // Gem variant for objective rendering.
   objectiveStyle: "gem",
   // Heavy darkness overlay + flashlight cone + crystal lighting.
