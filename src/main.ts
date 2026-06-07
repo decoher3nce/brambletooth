@@ -539,7 +539,18 @@ let titleProfileBackBtn: Rect | null = null;
 let titleProfileSettingsBtn: Rect | null = null;
 type TitleSubScene = "main" | "profile" | "shop" | "settings" | "campaign" | "vsMapSelect";
 let titleSubScene: TitleSubScene = "main";
-const backBtnRect: Rect = { x: 20, y: 20, w: 96, h: 36 };
+
+// ---- Shared top bar ----
+// Drawn on every non-playing page. Top-LEFT: a single Back button
+// whose action is computed from the current scene (back to title
+// main from any subscene; leave server from net lobby; etc.).
+// Top-RIGHT: small Profile / Settings / Logout pills (Profile + Logout
+// only shown when logged in). The hit rects are rebuilt each draw
+// because the top-right cluster anchors off the right edge.
+let topBarBackBtn: Rect | null = null;
+let topBarProfileBtn: Rect | null = null;
+let topBarSettingsBtn: Rect | null = null;
+let topBarLogoutBtn: Rect | null = null;
 
 // Map select hit zones (campaign + vs-computer). Rebuilt each draw.
 let mapSelectBackBtn: Rect | null = null;
@@ -573,27 +584,16 @@ function handleTitleTap(p: { x: number; y: number }): void {
   // Audio gesture unlock on any title tap — works even before chooseMode.
   unlockAudio();
 
-  // Profile sub-scene: SETTINGS or BACK.
+  // Profile sub-scene: every navigational button (SETTINGS, BACK,
+  // LOG OUT) lives on the shared top bar now; this branch only
+  // exists for completeness in case future profile-page content
+  // adds its own widgets.
   if (titleSubScene === "profile") {
-    if (titleProfileSettingsBtn && inRect(p, titleProfileSettingsBtn)) {
-      playSound("ui_click");
-      titleSubScene = "settings";
-      return;
-    }
-    if (titleProfileBackBtn && inRect(p, titleProfileBackBtn)) {
-      playSound("ui_back");
-      titleSubScene = "main";
-    }
     return;
   }
-  // Campaign / Vs Computer map-select sub-scenes: BACK button + per-tile
-  // selection. A playable tile starts the relevant flow.
+  // Campaign / Vs Computer map-select sub-scenes: per-tile
+  // selection. BACK is on the top bar.
   if (titleSubScene === "campaign" || titleSubScene === "vsMapSelect") {
-    if (mapSelectBackBtn && inRect(p, mapSelectBackBtn)) {
-      playSound("ui_back");
-      titleSubScene = "main";
-      return;
-    }
     for (const tile of mapTileBtns) {
       if (!inRect(p, tile.rect)) continue;
       if (!tile.playable) {
@@ -612,13 +612,9 @@ function handleTitleTap(p: { x: number; y: number }): void {
     }
     return;
   }
-  // Settings sub-scene: per-sound toggles + volume bars + BACK.
+  // Settings sub-scene: per-sound toggles + volume bars. BACK and
+  // navigation now live on the shared top bar.
   if (titleSubScene === "settings") {
-    if (settingsBackBtn && inRect(p, settingsBackBtn)) {
-      playSound("ui_back");
-      titleSubScene = "profile";
-      return;
-    }
     if (settingsHeartbeatToggleBtn && inRect(p, settingsHeartbeatToggleBtn)) {
       audioSettings.heartbeat.enabled = !audioSettings.heartbeat.enabled;
       persistAudioSettings();
@@ -652,13 +648,9 @@ function handleTitleTap(p: { x: number; y: number }): void {
     }
     return;
   }
-  // Shop sub-scene: BACK, tab buttons, and per-item BUY buttons.
+  // Shop sub-scene: tab buttons + per-item BUY buttons. BACK is
+  // on the shared top bar.
   if (titleSubScene === "shop") {
-    if (shopBackBtn && inRect(p, shopBackBtn)) {
-      playSound("ui_back");
-      titleSubScene = "main";
-      return;
-    }
     for (const tab of shopTabBtns) {
       if (inRect(p, tab.rect)) {
         if (shopActiveTab !== tab.kind) {
@@ -802,12 +794,51 @@ function backAllowed(): boolean {
   return false;
 }
 
-function handleBackTap(p: { x: number; y: number }): boolean {
-  if (!backAllowed()) return false;
-  if (!inRect(p, backBtnRect)) return false;
-  playSound("ui_back");
-  goToTitle();
-  return true;
+// Single source of truth for every top-bar click. Returns true
+// when the click was absorbed so the caller can short-circuit
+// page-specific click handling.
+function handleTopBarTap(p: { x: number; y: number }): boolean {
+  // Back — context-aware destination.
+  if (topBarBackBtn && inRect(p, topBarBackBtn)) {
+    playSound("ui_back");
+    if (!started) {
+      // Inside a title subscene — back to title main.
+      titleSubScene = "main";
+    } else {
+      // In gameplay scenes (select / lobby / etc) — full retreat
+      // to title. Disconnects net if active.
+      goToTitle();
+    }
+    return true;
+  }
+  // Profile / Settings / Logout. These short-circuit any scene-
+  // local clicks so the icons behave identically everywhere.
+  if (topBarProfileBtn && inRect(p, topBarProfileBtn)) {
+    playSound("ui_click");
+    // If we're mid-game-flow (select / lobby / etc), bail back to
+    // title before entering the profile subscene so the user can
+    // see the page from a clean state.
+    if (started) goToTitle();
+    titleSubScene = "profile";
+    return true;
+  }
+  if (topBarSettingsBtn && inRect(p, topBarSettingsBtn)) {
+    playSound("ui_click");
+    if (started) goToTitle();
+    titleSubScene = "settings";
+    return true;
+  }
+  if (topBarLogoutBtn && inRect(p, topBarLogoutBtn)) {
+    playSound("ui_back");
+    tryLogout();
+    // After logout, bring the user to the title main page (the
+    // logged-out login form). If they were deep in a flow, this
+    // is a clean exit.
+    if (started) goToTitle();
+    titleSubScene = "main";
+    return true;
+  }
+  return false;
 }
 
 // Tap a map vote tile (multiplayer voting phase). Sends the vote to
@@ -826,10 +857,13 @@ function handleMapVoteTap(p: { x: number; y: number }): boolean {
 canvas.addEventListener("mousedown", (ev) => {
   const r = canvas.getBoundingClientRect();
   const p = { x: ev.clientX - r.left, y: ev.clientY - r.top };
+  // Top bar wins everywhere it's drawn — every non-playing page —
+  // so the Back / Profile / Settings / Logout buttons behave
+  // identically regardless of which scene is underneath.
+  if (handleTopBarTap(p)) return;
   if (started) {
     if (handleMapVoteTap(p)) return;
     if (handleLeaveGameTap(p)) return;
-    handleBackTap(p);
   } else {
     handleTitleTap(p);
   }
@@ -841,10 +875,10 @@ canvas.addEventListener(
     if (!t) return;
     const r = canvas.getBoundingClientRect();
     const p = { x: t.clientX - r.left, y: t.clientY - r.top };
+    if (handleTopBarTap(p)) { ev.preventDefault(); return; }
     if (started) {
       if (handleMapVoteTap(p)) { ev.preventDefault(); return; }
       if (handleLeaveGameTap(p)) { ev.preventDefault(); return; }
-      if (handleBackTap(p)) ev.preventDefault();
     } else {
       ev.preventDefault();
       handleTitleTap(p);
@@ -1627,7 +1661,7 @@ function frameTitle(dims: { w: number; h: number }): void {
   drawModeButton(vs, "VS COMPUTER", "Pick any unlocked map · vs AI", true, "yellow");
   drawModeButton(two, "MULTIPLAYER", "1 vs Many · vote on a map", true, "yellow");
   drawModeButton(shop, "SHOP", "Characters · Outfits · Upgrades", true, "purple");
-  drawModeButton(ffa, "FREE FOR ALL", "Pick any character · random win condition · vs AI", true, "purple");
+  drawModeButton(ffa, "FREE FOR ALL", "Pick any character · random win condition · vs AI", true, "red");
 }
 
 function drawLoginForm(dims: { w: number; h: number }, top: number): void {
@@ -1739,37 +1773,9 @@ function drawLoggedInProfilePanel(dims: { w: number; h: number }, top: number): 
     }
   }
 
-  // Profile + Logout buttons side-by-side.
-  const bw = 140;
-  const bh = 36;
-  const gap = 12;
-  const groupW = 2 * bw + gap;
-  const startX = (cw - groupW) / 2;
-  const by = recentY + 78;
-  titleProfileBtn = { x: startX, y: by, w: bw, h: bh };
-  titleLogoutBtn = { x: startX + bw + gap, y: by, w: bw, h: bh };
-
-  ctx.fillStyle = "rgba(40, 52, 48, 0.95)";
-  roundRect(titleProfileBtn, 8);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.2)";
-  ctx.lineWidth = 1;
-  roundRect(titleProfileBtn, 8);
-  ctx.stroke();
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 13px system-ui, sans-serif";
-  ctx.textBaseline = "middle";
-  ctx.fillText("PROFILE", titleProfileBtn.x + bw / 2, by + bh / 2);
-
-  ctx.fillStyle = "rgba(40, 52, 48, 0.95)";
-  roundRect(titleLogoutBtn, 8);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.2)";
-  roundRect(titleLogoutBtn, 8);
-  ctx.stroke();
-  ctx.fillStyle = "rgba(255,255,255,0.85)";
-  ctx.fillText("LOG OUT", titleLogoutBtn.x + bw / 2, by + bh / 2);
-  ctx.textBaseline = "alphabetic";
+  // PROFILE + LOG OUT buttons used to live here; they've moved to
+  // the shared top bar (drawTopBar) so they're reachable from
+  // every page, not just from the title's logged-in greeting.
 
   titleLoginBtn = null;
 }
@@ -1874,38 +1880,11 @@ function frameProfile(dims: { w: number; h: number }): void {
     ry += rowH;
   }
 
-  // SETTINGS + BACK buttons below the panel.
-  const bw = 160;
-  const bh = 40;
-  const gap = 12;
-  const groupW = 2 * bw + gap;
-  const startX = (cw - groupW) / 2;
-  const by = panelY + panelH + 20;
-  titleProfileSettingsBtn = { x: startX, y: by, w: bw, h: bh };
-  titleProfileBackBtn = { x: startX + bw + gap, y: by, w: bw, h: bh };
-  // Settings (left)
-  ctx.fillStyle = "rgba(40, 52, 48, 0.95)";
-  roundRect(titleProfileSettingsBtn, 8);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.2)";
-  ctx.lineWidth = 1;
-  roundRect(titleProfileSettingsBtn, 8);
-  ctx.stroke();
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 13px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText("⚙ SETTINGS", titleProfileSettingsBtn.x + bw / 2, by + bh / 2);
-  // Back (right)
-  ctx.fillStyle = "rgba(40, 52, 48, 0.95)";
-  roundRect(titleProfileBackBtn, 8);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.2)";
-  roundRect(titleProfileBackBtn, 8);
-  ctx.stroke();
-  ctx.fillStyle = "#fff";
-  ctx.fillText("← BACK", titleProfileBackBtn.x + bw / 2, by + bh / 2);
-  ctx.textBaseline = "alphabetic";
+  // The page-local SETTINGS + BACK buttons here used to live below
+  // the achievements panel. They've moved to the shared top bar so
+  // they're reachable identically from every page.
+  titleProfileSettingsBtn = null;
+  titleProfileBackBtn = null;
   ctx.textAlign = "left";
 }
 
@@ -1974,26 +1953,8 @@ function frameSettings(dims: { w: number; h: number }): void {
     "footsteps",
   );
 
-  // BACK button below the panel.
-  const bw = 160;
-  const bh = 40;
-  const bx = (cw - bw) / 2;
-  const by = panelY + panelH + 20;
-  settingsBackBtn = { x: bx, y: by, w: bw, h: bh };
-  ctx.fillStyle = "rgba(40, 52, 48, 0.95)";
-  roundRect(settingsBackBtn, 8);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.2)";
-  ctx.lineWidth = 1;
-  roundRect(settingsBackBtn, 8);
-  ctx.stroke();
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 13px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText("← BACK", bx + bw / 2, by + bh / 2);
-  ctx.textBaseline = "alphabetic";
-  ctx.textAlign = "left";
+  // BACK lives on the shared top bar now.
+  settingsBackBtn = null;
 }
 
 // Single sound-settings row: name + description on the left, ON/OFF
@@ -2136,26 +2097,8 @@ function drawMapSelectScreen(
     y += worldH + 14;
   }
 
-  // BACK button below the list.
-  const bbw = 160;
-  const bbh = 40;
-  const bbx = (cw - bbw) / 2;
-  const bby = ch - 56;
-  mapSelectBackBtn = { x: bbx, y: bby, w: bbw, h: bbh };
-  ctx.fillStyle = "rgba(40, 52, 48, 0.95)";
-  roundRect(mapSelectBackBtn, 8);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.2)";
-  ctx.lineWidth = 1;
-  roundRect(mapSelectBackBtn, 8);
-  ctx.stroke();
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 13px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText("← BACK", bbx + bbw / 2, bby + bbh / 2);
-  ctx.textBaseline = "alphabetic";
-  ctx.textAlign = "left";
+  // BACK lives on the shared top bar now.
+  mapSelectBackBtn = null;
 }
 
 function drawWorldBand(
@@ -2529,26 +2472,8 @@ function frameShop(dims: { w: number; h: number }): void {
     }
   }
 
-  // ---- BACK button ----
-  const bbw = 160;
-  const bbh = 40;
-  const bbx = (cw - bbw) / 2;
-  const bby = ch - 56;
-  shopBackBtn = { x: bbx, y: bby, w: bbw, h: bbh };
-  ctx.fillStyle = "rgba(40, 52, 48, 0.95)";
-  roundRect(shopBackBtn, 8);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.2)";
-  ctx.lineWidth = 1;
-  roundRect(shopBackBtn, 8);
-  ctx.stroke();
-  ctx.fillStyle = "#fff";
-  ctx.font = "bold 13px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText("← BACK", bbx + bbw / 2, bby + bbh / 2);
-  ctx.textBaseline = "alphabetic";
-  ctx.textAlign = "left";
+  // BACK lives on the shared top bar now.
+  shopBackBtn = null;
 }
 
 // Single item card: icon, name, description, price, and BUY/OWNED
@@ -2693,10 +2618,13 @@ function wrapText(text: string, maxWidth: number, font: string, maxLines: number
 // look. Palette controls the fill family — "yellow" for game modes,
 // "purple" for shop and other utility buttons. Disabled renders dim
 // in the slate family regardless of palette.
-type ButtonPalette = "yellow" | "purple";
+type ButtonPalette = "yellow" | "purple" | "red";
 const PALETTES: Record<ButtonPalette, { fill: string; title: string; sub: string }> = {
   yellow: { fill: "#ffd84a", title: "#1a2421", sub: "rgba(26,36,33,0.7)" },
   purple: { fill: "#7c4a8b", title: "#fff", sub: "rgba(255,255,255,0.72)" },
+  // Crimson — used by combat-themed buttons (FFA). Distinguishes
+  // visually from the purple shop button it sits next to.
+  red: { fill: "#c43a3a", title: "#fff", sub: "rgba(255,235,235,0.78)" },
 };
 function drawModeButton(
   r: Rect,
@@ -2739,25 +2667,103 @@ function drawModeButton(
   }
 }
 
-// Small "← BACK" pill in the top-left, drawn over every non-title scene.
-function drawBackButton(): void {
-  const b = backBtnRect;
+// ---- Shared top bar ----
+// Drawn from every non-playing frame entry point. Top-LEFT is the
+// Back button (only when there's somewhere to back to); top-RIGHT
+// is Profile / Settings / Logout. The bar lives ABOVE the page
+// content so per-page layouts don't have to leave room for it —
+// they just stay clear of the top ~56px gutter.
+//
+// Single source of truth for every back path in the app, so the
+// same pill in the same place behaves correctly whether you're on
+// the title, in a subscene, in character select, or in a net
+// lobby.
+function drawTopBar(dims: { w: number; h: number }): void {
+  const w = dims.w;
+  const margin = 14;
+  const btnH = 32;
+  const pillRadius = 8;
   ctx.save();
-  ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
-  roundRect(b, 8);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
-  ctx.lineWidth = 1;
-  roundRect(b, 8);
-  ctx.stroke();
-  ctx.fillStyle = "#fff";
   ctx.font = "bold 12px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText("← BACK", b.x + b.w / 2, b.y + b.h / 2);
+
+  // ---- Top-left: Back ----
+  if (canGoBack()) {
+    const bw = 88;
+    topBarBackBtn = { x: margin, y: margin, w: bw, h: btnH };
+    ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+    roundRect(topBarBackBtn, pillRadius);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
+    ctx.lineWidth = 1;
+    roundRect(topBarBackBtn, pillRadius);
+    ctx.stroke();
+    ctx.fillStyle = "#fff";
+    ctx.fillText("← BACK", topBarBackBtn.x + bw / 2, topBarBackBtn.y + btnH / 2);
+  } else {
+    topBarBackBtn = null;
+  }
+
+  // ---- Top-right: Profile / Settings / Logout ----
+  // Drawn left-to-right anchored to the right margin. Profile +
+  // Logout only appear when logged in; Settings is universal so
+  // audio prefs are reachable even from the login form.
+  let xCursor = w - margin;
+  const smallW = 86;
+  const gap = 6;
+  const drawPill = (label: string, fill: string, textColor: string): Rect => {
+    xCursor -= smallW;
+    const r: Rect = { x: xCursor, y: margin, w: smallW, h: btnH };
+    ctx.fillStyle = fill;
+    roundRect(r, pillRadius);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
+    ctx.lineWidth = 1;
+    roundRect(r, pillRadius);
+    ctx.stroke();
+    ctx.fillStyle = textColor;
+    ctx.fillText(label, r.x + smallW / 2, r.y + btnH / 2);
+    xCursor -= gap;
+    return r;
+  };
+  // Right-to-left placement so LOG OUT sits furthest right (the
+  // "danger" position) and PROFILE is innermost (most-used).
+  if (loggedIn) {
+    topBarLogoutBtn = drawPill("LOG OUT", "rgba(60, 30, 30, 0.85)", "#ffd6d6");
+  } else {
+    topBarLogoutBtn = null;
+  }
+  topBarSettingsBtn = drawPill("SETTINGS", "rgba(0, 0, 0, 0.55)", "#fff");
+  if (loggedIn) {
+    topBarProfileBtn = drawPill("PROFILE", "rgba(0, 0, 0, 0.55)", "#fff");
+  } else {
+    topBarProfileBtn = null;
+  }
+
   ctx.restore();
   ctx.textBaseline = "alphabetic";
   ctx.textAlign = "left";
+}
+
+// Whether the current scene has a meaningful "back" destination.
+// True for any title subscene other than main, for character
+// select, and for any net-lobby phase. False on the title main
+// page (the root) and during gameplay (drawTopBar isn't called
+// during gameplay anyway).
+function canGoBack(): boolean {
+  if (!started) return titleSubScene !== "main";
+  if (appMode === "local") return scene === "select";
+  if (appMode === "net") {
+    return (
+      net?.phase === "lobby" ||
+      net?.phase === "connecting" ||
+      net?.phase === "full" ||
+      net?.phase === "disconnected" ||
+      net?.phase === "voting"
+    );
+  }
+  return false;
 }
 
 function drawButton(r: Rect, label: string, primary: boolean): void {
@@ -3630,10 +3636,14 @@ function frame(now: number) {
   else if (appMode === "net") frameNet(dt, dims);
   else frameLocal(dt, dims);
 
-  // Back button only in non-gameplay phases — leaving a live game cheats
-  // the other players. Pause -> Leave Game (with penalty) is the only
-  // mid-round exit.
-  if (started && backAllowed()) drawBackButton();
+  // Shared top bar — Back top-left + Profile/Settings/Logout
+  // top-right — drawn on every non-playing page. Skipped during
+  // active gameplay so it doesn't sit on top of the HUD; the
+  // pause overlay's Leave Game button is the only mid-round exit.
+  const inGameplayNow =
+    (appMode === "local" && scene === "playing" && !!play) ||
+    (appMode === "net" && (net?.phase === "playing" || net?.phase === "ended"));
+  if (!inGameplayNow) drawTopBar(dims);
   if (started) drawLeaveGameButton(dims);
 
   // Win → points (one-shot per round). Read each frame; transitions to a
