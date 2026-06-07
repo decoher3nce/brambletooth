@@ -85,6 +85,20 @@ export type SoundId =
   | "heartbeat"
   | "footsteps"
   | "caw"
+  // Brush sounds — fired by the soft-collision detector while a
+  // character is in an obstacle's brush ring. Retriggered at
+  // short cadence with volumeMul scaling to current depth, so the
+  // ear hears it as a soft loop that gets louder on heavier
+  // brush.
+  | "brush_rustle"    // tree, stump (organic foliage / soft wood)
+  | "brush_crunch"    // rock, caverock (stone grit)
+  | "brush_clang"     // pipe (metal cylinder)
+  | "brush_thud"      // crate, pallet (wood box)
+  | "brush_boom"      // oildrum (hollow metal)
+  | "brush_chime"     // crystal (musical sparkle)
+  | "brush_growl"     // bear
+  | "brush_bleat"     // deer
+  | "brush_wall"      // arena fence
   // UI sounds (crisp, short — under ~100ms — so they don't pile up).
   | "ui_click"
   | "ui_pick"
@@ -305,6 +319,57 @@ const SOUND_DEFS: Record<SoundId, SoundDef> = {
     envNoise(c, dest, 0.05, 0.26, 2200, 0.22);
     envOsc(c, dest, "sawtooth", 480, 200, 0.22, 0.28, 0.22);
     envOsc(c, dest, "square", 240, 100, 0.20, 0.14, 0.22);
+  },
+  // ---- Brush sounds ----
+  // Each is short (~80-150ms) so retriggering at high cadence
+  // sounds like a soft continuous loop. Callers pass volumeMul
+  // tied to current brush depth (deeper = louder).
+  // Tree rustle: high-frequency filtered noise burst, the
+  // leaves-against-cloth sound.
+  brush_rustle: (c, dest) => {
+    envNoise(c, dest, 0.13, 0.45, 7000);
+  },
+  // Rock crunch: low-passed gritty noise — small stones grinding.
+  brush_crunch: (c, dest) => {
+    envNoise(c, dest, 0.11, 0.50, 1800);
+    envNoise(c, dest, 0.05, 0.30, 600, 0.02);
+  },
+  // Metal pipe: sharp clang with a ringing partial.
+  brush_clang: (c, dest) => {
+    envOsc(c, dest, "triangle", 1200, 800, 0.18, 0.30);
+    envOsc(c, dest, "sine", 2400, 1600, 0.10, 0.16);
+  },
+  // Wooden crate thud: low square attack + a tiny noise scrape.
+  brush_thud: (c, dest) => {
+    envOsc(c, dest, "square", 180, 90, 0.10, 0.34);
+    envNoise(c, dest, 0.06, 0.18, 1200);
+  },
+  // Hollow oil drum: deep boom with a slight resonant decay.
+  brush_boom: (c, dest) => {
+    envOsc(c, dest, "sine", 90, 50, 0.25, 0.45);
+    envOsc(c, dest, "triangle", 220, 110, 0.18, 0.18);
+  },
+  // Crystal chime: bright bell-like sine pair.
+  brush_chime: (c, dest) => {
+    envOsc(c, dest, "sine", 1400, 1400, 0.20, 0.32);
+    envOsc(c, dest, "sine", 2100, 2100, 0.16, 0.18, 0.02);
+  },
+  // Bear growl: low sawtooth with rapid modulation, plus filtered
+  // noise for breath. Reads as menacing rather than cute.
+  brush_growl: (c, dest) => {
+    envOsc(c, dest, "sawtooth", 110, 75, 0.32, 0.40);
+    envOsc(c, dest, "triangle", 55, 38, 0.30, 0.22);
+    envNoise(c, dest, 0.28, 0.18, 800);
+  },
+  // Deer bleat: short higher-pitched call with a quick descent.
+  brush_bleat: (c, dest) => {
+    envOsc(c, dest, "triangle", 620, 380, 0.18, 0.34);
+    envOsc(c, dest, "sine", 1240, 760, 0.14, 0.12, 0.01);
+  },
+  // Arena wall thud: dull low impact.
+  brush_wall: (c, dest) => {
+    envOsc(c, dest, "sine", 70, 45, 0.16, 0.40);
+    envNoise(c, dest, 0.05, 0.14, 400);
   },
 };
 

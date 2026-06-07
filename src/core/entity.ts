@@ -276,6 +276,18 @@ export interface AnimalEntity extends BaseEntity {
   reactionDecided: boolean;
   // Per-tick cooldown so chase-bites don't deal damage every frame.
   biteCooldown: number;
+  // Cumulative brush meter. Each tick a character is brushing this
+  // animal's brush zone, the meter accumulates by depth*dt*BUILD,
+  // and decays at DECAY per second when no one is brushing. When
+  // it crosses BRUSH_ANGER_THRESHOLD the bear locks the most-
+  // recent brusher as its target and snaps into chase mode. The
+  // meter is reset when chase begins so the bear has to be
+  // re-angered after the chase fades.
+  brushMeter: number;
+  // Entity id of the most recent character to brush this animal.
+  // Bears use this as the chase target when brushMeter hits the
+  // anger threshold. Cleared on chase start.
+  lastBrusherId: EntityId | null;
 }
 
 // One-way drop edge (Forest Map 3). Movement that CROSSES the edge

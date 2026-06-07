@@ -258,6 +258,8 @@ function spawnAnimal(
     targetId: null,
     reactionDecided: false,
     biteCooldown: 0,
+    brushMeter: 0,
+    lastBrusherId: null,
   });
 }
 

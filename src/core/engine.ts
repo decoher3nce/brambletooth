@@ -36,9 +36,73 @@ function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
+// ---- Soft collision constants ----
+// Fraction of an obstacle's pixel radius that's unpassable. The
+// outer (1 - CORE_FRAC) of the radius is the brush zone — passable
+// but slows the character proportionally to depth.
+export const CORE_FRAC = 0.30;
+// Slowest the brush zone can drag a character. depth=1 (at the
+// core boundary) maps to this multiplier; depth=0 (at the outer
+// edge) maps to 1.0. Linear in between.
+export const BRUSH_MIN_MULT = 0.30;
+// How close to an arena wall (in pixels, beyond the character's
+// radius) before a brush effect kicks in. Walls are hard at
+// d <= 0; brush ramps in across this band.
+export const WALL_BRUSH_BAND = 10;
+// Bear anger meter — fills at depth*dt*BUILD while brushed, drains
+// at DECAY per second when no one is brushing, triggers chase
+// when it crosses THRESHOLD.
+export const BEAR_BRUSH_BUILD = 4.0;
+export const BEAR_BRUSH_DECAY = 0.5;
+export const BEAR_BRUSH_ANGER = 3.0;
+
+// Brush info for one character on one tick — the worst (deepest)
+// overlap across every obstacle the character touches, plus the
+// list of every obstacle/wall they're currently brushing. Engine
+// uses depth to slow movement; sound detector uses the list to
+// fire per-obstacle audio.
+export interface BrushInfo {
+  worstDepth: number;            // 0..1, max over all touched obstacles
+  touched: BrushTouch[];         // every obstacle currently brushed
+}
+export interface BrushTouch {
+  // The obstacle entity id — props + animals have real ids;
+  // arena-wall touches use synthetic negative ids (-1 = left,
+  // -2 = right, -3 = top, -4 = bottom) so the sound detector
+  // can dedupe them per character.
+  obstacleId: number;
+  // Source descriptor for the sound detector to choose audio.
+  kind: BrushKind;
+  depth: number;                 // 0..1 — how deep into the brush zone
+  pos: Vec2;                     // world-space contact-ish point
+}
+export type BrushKind =
+  | { tag: "prop"; shape: import("./entity").PropShape }
+  | { tag: "animal"; species: import("./entity").AnimalSpecies }
+  | { tag: "wall" };
+
+// Convert raw overlap (how much the character's circle penetrates
+// into the brush ring) into a 0..1 depth value. depth=0 at outer
+// edge, depth=1 at the core boundary.
+function depthFromOverlap(
+  charR: number, obstacleR: number, distance: number,
+): number {
+  const coreR = obstacleR * CORE_FRAC;
+  const outerR = obstacleR + charR; // distance at which brush starts
+  const innerR = coreR + charR;     // distance at which core hits
+  if (distance >= outerR) return 0;
+  if (distance <= innerR) return 1;
+  return (outerR - distance) / (outerR - innerR);
+}
+
 export class Engine {
   outcome: RoundOutcome = "ongoing";
   paused: boolean = false;
+  // Per-character snapshot of what they're currently brushing, set
+  // by the movement loop each tick. The client's brush-sound
+  // detector reads this to drive per-obstacle audio at a volume
+  // scaled by depth. Cleared + repopulated every tick.
+  lastBrushInfo: Map<number, BrushInfo> = new Map();
 
   constructor(public cfg: EngineConfig) {}
 
@@ -183,6 +247,23 @@ export class Engine {
         c.vel.y += (cv.flow.y / fl) * cv.flowSpeed;
       }
 
+      // Soft brush: compute every obstacle the character is now
+      // touching in its brush zone (between core 30% and full
+      // pixel radius), grab the worst depth, and SHRINK the
+      // velocity before applying it this tick. depth=0 → 1.0
+      // mult, depth=1 (at core boundary) → BRUSH_MIN_MULT
+      // (0.30). Stacks multiplicatively with overdrive / slowed
+      // / danger so a brushing Match still gets a boost, just a
+      // dampened one. Also stashes the info for the audio
+      // detector to read.
+      const brushInfo = this.computeBrushInfo(c, world);
+      this.lastBrushInfo.set(c.id, brushInfo);
+      if (brushInfo.worstDepth > 0) {
+        const brushMult = 1 - brushInfo.worstDepth * (1 - BRUSH_MIN_MULT);
+        c.vel.x *= brushMult;
+        c.vel.y *= brushMult;
+      }
+
       // Apply movement with prop collision (simple slide-on-block)
       const newPos = add(c.pos, scale(c.vel, dt));
       const resolved = this.resolveCharacterMove(c, newPos);
@@ -191,6 +272,27 @@ export class Engine {
       // direction it's allowed and deals fall damage on cross.
       const cliffResolved = this.resolveCliffCross(c, resolved, world);
       c.pos = cliffResolved;
+
+      // Bear anger meter — every animal the character is brushing
+      // gets its meter bumped by depth*dt*BUILD. When the meter
+      // crosses BEAR_BRUSH_ANGER, the animal locks the brusher as
+      // its chase target. Deer accumulate but don't charge (the
+      // meter still drives the per-brush sound + the 'wounded'
+      // flee reaction in tickAnimal).
+      for (const touch of brushInfo.touched) {
+        if (touch.kind.tag !== "animal") continue;
+        const an = world.entities.find((e) => e.id === touch.obstacleId);
+        if (!an || an.kind !== "animal" || an.dead) continue;
+        an.brushMeter += touch.depth * dt * BEAR_BRUSH_BUILD;
+        an.lastBrusherId = c.id;
+        if (an.species === "bear" && an.brushMeter >= BEAR_BRUSH_ANGER) {
+          an.mood = "chase";
+          an.moodTimer = 6;
+          an.targetId = c.id;
+          an.reactionDecided = true;
+          an.brushMeter = 0;
+        }
+      }
 
       // ---- Multi-height conveyor transitions (Factory Map 3+) ----
       // After the character's new position is finalized, look at
@@ -445,10 +547,14 @@ export class Engine {
       }
     }
 
-    // 6c) Animal AI — wander / flee / chase + contact bite.
+    // 6c) Animal AI — wander / flee / chase + contact bite. Also
+    // decay the brush meter each tick (no decay applied in the
+    // movement loop above, only build-up while brushed, so the
+    // single decay step here is enough).
     for (const a of world.entities) {
       if (!isAnimal(a)) continue;
       if (a.dead) continue;
+      a.brushMeter = Math.max(0, a.brushMeter - BEAR_BRUSH_DECAY * dt);
       this.tickAnimal(a, dt, world);
     }
 
@@ -489,27 +595,92 @@ export class Engine {
     this.outcome = this.cfg.mode.checkOutcome(world);
   }
 
-  // Resolve character movement against blocking props using simple
-  // axis-separated push-out. Cheap and good enough for round-on-round.
+  // Compute the per-tick brush info for a character: every prop /
+  // animal / wall they're currently touching in its brush zone,
+  // plus the worst depth across all of them (used for the speed
+  // multiplier). Cheap O(N entities) scan — acceptable at the
+  // entity counts the game runs at.
+  private computeBrushInfo(c: CharacterEntity, world: World): BrushInfo {
+    const touched: BrushTouch[] = [];
+    let worstDepth = 0;
+    // Props + animals — anything that resolveCharacterMove treats
+    // as a blocker also has a brush ring around its core.
+    for (const e of world.entities) {
+      const isPropObstacle = isProp(e) && e.blocking;
+      const isAnimalObstacle = isAnimal(e) && !e.dead;
+      if (!isPropObstacle && !isAnimalObstacle) continue;
+      const dx = c.pos.x - e.pos.x;
+      const dy = c.pos.y - e.pos.y;
+      const d = Math.hypot(dx, dy);
+      const d_brush = depthFromOverlap(c.radius, e.radius, d);
+      if (d_brush <= 0) continue;
+      if (d_brush > worstDepth) worstDepth = d_brush;
+      const kind: BrushKind = isPropObstacle
+        ? { tag: "prop", shape: e.shape }
+        : { tag: "animal", species: (e as AnimalEntity).species };
+      touched.push({
+        obstacleId: e.id,
+        kind,
+        depth: d_brush,
+        pos: { x: e.pos.x, y: e.pos.y },
+      });
+    }
+    // Arena fence — four walls. depth = how far the character's
+    // edge has pushed into the WALL_BRUSH_BAND. Synthetic negative
+    // ids so the sound detector can dedupe per character.
+    const b = world.arena.bounds;
+    const gaps: [number, number, number, number, number][] = [
+      // [synthetic id, depthDistance, edgeX, edgeY, kind-marker (unused, walls all share kind)]
+      [-1, c.pos.x - c.radius - b.minX, b.minX, c.pos.y, 0],
+      [-2, b.maxX - (c.pos.x + c.radius), b.maxX, c.pos.y, 0],
+      [-3, c.pos.y - c.radius - b.minY, c.pos.x, b.minY, 0],
+      [-4, b.maxY - (c.pos.y + c.radius), c.pos.x, b.maxY, 0],
+    ];
+    for (const [wid, gap, ex, ey] of gaps) {
+      if (gap < 0 || gap > WALL_BRUSH_BAND) continue;
+      const wDepth = 1 - gap / WALL_BRUSH_BAND;
+      if (wDepth <= 0) continue;
+      if (wDepth > worstDepth) worstDepth = wDepth;
+      touched.push({
+        obstacleId: wid,
+        kind: { tag: "wall" },
+        depth: wDepth,
+        pos: { x: ex, y: ey },
+      });
+    }
+    return { worstDepth, touched };
+  }
+
+  // Resolve character movement against blocking obstacles with
+  // SOFT COLLISION. Each obstacle's pixel radius is divided into
+  //   inner CORE (0 .. radius * CORE_FRAC)  →  hard pushout
+  //   outer BRUSH (CORE_FRAC * r .. r)       →  passable but slows
+  // So a character can sink into the outer fluff of a tree (and
+  // hear it rustle) but can never push through the trunk. The
+  // brush-zone slow is applied separately in computeBrushSlowMult
+  // — this method only handles the geometry.
   private resolveCharacterMove(c: CharacterEntity, target: Vec2): Vec2 {
     const world = this.cfg.world;
     let p = { ...target };
-    // Arena bounds clamp
+    // Arena bounds clamp — full pixel radius (walls are hard).
     const b = world.arena.bounds;
     p.x = clamp(p.x, b.minX + c.radius, b.maxX - c.radius);
     p.y = clamp(p.y, b.minY + c.radius, b.maxY - c.radius);
-    // Prop + animal pushout (resolve up to a few iterations). Animals
-    // act as moving blocking obstacles — characters can't walk
-    // through them, so bumping into a deer/bear pushes you back.
+    // Prop + animal pushout (resolve up to a few iterations). Hard
+    // pushout uses the obstacle's CORE radius (30%) instead of the
+    // full pixel radius — that's the unpassable zone. The outer
+    // brush ring is handled by the per-tick brush slow + sound
+    // detector, not by physics.
     for (let iter = 0; iter < 3; iter++) {
       let resolved = true;
       for (const e of world.entities) {
         const isBlocker =
           (isProp(e) && e.blocking) || (isAnimal(e) && !e.dead);
         if (!isBlocker) continue;
+        const coreR = e.radius * CORE_FRAC;
         const dx = p.x - e.pos.x;
         const dy = p.y - e.pos.y;
-        const minDist = c.radius + e.radius;
+        const minDist = c.radius + coreR;
         const d2 = dx * dx + dy * dy;
         if (d2 < minDist * minDist) {
           const d = Math.sqrt(d2) || 0.0001;
@@ -646,12 +817,17 @@ export class Engine {
     const b = world.arena.bounds;
     newPos.x = Math.max(b.minX + a.radius, Math.min(b.maxX - a.radius, newPos.x));
     newPos.y = Math.max(b.minY + a.radius, Math.min(b.maxY - a.radius, newPos.y));
-    // Prop pushout (single pass — animals don't squeeze through).
+    // Prop pushout — animals push out of the prop's CORE (30%)
+    // rather than its full pixel radius. Lets a wandering deer
+    // brush past a tree's outer fluff just like a character can,
+    // and keeps the geometry consistent between the two collision
+    // paths.
     for (const p of world.entities) {
       if (!isProp(p) || !p.blocking) continue;
       const dx = newPos.x - p.pos.x;
       const dy = newPos.y - p.pos.y;
-      const minDist = a.radius + p.radius;
+      const coreR = p.radius * CORE_FRAC;
+      const minDist = a.radius + coreR;
       const d2 = dx * dx + dy * dy;
       if (d2 < minDist * minDist) {
         const d = Math.sqrt(d2) || 0.0001;
@@ -777,7 +953,8 @@ export class Engine {
       if (!isProp(p) || !p.blocking) continue;
       const dx = newPos.x - p.pos.x;
       const dy = newPos.y - p.pos.y;
-      const minDist = z.radius + p.radius;
+      const coreR = p.radius * CORE_FRAC;
+      const minDist = z.radius + coreR;
       const d2 = dx * dx + dy * dy;
       if (d2 < minDist * minDist) {
         const d = Math.sqrt(d2) || 0.0001;

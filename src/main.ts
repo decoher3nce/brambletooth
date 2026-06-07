@@ -11,7 +11,8 @@
 import "./abilities/abilities"; // ensure abilities are registered
 import { World } from "./core/world";
 import { createInput, bindInput } from "./core/input";
-import { Engine } from "./core/engine";
+import { Engine, CORE_FRAC, WALL_BRUSH_BAND } from "./core/engine";
+import type { BrushKind } from "./core/engine";
 import { Renderer, createCamera, screenToWorld } from "./render/renderer";
 import type { Entity, CharacterEntity } from "./core/entity";
 import { isProp } from "./core/entity";
@@ -1121,6 +1122,7 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
     if (p.countdown == null) {
       detectSoundAndVisualEvents(p.world, localMe);
       detectFootsteps(p.world, localMe);
+      detectBrushSounds(p.engine, p.world, localMe);
       checkDangerModeTransition(p.world);
       updateHeartbeatFor(p.world, localMe?.id ?? null);
     } else {
@@ -1337,6 +1339,9 @@ function drawNetGameScene(dt: number, dims: { w: number; h: number }, n: NetClie
   const netMe = netViewWorld.playerCharacter() ?? null;
   detectSoundAndVisualEvents(netViewWorld, netMe);
   detectFootsteps(netViewWorld, netMe);
+  // Net mode has no local engine — pass null so the detector
+  // computes the viewer's brush touches inline from the snapshot.
+  detectBrushSounds(null, netViewWorld, netMe);
   checkDangerModeTransition(netViewWorld);
   updateHeartbeatFor(netViewWorld, n.yourEntityId);
 
@@ -2932,6 +2937,116 @@ function checkDangerModeTransition(world: World): void {
 const lastFootstep = new Map<number, number>();
 const FOOTSTEP_INTERVAL = 0.42;       // seconds between steps per character
 const FOOTSTEP_MOVING_SPEED = 30;     // velocity magnitude above which we count as "walking"
+
+// ---- Brush sound detector ----
+// Per-tick, scan every obstacle the local viewer is currently
+// brushing (in its outer 70% pixel ring around its core 30%) and
+// retrigger the obstacle's dedicated sound at a cadence that
+// makes a continuous loop on the ear. Volume scales with current
+// depth so a barely-touching brush is quiet and a heavy lean
+// against a tree is loud.
+//
+// Per-(viewer, obstacle) timestamp keys debounce the retrigger
+// interval. The whole map clears when the viewer's id changes
+// between rounds, which the next entry hash collision will catch
+// (no explicit reset needed for v1).
+const lastBrushFire = new Map<string, number>();
+const BRUSH_RETRIGGER_INTERVAL = 0.15; // seconds between retriggers per obstacle
+
+function detectBrushSounds(
+  _engine: Engine | null,
+  world: World,
+  viewer: CharacterEntity | null,
+): void {
+  if (!viewer || viewer.dead || viewer.exited) return;
+  const now = performance.now() / 1000;
+  // Reuse the engine's already-computed brush info when we have it
+  // (local single-player). Otherwise — net play or pre-engine —
+  // compute the viewer's brush touches inline so the audio still
+  // fires.
+  const info = _engine?.lastBrushInfo.get(viewer.id) ?? null;
+  let touches: { obstacleId: number; kind: BrushKind; depth: number }[];
+  if (info) {
+    touches = info.touched;
+  } else {
+    touches = [];
+    // Inline mirror of Engine.computeBrushInfo for the viewer.
+    // Kept terse; if either drifts the audio will lose a fire or
+    // two but never crash.
+    for (const e of world.entities) {
+      let kind: BrushKind | null = null;
+      if (e.kind === "prop" && e.blocking) kind = { tag: "prop", shape: e.shape };
+      else if (e.kind === "animal" && !e.dead) kind = { tag: "animal", species: e.species };
+      if (!kind) continue;
+      const dx = viewer.pos.x - e.pos.x;
+      const dy = viewer.pos.y - e.pos.y;
+      const d = Math.hypot(dx, dy);
+      const coreR = e.radius * CORE_FRAC;
+      const outerR = e.radius + viewer.radius;
+      const innerR = coreR + viewer.radius;
+      if (d >= outerR) continue;
+      const depth = d <= innerR ? 1 : (outerR - d) / (outerR - innerR);
+      if (depth <= 0.05) continue;
+      touches.push({ obstacleId: e.id, kind, depth });
+    }
+    // Arena walls.
+    const b = world.arena.bounds;
+    const walls: [number, number][] = [
+      [-1, viewer.pos.x - viewer.radius - b.minX],
+      [-2, b.maxX - (viewer.pos.x + viewer.radius)],
+      [-3, viewer.pos.y - viewer.radius - b.minY],
+      [-4, b.maxY - (viewer.pos.y + viewer.radius)],
+    ];
+    for (const [wid, gap] of walls) {
+      if (gap < 0 || gap > WALL_BRUSH_BAND) continue;
+      const depth = 1 - gap / WALL_BRUSH_BAND;
+      if (depth <= 0.05) continue;
+      touches.push({ obstacleId: wid, kind: { tag: "wall" }, depth });
+    }
+  }
+
+  // Retrigger the dedicated sound for each touched obstacle.
+  for (const t of touches) {
+    const key = `${viewer.id}:${t.obstacleId}`;
+    const last = lastBrushFire.get(key) ?? 0;
+    if (now - last < BRUSH_RETRIGGER_INTERVAL) continue;
+    lastBrushFire.set(key, now);
+    const soundId = brushSoundFor(t.kind);
+    if (!soundId) continue;
+    // Volume scales from 0.12 (barely touching) to 0.55 (deep
+    // brush at the core boundary). Multiplied by the per-sound
+    // master in the audio module, so the resulting amplitude is
+    // tame at light brush.
+    const vol = 0.12 + t.depth * 0.43;
+    playSound(soundId, { volumeMul: vol });
+  }
+  // Cull stale entries to keep the map bounded across long sessions.
+  if (lastBrushFire.size > 256) {
+    for (const [k, ts] of lastBrushFire) {
+      if (now - ts > 3) lastBrushFire.delete(k);
+    }
+  }
+}
+
+function brushSoundFor(kind: BrushKind): SoundId | null {
+  if (kind.tag === "wall") return "brush_wall";
+  if (kind.tag === "animal") {
+    return kind.species === "bear" ? "brush_growl" : "brush_bleat";
+  }
+  // prop
+  switch (kind.shape) {
+    case "tree":     return "brush_rustle";
+    case "stump":    return "brush_rustle";
+    case "rock":     return "brush_crunch";
+    case "caverock": return "brush_crunch";
+    case "crystal":  return "brush_chime";
+    case "pipe":     return "brush_clang";
+    case "crate":    return "brush_thud";
+    case "pallet":   return "brush_thud";
+    case "oildrum":  return "brush_boom";
+    default:         return null;
+  }
+}
 
 function detectFootsteps(world: World, viewer: CharacterEntity | null): void {
   if (!audioPrefs_footsteps_enabled()) return; // cheap gate to skip the whole loop
