@@ -88,17 +88,20 @@ export function buildCave1(world: World, seed: number, _objectiveCount: number):
 
   // Crystal clusters. Blocking AND ambient light sources (the
   // renderer's FOV pass reads every crystal-prop position to cut
-  // out a soft circle of light). Place them with generous
-  // spacing so each crystal lights its own pocket and the lit
-  // areas form a navigable path network across the playfield.
+  // out a wide bright circle of light). Place them with generous
+  // spacing so each crystal lights its own pocket — every lit
+  // pocket becomes a navigation landmark. With the brighter v2
+  // crystal radius (170 in renderer) and the lower base darkness
+  // overlay, 16 crystals knit a path network through the whole
+  // playfield.
   attempts = 0; count = 0;
-  while (count < 12 && attempts < 300) {
+  while (count < 16 && attempts < 400) {
     attempts++;
     const x = b.minX + 100 + rng() * (b.maxX - b.minX - 200);
     const y = b.minY + 100 + rng() * (b.maxY - b.minY - 200);
-    // Generous radius reserve so crystals don't cluster — keeps
-    // the lit pockets distinct.
-    if (tryPlace(x, y, 90)) {
+    // Spacing slightly tighter than v1 to fit more crystals
+    // while still keeping each lit pocket visually distinct.
+    if (tryPlace(x, y, 75)) {
       spawnPropAt(x, y, "crystal", 18, true);
       count++;
     }

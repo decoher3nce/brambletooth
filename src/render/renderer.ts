@@ -244,21 +244,28 @@ export class Renderer {
     const cw = this.cw;
     const ch = this.ch;
     ctx.save();
-    // Lay down the darkness overlay. Heavy but not pitch-black so
-    // the playfield grid + arena frame still feel present.
-    ctx.fillStyle = "rgba(0, 0, 8, 0.88)";
+    // Base darkness overlay. Lower alpha (0.72) gives a "low
+    // ambient glow" — the playfield is dim but not pitch-black,
+    // so a player can squint and pick out prop silhouettes even
+    // outside a beam. Crystal lamps + flashlight cones then cut
+    // brighter pockets out of this.
+    ctx.fillStyle = "rgba(0, 0, 8, 0.72)";
     ctx.fillRect(0, 0, cw, ch);
     // Cut light out of the overlay.
     ctx.globalCompositeOperation = "destination-out";
 
-    // Crystal ambient circles — read every crystal-prop position.
+    // Crystal ambient circles — bigger, brighter than v1. Each
+    // crystal acts as a wall lamp lighting a wide pocket so
+    // players have stable landmarks to navigate by even when
+    // their own beam is pointing away.
     for (const e of world.entities) {
       if (e.kind !== "prop" || e.shape !== "crystal") continue;
       const s = worldToScreen(e.pos, cam, cw, ch);
-      const lightR = 110; // ambient radius
-      const grad = ctx.createRadialGradient(s.x, s.y, 8, s.x, s.y, lightR);
+      const lightR = 170;
+      const grad = ctx.createRadialGradient(s.x, s.y, 12, s.x, s.y, lightR);
       grad.addColorStop(0, "rgba(255, 255, 255, 1)");
-      grad.addColorStop(0.55, "rgba(255, 255, 255, 0.55)");
+      grad.addColorStop(0.35, "rgba(255, 255, 255, 0.85)");
+      grad.addColorStop(0.7, "rgba(255, 255, 255, 0.45)");
       grad.addColorStop(1, "rgba(255, 255, 255, 0)");
       ctx.fillStyle = grad;
       ctx.beginPath();
@@ -271,12 +278,23 @@ export class Renderer {
       if (c.kind !== "character" || c.dead || c.exited) continue;
       const s = worldToScreen(c.pos, cam, cw, ch);
       const isViewer = c.id === viewerId;
-      // Cone length: viewer gets a long beam; others get a short
-      // halo of light so they're spottable in the dark when near.
-      const range = isViewer ? 260 : 50;
-      // Half-angle of cone (radians).
-      const halfAng = isViewer ? Math.PI / 6 : Math.PI; // others = full circle
-      this.drawConeLight(s.x, s.y, c.facing, range, halfAng);
+      if (isViewer) {
+        // Viewer's beam: total 90° wide (±45°). 85% brightness
+        // in the inner 30° (±15°); falls off linearly to 0% at
+        // ±45°. Implemented as three stacked cones — wide rim,
+        // mid band, bright core — using destination-out so the
+        // brighter inner stamps remove more darkness than the
+        // outer rim. Approximates the angular gradient cleanly
+        // enough for Canvas 2D.
+        this.drawConeLight(s.x, s.y, c.facing, 320, Math.PI / 4,  0.20); // ±45° rim
+        this.drawConeLight(s.x, s.y, c.facing, 320, Math.PI / 6,  0.55); // ±30° mid
+        this.drawConeLight(s.x, s.y, c.facing, 320, Math.PI / 12, 0.85); // ±15° core
+      } else {
+        // Other characters: small full-circle halo so you can
+        // spot them when they're close, even if your beam is
+        // pointing the wrong way.
+        this.drawConeLight(s.x, s.y, c.facing, 60, Math.PI, 0.55);
+      }
     }
 
     ctx.restore();
@@ -284,15 +302,19 @@ export class Renderer {
 
   // Stamp a single radial-gradient cone (or full circle when
   // halfAngle = π) into the active destination-out compositor.
+  // `peak` is the alpha at the center of the gradient — controls
+  // how much darkness gets removed. 1.0 = fully bright, 0.0 = no
+  // change.
   private drawConeLight(
     cx: number, cy: number,
     facing: number, range: number, halfAngle: number,
+    peak: number = 1.0,
   ): void {
     const ctx = this.ctx;
     const grad = ctx.createRadialGradient(cx, cy, 6, cx, cy, range);
-    grad.addColorStop(0, "rgba(255, 255, 255, 1)");
-    grad.addColorStop(0.6, "rgba(255, 255, 255, 0.45)");
-    grad.addColorStop(1, "rgba(255, 255, 255, 0)");
+    grad.addColorStop(0,   `rgba(255, 255, 255, ${peak})`);
+    grad.addColorStop(0.6, `rgba(255, 255, 255, ${peak * 0.55})`);
+    grad.addColorStop(1,   `rgba(255, 255, 255, 0)`);
     ctx.fillStyle = grad;
     ctx.beginPath();
     if (halfAngle >= Math.PI - 0.01) {
