@@ -2,8 +2,8 @@
 // controller, which writes to a "desired action" struct that the engine
 // then applies the same way it would for a player.
 
-import type { CharacterEntity, PlateEntity } from "../core/entity";
-import { isProp, isPlate, isObjective } from "../core/entity";
+import type { CharacterEntity, PlateEntity, ZombieEntity } from "../core/entity";
+import { isProp, isPlate, isObjective, isZombie } from "../core/entity";
 import type { World } from "../core/world";
 import type { Vec2 } from "../core/math";
 import { dist, len, normalize, sub, add, scale } from "../core/math";
@@ -341,6 +341,78 @@ export class MagnekAI implements AIController {
   }
 }
 
+// Necro survivor AI. Flees hunters like Match/Magnek but spends safe
+// time building the swarm via resurrect, and commands the swarm onto
+// the nearest hunter when threatened.
+export class NecroAI implements AIController {
+  update(self: CharacterEntity, world: World, dt: number): AIIntent {
+    void dt;
+    const hunters = world.charactersOnTeam("hunter");
+    const objectives = world.entities.filter(isObjective).filter((o) => !o.collected);
+    const myZombies: ZombieEntity[] = [];
+    for (const e of world.entities) {
+      if (isZombie(e) && !e.dead && e.ownerId === self.id) myZombies.push(e);
+    }
+    const channeling = !!self.charging;
+
+    let nearestHunter: CharacterEntity | undefined;
+    let nearestD = Infinity;
+    for (const h of hunters) {
+      const d = dist(self.pos, h.pos);
+      if (d < nearestD) {
+        nearestD = d;
+        nearestHunter = h;
+      }
+    }
+
+    const intent: AIIntent = {
+      moveDir: { x: 0, y: 0 },
+      aim: self.pos,
+      abilitiesToFire: [],
+    };
+
+    if (nearestHunter && nearestD < 280) {
+      // DANGER: flee + command zombies onto the hunter (if any
+      // alive and the cooldown is ready).
+      const away = normalize(sub(self.pos, nearestHunter.pos));
+      intent.moveDir = navigate(self, world, away);
+      intent.aim = nearestHunter.pos;
+      if (
+        !channeling &&
+        myZombies.length > 0 &&
+        (self.cooldowns["command_attack"] ?? 0) <= 0
+      ) {
+        intent.abilitiesToFire.push("command_attack");
+      }
+      return intent;
+    }
+
+    // SAFE: head to nearest objective and top up the swarm.
+    if (objectives.length > 0) {
+      let nearestObj = objectives[0];
+      let nd = dist(self.pos, nearestObj.pos);
+      for (const o of objectives) {
+        const d = dist(self.pos, o.pos);
+        if (d < nd) {
+          nd = d;
+          nearestObj = o;
+        }
+      }
+      intent.moveDir = navigate(self, world, normalize(sub(nearestObj.pos, self.pos)));
+    }
+
+    if (
+      !channeling &&
+      myZombies.length < 3 &&
+      (self.cooldowns["resurrect"] ?? 0) <= 0
+    ) {
+      intent.abilitiesToFire.push("resurrect");
+    }
+
+    return intent;
+  }
+}
+
 // Factory: build the right controller for a character id. Returns null for
 // characters without an AI (they'd stand still — callers should avoid
 // putting them on the AI side). Centralizes the id→controller mapping so
@@ -351,6 +423,8 @@ export function createAIController(characterId: string): AIController | null {
       return new SlagyAI();
     case "match":
       return new MatchAI();
+    case "necro":
+      return new NecroAI();
     case "magnek":
       return new MagnekAI();
     default:

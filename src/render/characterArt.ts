@@ -822,7 +822,222 @@ function drawSlagyMouth(
   ctx.restore();
 }
 
+// ---- Necro ----
+// Crow-themed survivor. Two visual states based on movement:
+//   moving (flying)  — body tilted forward, wings SPREAD wide, no legs
+//   idle (perched)   — body upright, wings FOLDED at sides, legs visible
+// Body is glossy raven black with a sharp orange beak and a tiny
+// white eye that tracks the aim direction. Floats slightly above
+// the ground anchor so the silhouette reads as airborne; a small
+// translucent ground shadow under the anchor ties her back to the
+// floor for the depth sort.
+function drawNecro(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  radius: number,
+  facing: number,
+  anim: CharacterAnim,
+): CharacterArtResult {
+  const r = radius;
+  // Flight altitude — body floats this many pixels above the ground
+  // anchor. Drifts up/down a touch with phase so she "hovers."
+  const hoverBase = 18;
+  const hoverBob = Math.sin(anim.phase * 4) * 1.8 * (1 - anim.walkSpeed * 0.4);
+  const flyY = cy - hoverBase + hoverBob;
+
+  // ---- Ground shadow ----
+  ctx.fillStyle = "rgba(0, 0, 0, 0.42)";
+  ctx.beginPath();
+  ctx.ellipse(cx, cy - 2, r * 0.7, r * 0.28, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  const moving = anim.walkSpeed > 0.06;
+
+  // Facing horizontal sign — mirror the head + beak.
+  const faceRight = Math.cos(facing) >= 0;
+
+  // ---- Wings ----
+  // Spread wide while flying; tight folded blades when perched.
+  // Wings extend behind the body so they paint first.
+  if (moving) {
+    drawCrowWing(ctx, cx, flyY, r, -1, anim.phase, /*spread*/ true);
+    drawCrowWing(ctx, cx, flyY, r, +1, anim.phase, /*spread*/ true);
+  } else {
+    drawCrowWing(ctx, cx, flyY, r, -1, anim.phase, /*spread*/ false);
+    drawCrowWing(ctx, cx, flyY, r, +1, anim.phase, /*spread*/ false);
+  }
+
+  // ---- Body (oval, dark, glossy) ----
+  ctx.fillStyle = "#08080c";
+  ctx.beginPath();
+  ctx.ellipse(cx, flyY, r * 0.85, r * 1.05, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Highlight along the back to suggest gloss.
+  ctx.fillStyle = "rgba(120, 120, 150, 0.35)";
+  ctx.beginPath();
+  ctx.ellipse(cx - (faceRight ? 1 : -1) * r * 0.15, flyY - r * 0.35,
+    r * 0.32, r * 0.42, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Tail feather — a small wedge at the back, opposite of facing.
+  const tailDir = faceRight ? -1 : +1;
+  ctx.fillStyle = "#1a1a22";
+  ctx.beginPath();
+  ctx.moveTo(cx + tailDir * r * 0.7, flyY + r * 0.2);
+  ctx.lineTo(cx + tailDir * r * 1.35, flyY + r * 0.55);
+  ctx.lineTo(cx + tailDir * r * 0.85, flyY + r * 0.7);
+  ctx.closePath();
+  ctx.fill();
+
+  // ---- Legs (only when perched) ----
+  if (!moving) {
+    ctx.strokeStyle = "#d8a85a"; // dull amber
+    ctx.lineWidth = 1.8;
+    ctx.lineCap = "round";
+    for (const sgn of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(cx + sgn * r * 0.25, flyY + r * 0.95);
+      ctx.lineTo(cx + sgn * r * 0.3, cy - 2);
+      ctx.stroke();
+      // Three toes.
+      ctx.beginPath();
+      ctx.moveTo(cx + sgn * r * 0.3, cy - 2);
+      ctx.lineTo(cx + sgn * r * 0.55, cy);
+      ctx.moveTo(cx + sgn * r * 0.3, cy - 2);
+      ctx.lineTo(cx + sgn * r * 0.05, cy);
+      ctx.moveTo(cx + sgn * r * 0.3, cy - 2);
+      ctx.lineTo(cx + sgn * r * 0.3, cy + r * 0.05);
+      ctx.stroke();
+    }
+  }
+
+  // ---- Head ----
+  // Head sits forward of the body in the facing direction.
+  const headDir = faceRight ? +1 : -1;
+  const headX = cx + headDir * r * 0.55;
+  const headY = flyY - r * 0.75;
+  ctx.fillStyle = "#08080c";
+  ctx.beginPath();
+  ctx.arc(headX, headY, r * 0.58, 0, Math.PI * 2);
+  ctx.fill();
+  // Subtle head highlight.
+  ctx.fillStyle = "rgba(120, 120, 150, 0.25)";
+  ctx.beginPath();
+  ctx.arc(headX - headDir * r * 0.15, headY - r * 0.2, r * 0.2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // ---- Beak (sharp orange triangle pointing in facing direction) ----
+  ctx.fillStyle = "#ff8a3d";
+  ctx.beginPath();
+  const beakTipX = headX + headDir * r * 1.15;
+  const beakTipY = headY + r * 0.05;
+  ctx.moveTo(headX + headDir * r * 0.45, headY - r * 0.15);
+  ctx.lineTo(beakTipX, beakTipY);
+  ctx.lineTo(headX + headDir * r * 0.45, headY + r * 0.25);
+  ctx.closePath();
+  ctx.fill();
+  // Beak shading line so it reads as having a top and bottom mandible.
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.35)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(headX + headDir * r * 0.5, headY + r * 0.05);
+  ctx.lineTo(beakTipX, beakTipY);
+  ctx.stroke();
+
+  // ---- Eye (small white dot with black pupil that tracks aim) ----
+  // Pupil offset follows facing — tiny because the eye is small.
+  const eyeX = headX + headDir * r * 0.18;
+  const eyeY = headY - r * 0.1;
+  ctx.fillStyle = "#fff";
+  ctx.beginPath();
+  ctx.arc(eyeX, eyeY, r * 0.16, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#000";
+  ctx.beginPath();
+  ctx.arc(
+    eyeX + Math.cos(facing) * 1.4,
+    eyeY + Math.sin(facing) * 1.4,
+    r * 0.09, 0, Math.PI * 2,
+  );
+  ctx.fill();
+
+  // ---- Charge glow ----
+  // While resurrect is channeling, paint a violet necromantic glow
+  // around the body so the cast is legible.
+  if (anim.chargeGlow != null && anim.chargeGlow > 0) {
+    const g = anim.chargeGlow;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = `rgba(160, 90, 220, ${0.18 + g * 0.25})`;
+    ctx.beginPath();
+    ctx.arc(cx, flyY, r * (1.5 + g * 0.4), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Top of art = top of head; body center for status rings = body
+  // ellipse center.
+  return { topY: headY - r * 0.6, centerY: flyY };
+}
+
+// One crow wing. side = -1 for the back wing, +1 for the front
+// wing. While spread, the wing flaps with phase. While folded, it
+// hugs the body as a small dark blade.
+function drawCrowWing(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  r: number,
+  side: -1 | 1,
+  phase: number,
+  spread: boolean,
+): void {
+  ctx.save();
+  if (spread) {
+    // Phase-driven flap — two beats per cycle.
+    const flap = Math.sin(phase * 8 + (side === -1 ? 0 : Math.PI * 0.3));
+    const wingLen = r * 1.55;
+    const tipY = cy - r * 0.25 + flap * 6;
+    ctx.fillStyle = "#08080c";
+    ctx.beginPath();
+    ctx.moveTo(cx + side * r * 0.2, cy - r * 0.1);
+    ctx.quadraticCurveTo(
+      cx + side * wingLen * 0.7, tipY,
+      cx + side * wingLen, cy + r * 0.2,
+    );
+    ctx.quadraticCurveTo(
+      cx + side * wingLen * 0.4, cy + r * 0.55,
+      cx + side * r * 0.3, cy + r * 0.55,
+    );
+    ctx.closePath();
+    ctx.fill();
+    // Primary-feather notches along the leading edge for silhouette
+    // detail.
+    ctx.fillStyle = "#1a1a22";
+    for (let i = 0; i < 3; i++) {
+      const t = 0.45 + i * 0.18;
+      const fx = cx + side * wingLen * t;
+      const fy = cy + r * 0.2 + (flap * 4) * (1 - t);
+      ctx.beginPath();
+      ctx.ellipse(fx, fy, r * 0.18, r * 0.08, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else {
+    // Folded — small dark blade along the body side.
+    ctx.fillStyle = "#1a1a22";
+    ctx.beginPath();
+    ctx.ellipse(
+      cx + side * r * 0.55, cy + r * 0.1,
+      r * 0.32, r * 0.7, side * 0.25, 0, Math.PI * 2,
+    );
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 export const CHARACTER_ART: Record<string, CharacterArtFn> = {
   magnek: drawMagnek,
   slagy: drawSlagy,
+  necro: drawNecro,
 };

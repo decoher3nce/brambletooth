@@ -7,7 +7,7 @@
 
 import type { World } from "../core/world";
 import type { Entity } from "../core/entity";
-import { isCharacter, isProjectile, isTrap, isObjective, isProp, isPlate, isExit, isStream, isCliff, isAnimal, isConveyor } from "../core/entity";
+import { isCharacter, isProjectile, isTrap, isObjective, isProp, isPlate, isExit, isStream, isCliff, isAnimal, isConveyor, isZombie } from "../core/entity";
 import type { Vec2 } from "../core/math";
 import { CHARACTERS } from "../characters/characters";
 import { ABILITIES } from "../abilities/abilities";
@@ -254,8 +254,101 @@ export class Renderer {
     else if (isCliff(e)) this.drawCliff(e, cam);
     else if (isConveyor(e)) this.drawConveyor(e, cam);
     else if (isAnimal(e)) this.drawAnimal(e, cam);
+    else if (isZombie(e)) this.drawZombie(e, cam);
     else if (isProjectile(e)) this.drawProjectile(e, cam);
     else if (isCharacter(e)) this.drawCharacter(e, cam);
+  }
+
+  // Necro's summoned minion. Small hunched shambler with a sickly
+  // green tint and a violet necromantic glow underneath. In chase
+  // mode the eyes flare red to signal aggression.
+  private drawZombie(
+    e: Extract<Entity, { kind: "zombie" }>,
+    cam: Camera,
+  ): void {
+    const s = worldToScreen(e.pos, cam, this.cw, this.ch);
+    const ctx = this.ctx;
+    const r = e.radius;
+    const t = performance.now() / 1000;
+    const bob = Math.sin(t * 5 + e.id * 0.5) * 1.2;
+    // Ground shadow.
+    ctx.fillStyle = "rgba(0,0,0,0.40)";
+    ctx.beginPath();
+    ctx.ellipse(s.x, s.y - 1, r * 0.85, r * 0.34, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Necromantic glow.
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = e.mode === "chase"
+      ? "rgba(190, 60, 60, 0.30)"
+      : "rgba(140, 80, 200, 0.22)";
+    ctx.beginPath();
+    ctx.ellipse(s.x, s.y - 2, r * 1.2, r * 0.48, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    // Body (hunched, slightly tilted forward).
+    const bodyY = s.y - r * 1.0 + bob;
+    ctx.fillStyle = "#3a5a3a"; // sickly green
+    ctx.beginPath();
+    ctx.ellipse(s.x, bodyY, r * 0.7, r * 0.95, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#243a24";
+    ctx.beginPath();
+    ctx.ellipse(s.x + r * 0.18, bodyY + r * 0.2, r * 0.3, r * 0.4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Stiff arms hanging forward.
+    ctx.strokeStyle = "#243a24";
+    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
+    const armSwing = Math.sin(t * 6 + e.id) * 2;
+    for (const sgn of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(s.x + sgn * r * 0.45, bodyY + r * 0.1);
+      ctx.lineTo(s.x + sgn * r * 0.55, bodyY + r * 0.7 + armSwing * sgn);
+      ctx.stroke();
+    }
+    // Legs (short stumps).
+    for (const sgn of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(s.x + sgn * r * 0.25, bodyY + r * 0.85);
+      ctx.lineTo(s.x + sgn * r * 0.3, s.y - 2);
+      ctx.stroke();
+    }
+    // Head.
+    const headY = bodyY - r * 0.7;
+    ctx.fillStyle = "#4d6a4d";
+    ctx.beginPath();
+    ctx.arc(s.x, headY, r * 0.46, 0, Math.PI * 2);
+    ctx.fill();
+    // Sunken eye sockets.
+    ctx.fillStyle = "#000";
+    ctx.beginPath();
+    ctx.arc(s.x - r * 0.16, headY - r * 0.06, r * 0.11, 0, Math.PI * 2);
+    ctx.arc(s.x + r * 0.16, headY - r * 0.06, r * 0.11, 0, Math.PI * 2);
+    ctx.fill();
+    // Eye glow — violet idle, red while chasing.
+    ctx.fillStyle = e.mode === "chase" ? "#ff5c4a" : "#c690ff";
+    ctx.beginPath();
+    ctx.arc(s.x - r * 0.16, headY - r * 0.06, r * 0.05, 0, Math.PI * 2);
+    ctx.arc(s.x + r * 0.16, headY - r * 0.06, r * 0.05, 0, Math.PI * 2);
+    ctx.fill();
+    // Mouth — small dark gash.
+    ctx.fillStyle = "#1a1a14";
+    ctx.beginPath();
+    ctx.ellipse(s.x, headY + r * 0.18, r * 0.18, r * 0.06, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // HP bar — only visible when wounded, so the screen stays clean
+    // when the swarm is healthy.
+    if (e.hp < e.maxHp) {
+      const barW = r * 1.4;
+      const barH = 3;
+      const bx = s.x - barW / 2;
+      const by = headY - r * 0.85;
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fillRect(bx, by, barW, barH);
+      ctx.fillStyle = "#7fcc7f";
+      ctx.fillRect(bx, by, barW * (e.hp / e.maxHp), barH);
+    }
   }
 
   private drawPlate(

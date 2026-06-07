@@ -7,8 +7,9 @@ import type {
   ProjectileEntity,
   TrapEntity,
   PlateEntity,
+  ZombieEntity,
 } from "../core/entity";
-import { isPlate } from "../core/entity";
+import { isPlate, isZombie } from "../core/entity";
 import type { World } from "../core/world";
 import type { Vec2 } from "../core/math";
 import { normalize, sub, scale, add, dist, distToSegment } from "../core/math";
@@ -288,5 +289,104 @@ registerAbility({
       duration: MAGNESIS_TRANSPORT_DURATION,
       source: "magnesis",
     };
+  },
+});
+
+// ---- Necro's abilities ----
+
+// Hard cap on living zombies per Necro. Resurrect refuses to spawn
+// a 4th. Exported so the select screen + AI can read it.
+export const NECRO_ZOMBIE_CAP = 3;
+// Seconds a commanded zombie stays in chase mode before reverting
+// to follow. Tuned for "small swarm window, not a death sentence."
+export const NECRO_COMMAND_DURATION = 10;
+
+function livingZombiesOwnedBy(world: World, ownerId: number): ZombieEntity[] {
+  const out: ZombieEntity[] = [];
+  for (const e of world.entities) {
+    if (!isZombie(e) || e.dead) continue;
+    if (e.ownerId === ownerId) out.push(e);
+  }
+  return out;
+}
+
+// Pick the character closest to `aim` (any team), within
+// PICK_RANGE world units of it. Returns null if no character is
+// near the aim point — the command_attack ability uses this to
+// refuse a cast aimed at empty ground.
+const COMMAND_PICK_RANGE = 220;
+function pickCommandTarget(world: World, aim: Vec2): CharacterEntity | null {
+  let best: CharacterEntity | null = null;
+  let bestD = Infinity;
+  for (const c of world.allCharacters()) {
+    if (c.dead || c.exited) continue;
+    const d = dist(c.pos, aim);
+    if (d < bestD && d <= COMMAND_PICK_RANGE) {
+      best = c;
+      bestD = d;
+    }
+  }
+  return best;
+}
+
+registerAbility({
+  id: "resurrect",
+  name: "Resurrect",
+  description: `Summon a zombie to follow you. Max ${NECRO_ZOMBIE_CAP}.`,
+  cooldown: 8,
+  chargeTime: 0.7, // brief windup so the player can read the cast
+  canCast: ({ world, caster }) => {
+    return livingZombiesOwnedBy(world, caster.id).length < NECRO_ZOMBIE_CAP;
+  },
+  cast: () => {
+    // No instant effect — the spawn happens at the end of the
+    // channel so the windup matters.
+  },
+  onChargeComplete: ({ world, caster }) => {
+    // Late-check the cap in case the player burned a kill of a
+    // hunter projectile right before completion — we don't want
+    // to overshoot.
+    if (livingZombiesOwnedBy(world, caster.id).length >= NECRO_ZOMBIE_CAP) return;
+    // Spawn at a small offset behind the caster so the zombie
+    // doesn't pop on top of Necro's sprite. Direction is opposite
+    // of facing.
+    const offX = -Math.cos(caster.facing) * 26;
+    const offY = -Math.sin(caster.facing) * 26;
+    world.spawn<ZombieEntity>({
+      kind: "zombie",
+      pos: { x: caster.pos.x + offX, y: caster.pos.y + offY },
+      radius: 14,
+      ownerId: caster.id,
+      hp: 30,
+      maxHp: 30,
+      speed: 130,
+      facing: caster.facing,
+      vel: { x: 0, y: 0 },
+      mode: "follow",
+      modeTimer: 0,
+      targetId: null,
+      biteCooldown: 0,
+      dead: false,
+    });
+  },
+});
+
+registerAbility({
+  id: "command_attack",
+  name: "Command",
+  description: `Send your zombies to attack the character nearest your aim for ${NECRO_COMMAND_DURATION}s.`,
+  cooldown: 5,
+  canCast: ({ world, caster, aim }) => {
+    if (livingZombiesOwnedBy(world, caster.id).length === 0) return false;
+    return pickCommandTarget(world, aim) != null;
+  },
+  cast: ({ world, caster, aim }) => {
+    const target = pickCommandTarget(world, aim);
+    if (!target) return;
+    for (const z of livingZombiesOwnedBy(world, caster.id)) {
+      z.mode = "chase";
+      z.modeTimer = NECRO_COMMAND_DURATION;
+      z.targetId = target.id;
+    }
   },
 });

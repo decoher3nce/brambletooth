@@ -11,8 +11,8 @@ import type {
   Entity,
   PropEntity,
 } from "../core/entity";
-import { isCharacter, isProjectile, isTrap, isObjective, isProp, isExit, isStream, isCliff, isAnimal, isConveyor } from "../core/entity";
-import type { AnimalEntity } from "../core/entity";
+import { isCharacter, isProjectile, isTrap, isObjective, isProp, isExit, isStream, isCliff, isAnimal, isConveyor, isZombie } from "../core/entity";
+import type { AnimalEntity, ZombieEntity } from "../core/entity";
 import type { Vec2 } from "../core/math";
 import { add, scale, normalize, sub, len, dist, clamp, circlesOverlap, segmentsIntersect, distToSegment } from "../core/math";
 import { ABILITIES } from "../abilities/abilities";
@@ -331,6 +331,21 @@ export class Engine {
           }
         }
       }
+      // Hit zombies — any team's projectile can damage them. Gives
+      // hunters a way to thin the swarm before reaching Necro and
+      // gives other survivors a way to interrupt friendly fire if
+      // Necro's command_attack targets them.
+      if (!e.dead) {
+        for (const z of world.entities) {
+          if (!isZombie(z)) continue;
+          if (z.dead) continue;
+          if (circlesOverlap(e.pos, e.radius, z.pos, z.radius)) {
+            z.hp -= e.damage;
+            e.dead = true;
+            break;
+          }
+        }
+      }
       // Hit props (block projectile)
       if (!e.dead) {
         for (const p of world.entities) {
@@ -413,6 +428,15 @@ export class Engine {
       this.tickAnimal(a, dt, world);
     }
 
+    // 6d) Zombie AI — follow Necro by default, charge a commanded
+    // target during the 10s command_attack window. Zombies despawn
+    // automatically when their owner dies or escapes.
+    for (const z of world.entities) {
+      if (!isZombie(z)) continue;
+      if (z.dead) continue;
+      this.tickZombie(z, dt, world);
+    }
+
     // 7) Death check
     for (const c of world.allCharacters()) {
       if (c.hp <= 0 && !c.dead) {
@@ -422,6 +446,10 @@ export class Engine {
     for (const a of world.entities) {
       if (!isAnimal(a)) continue;
       if (a.hp <= 0 && !a.dead) a.dead = true;
+    }
+    for (const z of world.entities) {
+      if (!isZombie(z)) continue;
+      if (z.hp <= 0 && !z.dead) z.dead = true;
     }
 
     world.cleanupDead();
@@ -602,6 +630,122 @@ export class Engine {
       }
     }
     a.pos = newPos;
+  }
+
+  // Per-frame zombie AI + movement. Two modes:
+  //   follow — head toward the owner Necro, idle when within a
+  //            small radius (so the swarm clusters around her
+  //            without pile-driving on top of her).
+  //   chase  — head toward targetId; on contact, bite (small
+  //            damage with a per-zombie bite cooldown). modeTimer
+  //            counts down; at 0 the zombie reverts to follow.
+  // If the owner is dead/exited, the zombie dies (the necromantic
+  // tether snaps). If the chase target is dead/exited the zombie
+  // also reverts to follow.
+  private tickZombie(z: ZombieEntity, dt: number, world: World): void {
+    if (z.biteCooldown > 0) z.biteCooldown = Math.max(0, z.biteCooldown - dt);
+
+    // Resolve owner. A dead or exited owner means the summon ends.
+    let owner: CharacterEntity | null = null;
+    for (const c of world.allCharacters()) {
+      if (c.id === z.ownerId) {
+        if (!c.dead && !c.exited) owner = c;
+        break;
+      }
+    }
+    if (!owner) {
+      z.dead = true;
+      return;
+    }
+
+    // Tick mode timer.
+    if (z.mode === "chase") {
+      z.modeTimer -= dt;
+      if (z.modeTimer <= 0) {
+        z.mode = "follow";
+        z.modeTimer = 0;
+        z.targetId = null;
+      }
+    }
+
+    // Resolve target character (for chase). Lost target → follow.
+    let target: CharacterEntity | null = null;
+    if (z.mode === "chase" && z.targetId != null) {
+      for (const c of world.allCharacters()) {
+        if (c.id === z.targetId && !c.dead && !c.exited) {
+          target = c;
+          break;
+        }
+      }
+      if (!target) {
+        z.mode = "follow";
+        z.modeTimer = 0;
+        z.targetId = null;
+      }
+    }
+
+    // Compute desired velocity per mode.
+    let desiredX = 0;
+    let desiredY = 0;
+    let desiredSpeed = z.speed;
+    if (z.mode === "chase" && target) {
+      const dx = target.pos.x - z.pos.x;
+      const dy = target.pos.y - z.pos.y;
+      const d = Math.hypot(dx, dy) || 1;
+      desiredX = dx / d;
+      desiredY = dy / d;
+      desiredSpeed = z.speed * 1.15; // slight boost while charging
+      // Contact bite — 4 damage per swipe, 0.7s cooldown so 3
+      // zombies can stack chip damage on one target without
+      // shredding them in a single tick. Bite ignores invincible
+      // (Bigfoot test mode) for consistency with other contact dmg.
+      if (d < z.radius + target.radius + 4 && z.biteCooldown <= 0) {
+        if (!target.invincible) target.hp -= 4;
+        z.biteCooldown = 0.7;
+      }
+    } else {
+      // Follow — head toward owner, idle when close. Cluster radius
+      // is set just outside the owner's radius so zombies don't
+      // overlap her sprite.
+      const dx = owner.pos.x - z.pos.x;
+      const dy = owner.pos.y - z.pos.y;
+      const d = Math.hypot(dx, dy);
+      const CLUSTER_R = owner.radius + 26;
+      if (d < CLUSTER_R) {
+        desiredSpeed = 0;
+      } else {
+        desiredX = dx / (d || 1);
+        desiredY = dy / (d || 1);
+      }
+    }
+
+    z.vel = { x: desiredX * desiredSpeed, y: desiredY * desiredSpeed };
+    if (Math.abs(z.vel.x) + Math.abs(z.vel.y) > 0.5) {
+      z.facing = Math.atan2(z.vel.y, z.vel.x);
+    }
+
+    // Apply movement + clamp to arena bounds. Zombies are NOT
+    // blocking (they phase through allies and the owner) but they
+    // do respect arena bounds + blocking props so they don't walk
+    // off the map or stand inside a crate.
+    const newPos = { x: z.pos.x + z.vel.x * dt, y: z.pos.y + z.vel.y * dt };
+    const b = world.arena.bounds;
+    newPos.x = Math.max(b.minX + z.radius, Math.min(b.maxX - z.radius, newPos.x));
+    newPos.y = Math.max(b.minY + z.radius, Math.min(b.maxY - z.radius, newPos.y));
+    for (const p of world.entities) {
+      if (!isProp(p) || !p.blocking) continue;
+      const dx = newPos.x - p.pos.x;
+      const dy = newPos.y - p.pos.y;
+      const minDist = z.radius + p.radius;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < minDist * minDist) {
+        const d = Math.sqrt(d2) || 0.0001;
+        const push = minDist - d;
+        newPos.x += (dx / d) * push;
+        newPos.y += (dy / d) * push;
+      }
+    }
+    z.pos = newPos;
   }
 
   // Cliff cross check (Forest Map 3). For each cliff, see if the

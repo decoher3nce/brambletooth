@@ -19,7 +19,8 @@ export type EntityKind =
   | "stream"
   | "cliff"
   | "animal"
-  | "conveyor";
+  | "conveyor"
+  | "zombie";
 
 export interface BaseEntity {
   id: EntityId;
@@ -281,6 +282,36 @@ export interface CliffEntity extends BaseEntity {
   fallDamage: number;
 }
 
+// Necro's summoned minion. Spawned by the `resurrect` ability,
+// follows its owner (Necro) by default, and chases + bites a
+// commanded target when `command_attack` is cast. Despawns when
+// its owner dies or exits the round. Zombies are NOT blocking —
+// they phase through allies and the owner — so they don't impede
+// Necro's escape. They CAN be damaged by hunter projectiles and
+// die at 0 HP, which gives the hunter a way to thin the swarm.
+export interface ZombieEntity extends BaseEntity {
+  kind: "zombie";
+  ownerId: EntityId;          // the Necro character that summoned it
+  hp: number;
+  maxHp: number;
+  speed: number;
+  facing: number;
+  vel: Vec2;
+  // AI mode:
+  //   "follow" — head toward owner, idle within a small radius
+  //   "chase"  — head toward targetId character, bite on contact
+  mode: "follow" | "chase";
+  // Seconds remaining in chase mode (10s per command_attack cast).
+  // Counts down each tick; at <= 0 the zombie reverts to "follow".
+  modeTimer: number;
+  // The character the zombie is hunting in "chase" mode. Set by
+  // the command_attack ability; cleared when modeTimer expires or
+  // the target dies/exits.
+  targetId: EntityId | null;
+  // Per-bite cooldown so contact damage doesn't fire every frame.
+  biteCooldown: number;
+}
+
 export type Entity =
   | CharacterEntity
   | ProjectileEntity
@@ -292,7 +323,8 @@ export type Entity =
   | StreamEntity
   | CliffEntity
   | AnimalEntity
-  | ConveyorEntity;
+  | ConveyorEntity
+  | ZombieEntity;
 
 // Type guards
 export function isCharacter(e: Entity): e is CharacterEntity {
@@ -327,4 +359,7 @@ export function isAnimal(e: Entity): e is AnimalEntity {
 }
 export function isConveyor(e: Entity): e is ConveyorEntity {
   return e.kind === "conveyor";
+}
+export function isZombie(e: Entity): e is ZombieEntity {
+  return e.kind === "zombie";
 }

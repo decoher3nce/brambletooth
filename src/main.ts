@@ -2839,6 +2839,10 @@ function detectFootsteps(world: World, viewer: CharacterEntity | null): void {
     seenIds.add(e.id);
     // Mid-transport (Magnesis arc) Magnek glides, not walks — no steps.
     if (e.transport) { lastFootstep.delete(e.id); continue; }
+    // Necro is a crow on the wing — never plays footstep audio
+    // regardless of how fast she's moving. The whole point of her
+    // flight kit is silent traversal.
+    if (e.characterId === "necro") { lastFootstep.delete(e.id); continue; }
     const speed = Math.hypot(e.vel.x, e.vel.y);
     if (speed < FOOTSTEP_MOVING_SPEED) {
       lastFootstep.delete(e.id);

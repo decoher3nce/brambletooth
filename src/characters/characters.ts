@@ -1,7 +1,7 @@
 // Each character is a data record. Adding new characters = adding entries
 // here (and any new abilities they need in abilities.ts).
 
-import { MAGNEK_PLATE_CAP } from "../abilities/abilities";
+import { MAGNEK_PLATE_CAP, NECRO_ZOMBIE_CAP, NECRO_COMMAND_DURATION } from "../abilities/abilities";
 
 export type CharacterRole = "hunter" | "survivor" | "flex";
 
@@ -82,6 +82,25 @@ export const CHARACTERS: Record<string, CharacterDef> = {
       { label: "HP", value: "100" },
       { label: "Speed", value: "145" },
       { label: "Plate cap", value: String(MAGNEK_PLATE_CAP) },
+    ],
+  },
+  necro: {
+    id: "necro",
+    name: "Necro",
+    role: "survivor",
+    maxHp: 90,
+    speed: 150,
+    radius: 15,
+    color: "#1a1a22",       // raven black
+    colorDark: "#08080c",   // shadow black
+    abilities: ["resurrect", "command_attack"],
+    narrative:
+      "A crow that walks the line between worlds. Raises zombie minions and commands them onto chosen prey. No footsteps — wings carry her over the ground.",
+    displayStats: () => [
+      { label: "HP", value: "90" },
+      { label: "Speed", value: "150" },
+      { label: "Zombie cap", value: String(NECRO_ZOMBIE_CAP) },
+      { label: "Command duration", value: `${NECRO_COMMAND_DURATION}s` },
     ],
   },
 };
