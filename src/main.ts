@@ -45,6 +45,7 @@ import {
 import type { MapDef, ProfileProgress, WorldDef } from "./maps/registry";
 import type { Camera } from "./render/renderer";
 import { HuntMode } from "./modes/hunt";
+import { FFAMode } from "./modes/ffa";
 import { FOREST_ARENA_CONFIG, buildForest } from "./arenas/forest";
 import { createAIController } from "./ai/ai";
 import { HumanController } from "./core/humanController";
@@ -431,7 +432,11 @@ type Scene = "select" | "playing";
 let scene: Scene = "select";
 interface PlayState {
   world: World;
-  mode: HuntMode;
+  // GameMode is the common interface that HuntMode and FFAMode both
+  // implement. Widening from the concrete HuntMode lets startFFARound
+  // populate this without a cast and keeps the same handlers in the
+  // playing scene happy.
+  mode: import("./modes/mode").GameMode;
   engine: Engine;
   controllers: Map<number, Controller>;
   cam: Camera;
@@ -477,7 +482,11 @@ selectScreen.bind(canvas, logicalSize, {
         net.ready(true);
       }
     } else if (appMode === "local") {
-      startRound(chosenId, pendingMapId, pendingIsCampaign);
+      if (pendingFFA) {
+        startFFARound(chosenId);
+      } else {
+        startRound(chosenId, pendingMapId, pendingIsCampaign);
+      }
     }
   },
   onSelect: (id) => {
@@ -522,7 +531,7 @@ touchControls.bind(canvas, logicalSize, {
 // --- Title screen + back-button input ---
 // Title hit zones (only when !started). Back-button hit zone (only when
 // started) is stored separately and computed each draw from logical size.
-let titleButtons: { campaign: Rect; vs: Rect; two: Rect; shop: Rect } | null = null;
+let titleButtons: { campaign: Rect; vs: Rect; two: Rect; shop: Rect; ffa: Rect } | null = null;
 let titleLoginBtn: Rect | null = null;
 let titleLogoutBtn: Rect | null = null;
 let titleProfileBtn: Rect | null = null;
@@ -540,6 +549,12 @@ let mapTileBtns: { mapId: string; rect: Rect; playable: boolean }[] = [];
 // title's quick play paths still work.
 let pendingMapId: string = defaultMapId();
 let pendingIsCampaign: boolean = false;
+// True when the title screen routed via the FFA button. The select
+// screen's onStart consults this; when set, we route to
+// startFFARound(chosenId) instead of the standard HuntMode
+// startRound. Reset to false at the end of every round + on title
+// back-out so it can't leak between flows.
+let pendingFFA: boolean = false;
 
 // Settings sub-scene hit zones (re-built each draw).
 let settingsBackBtn: Rect | null = null;
@@ -702,6 +717,13 @@ function handleTitleTap(p: { x: number; y: number }): void {
   } else if (inRect(p, titleButtons.shop)) {
     playSound("ui_click");
     titleSubScene = "shop";
+  } else if (inRect(p, titleButtons.ffa)) {
+    playSound("ui_click");
+    // FFA jumps straight to character select with the FFA flag on.
+    // The select screen's onStart routes to startFFARound instead
+    // of startRound when this flag is set.
+    pendingFFA = true;
+    chooseMode("local");
   }
 }
 
@@ -964,6 +986,66 @@ function goToSelect(): void {
   play = null;
   scene = "select";
   if (prior) selectScreen.setSelected(prior);
+}
+
+// Spin up a single-player FFA round: human picks any character +
+// three random AI bots from the other characters. Reuses Forest
+// Map 1 as the v1 arena. The win condition is picked at random by
+// FFAMode itself at construction.
+function startFFARound(chosenId: string): void {
+  const def = CHARACTERS[chosenId];
+  if (!def) return;
+  const mapDef = getMap("forest_1") ?? getMap(defaultMapId())!;
+  // Pick 3 random AI bot characters, can repeat the player's pick.
+  const allIds = Object.keys(CHARACTERS);
+  const botIds: string[] = [];
+  for (let i = 0; i < 3; i++) {
+    botIds.push(allIds[Math.floor(Math.random() * allIds.length)]!);
+  }
+  const world = new World(mapDef.arenaConfig, TIME_LIMIT_SECONDS);
+  mapDef.buildArena(world, Math.floor(Math.random() * 1e9), 0);
+
+  const mode = new FFAMode({
+    playerCharacterId: chosenId,
+    botCharacterIds: botIds,
+    objectivesRequired: OBJECTIVES_REQUIRED,
+  });
+  mode.initialize(world);
+
+  if (loggedIn && isInvincibleProfile(getName(), getPin())) {
+    const player = world.playerCharacter();
+    if (player) player.invincible = true;
+  }
+
+  const controllers = new Map<number, Controller>();
+  for (const c of world.allCharacters()) {
+    if (c.isPlayer) {
+      controllers.set(c.id, new HumanController(input));
+    } else {
+      // Reuse the per-character AI for FFA. The existing
+      // controllers were tuned for HuntMode (Slagy hunts
+      // survivors, Match flees hunters); in FFA they'll behave
+      // by their own training even though the team labels are
+      // unified. Good-enough v1; per-character FFA AI is a
+      // follow-up.
+      const ai = createAIController(c.characterId);
+      if (ai) controllers.set(c.id, ai);
+    }
+  }
+
+  const engine = new Engine({ world, mode, controllers });
+  const player = world.playerCharacter();
+  const cam = createCamera(player ? { ...player.pos } : { x: 0, y: 0 });
+
+  play = {
+    world, mode, engine, controllers, cam,
+    chosenCharacterId: chosenId,
+    mapId: mapDef.id,
+    isCampaign: false,
+    countdown: 3,
+  };
+  pendingFFA = false; // consume the flag so next round defaults to vs
+  scene = "playing";
 }
 
 function frameLocal(dt: number, dims: { w: number; h: number }): void {
@@ -1535,12 +1617,17 @@ function frameTitle(dims: { w: number; h: number }): void {
   const vs: Rect = { x: leftX, y: by + bh + gap, w: colW, h: bh };
   const two: Rect = { x: leftX, y: by + 2 * (bh + gap), w: colW, h: bh };
   const shop: Rect = { x: rightX, y: by, w: colW, h: bh };
-  titleButtons = { campaign, vs, two, shop };
+  // FFA sits below SHOP in the right column. Purple-styled because
+  // it's a non-progression mode (no campaign unlock, no maps to
+  // pick) — matches the SHOP tonality.
+  const ffa: Rect = { x: rightX, y: by + bh + gap, w: colW, h: bh };
+  titleButtons = { campaign, vs, two, shop, ffa };
 
   drawModeButton(campaign, "CAMPAIGN", "Story · unlock maps + worlds", true, "yellow");
   drawModeButton(vs, "VS COMPUTER", "Pick any unlocked map · vs AI", true, "yellow");
   drawModeButton(two, "MULTIPLAYER", "1 vs Many · vote on a map", true, "yellow");
   drawModeButton(shop, "SHOP", "Characters · Outfits · Upgrades", true, "purple");
+  drawModeButton(ffa, "FREE FOR ALL", "Pick any character · random win condition · vs AI", true, "purple");
 }
 
 function drawLoginForm(dims: { w: number; h: number }, top: number): void {

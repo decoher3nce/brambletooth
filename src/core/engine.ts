@@ -304,13 +304,24 @@ export class Engine {
         e.dead = true;
         continue;
       }
-      // Hit characters on target team
-      for (const c of world.charactersOnTeam(e.targetTeam)) {
+      // Hit characters on target team. In FFA mode, the team
+      // restriction is dropped — projectiles can damage anyone
+      // except their own owner. Damage attribution is set on the
+      // victim's lastDamagerId so the death credit lands on the
+      // shooter when the victim dies (FFA most-kills win cond).
+      const projCandidates = world.ffaMode
+        ? world.allCharacters()
+        : world.charactersOnTeam(e.targetTeam);
+      for (const c of projCandidates) {
+        if (c.dead) continue;
         if (c.id === e.ownerId) continue;
         if (c.exited) continue;            // escaped survivors aren't hittable
         if (c.statuses["phased"] > 0) continue;
         if (circlesOverlap(e.pos, e.radius, c.pos, c.radius)) {
-          if (!c.invincible) c.hp -= e.damage; // Bigfoot takes no damage
+          if (!c.invincible) {
+            c.hp -= e.damage;
+            c.lastDamagerId = e.ownerId;
+          }
           if (e.slowOnHit && !c.invincible) c.statuses["slowed"] = e.slowOnHit;
           e.dead = true;
           break;
@@ -370,12 +381,22 @@ export class Engine {
       }
       if (e.armDelay > 0) continue;
       if (e.triggered) continue;
-      for (const c of world.charactersOnTeam(e.targetTeam)) {
+      // Trap candidates mirror the FFA gate used above for
+      // projectiles.
+      const trapCandidates = world.ffaMode
+        ? world.allCharacters()
+        : world.charactersOnTeam(e.targetTeam);
+      for (const c of trapCandidates) {
+        if (c.dead) continue;
+        if (c.id === e.ownerId) continue;
         if (c.exited) continue;
         if (c.statuses["phased"] > 0) continue;
         if (circlesOverlap(e.pos, e.radius, c.pos, c.radius)) {
-          if (!c.invincible) c.hp -= e.damage;
-          if (!c.invincible) c.statuses["slowed"] = e.slowDuration;
+          if (!c.invincible) {
+            c.hp -= e.damage;
+            c.statuses["slowed"] = e.slowDuration;
+            c.lastDamagerId = e.ownerId;
+          }
           e.triggered = true;
           // Trap consumed on trigger
           e.dead = true;
@@ -384,13 +405,16 @@ export class Engine {
       }
     }
 
-    // 6) Objective pickup (survivor only) — attribute to the collector,
-    // increment their per-survivor count, and notify the mode so it can
-    // spawn a replacement if it wants to (HuntMode keeps exactly one).
+    // 6) Objective pickup. HuntMode restricts to the survivor team;
+    // FFA opens it to anyone (everybody is a player who can collect
+    // nuggets to fuel the nugget-hybrid win condition).
     for (const o of world.entities) {
       if (!isObjective(o)) continue;
       if (o.collected) continue;
-      for (const c of world.charactersOnTeam("survivor")) {
+      const collectors = world.ffaMode
+        ? world.allCharacters().filter((c) => !c.dead)
+        : world.charactersOnTeam("survivor");
+      for (const c of collectors) {
         if (c.exited) continue;
         if (circlesOverlap(o.pos, o.radius, c.pos, c.radius)) {
           o.collected = true;
@@ -437,10 +461,17 @@ export class Engine {
       this.tickZombie(z, dt, world);
     }
 
-    // 7) Death check
+    // 7) Death check + kill credit. A character that just died
+    // credits its kill to lastDamagerId — populated by every
+    // damage path above. FFA most-kills win condition reads
+    // world.killCounts.
     for (const c of world.allCharacters()) {
       if (c.hp <= 0 && !c.dead) {
         c.dead = true;
+        const killer = c.lastDamagerId;
+        if (killer != null && killer !== c.id) {
+          world.killCounts.set(killer, (world.killCounts.get(killer) ?? 0) + 1);
+        }
       }
     }
     for (const a of world.entities) {
@@ -707,6 +738,9 @@ export class Engine {
         // targetId at the owner.
         if (target.id !== z.ownerId && !target.invincible) {
           target.hp -= 4;
+          // Attribute the kill to Necro, not the zombie itself —
+          // the swarm is the summoner's weapon.
+          target.lastDamagerId = z.ownerId;
         }
         z.biteCooldown = 0.7;
       }

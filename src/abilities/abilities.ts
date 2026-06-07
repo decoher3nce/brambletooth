@@ -70,10 +70,18 @@ registerAbility({
     const arcRadius = 45;
     // Hit point is in front of caster.
     const hitCenter = add(caster.pos, scale(dir, reach * 0.6));
-    // Damage any survivor within the swing arc.
-    for (const e of world.charactersOnTeam("survivor")) {
+    // Damage anyone (except the caster) within the swing arc.
+    // FFA opens the slash to all teams; HuntMode keeps the
+    // survivor-only restriction.
+    const slashTargets = world.ffaMode
+      ? world.allCharacters()
+      : world.charactersOnTeam("survivor");
+    for (const e of slashTargets) {
+      if (e.dead) continue;
+      if (e.id === caster.id) continue;
       if (dist(e.pos, hitCenter) <= arcRadius + e.radius) {
         e.hp -= 18;
+        e.lastDamagerId = caster.id;
       }
     }
     // Also damage animals in the arc — slashing wildlife triggers

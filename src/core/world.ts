@@ -33,6 +33,16 @@ export class World {
   elapsed: number = 0;
   // Round time limit (seconds)
   timeLimit: number;
+  // FFA mode flag — when true, damage paths in the engine and
+  // abilities iterate ALL characters instead of one team and skip
+  // the team-equality check entirely (still respecting "don't
+  // damage yourself"). Set by FFAMode at construction.
+  ffaMode: boolean = false;
+  // Per-character kill counter (entity id → kills). Maintained by
+  // the engine — on character death, killCounts[lastDamagerId] is
+  // incremented. FFAMode's most-kills win condition reads this
+  // directly. Other modes don't query it but it's harmless to have.
+  killCounts: Map<EntityId, number> = new Map();
 
   constructor(arena: ArenaConfig, timeLimit: number) {
     this.arena = arena;

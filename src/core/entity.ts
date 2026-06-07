@@ -99,6 +99,13 @@ export interface CharacterEntity extends BaseEntity {
   // spawn; the field is optional so older snapshots without it
   // still parse.
   elevated?: boolean;
+  // Last character / projectile-owner that dealt damage to this
+  // entity. Set by every damage-application path (projectiles,
+  // traps, melee abilities, zombie bites). On death the engine
+  // credits a kill to this id via world.killCounts. Used by FFA
+  // most-kills win condition. Optional so existing modes that
+  // don't read it stay unaffected.
+  lastDamagerId?: EntityId;
 }
 
 export interface ProjectileEntity extends BaseEntity {
