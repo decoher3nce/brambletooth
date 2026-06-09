@@ -1376,6 +1376,13 @@ export class Renderer {
     }
     ctx.restore();
 
+    // Cargo riding the belt — purely cosmetic. Crates + gears
+    // animated along the belt by performance.now(), with a
+    // density tied to belt length. No entity state required.
+    if (e.showCargo) {
+      this.drawBeltCargo(a, b, w, e.flowSpeed, sign, e.id);
+    }
+
     // End caps. Two modes:
     //   showGears = true  → animated mechanical gears (teeth + hub
     //                       + rotation driven by flowSpeed)
@@ -1426,6 +1433,99 @@ export class Renderer {
         ctx.stroke();
       }
       ctx.restore();
+    }
+  }
+
+  // Decorative cargo (small crates + tiny gears) sliding along a
+  // conveyor belt in the flow direction. Renderer-only: no entity
+  // state, position is derived from performance.now() so all
+  // clients see the cargo at the same place at the same time
+  // without any protocol traffic. Item type per slot derived from
+  // a deterministic hash of the conveyor's id so a given belt
+  // always has the same mix of crates vs gears.
+  private drawBeltCargo(
+    a: { x: number; y: number },
+    b: { x: number; y: number },
+    halfWidth: number,
+    flowSpeed: number,
+    flowSign: number,
+    beltId: number,
+  ): void {
+    const ctx = this.ctx;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const L = Math.hypot(dx, dy);
+    if (L < 30) return;
+    const ex = dx / L;
+    const ey = dy / L;
+    // One cargo slot per ~80 screen pixels of belt.
+    const slots = Math.max(2, Math.floor(L / 80));
+    // Distance the cargo has moved this frame, in [0..L). The
+    // sign matches the flow direction so cargo visibly slides
+    // the right way.
+    const traveled = ((performance.now() / 1000) * flowSpeed * flowSign) % L;
+    for (let i = 0; i < slots; i++) {
+      // Per-slot offset along the belt, with the global travel
+      // distance added.
+      const baseT = (i + 0.5) * (L / slots);
+      let t = (baseT + traveled) % L;
+      if (t < 0) t += L;
+      // Slot type: hash of (beltId + i) → crate or gear.
+      const hash = ((beltId * 73856093) ^ (i * 19349663)) >>> 0;
+      const isGear = (hash & 3) === 0; // ~25% gears, 75% crates
+      const cx = a.x + ex * t;
+      const cy = a.y + ey * t;
+      if (isGear) {
+        // Spinning gear riding the belt. Smaller than the
+        // end-roller gears so it reads as cargo, not the
+        // belt's own mechanism.
+        const gR = halfWidth * 0.5;
+        const teeth = 8;
+        const rO = gR;
+        const rI = gR * 0.7;
+        const rotation = (performance.now() / 1000) * 4 * flowSign;
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(rotation);
+        ctx.fillStyle = "#3a3e44";
+        ctx.beginPath();
+        const segCount = teeth * 2;
+        for (let s = 0; s < segCount; s++) {
+          const ang = (s / segCount) * Math.PI * 2;
+          const r2 = s % 2 === 0 ? rO : rI;
+          const x = Math.cos(ang) * r2;
+          const y = Math.sin(ang) * r2;
+          if (s === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = "#9aa3ad";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.fillStyle = "#1a1d20";
+        ctx.beginPath();
+        ctx.arc(0, 0, gR * 0.3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      } else {
+        // Small wooden crate riding the belt — flat top, two
+        // visible side faces for a hint of 3D.
+        const w = halfWidth * 0.85;
+        const h = halfWidth * 0.85;
+        ctx.fillStyle = "#8a6b3d";
+        ctx.fillRect(cx - w * 0.5, cy - h * 0.55, w, h);
+        ctx.strokeStyle = "#3d2814";
+        ctx.lineWidth = 1.2;
+        ctx.strokeRect(cx - w * 0.5, cy - h * 0.55, w, h);
+        ctx.strokeStyle = "#5a3f22";
+        ctx.beginPath();
+        ctx.moveTo(cx - w * 0.5, cy);
+        ctx.lineTo(cx + w * 0.5, cy);
+        ctx.moveTo(cx, cy - h * 0.55);
+        ctx.lineTo(cx, cy + h * 0.45);
+        ctx.stroke();
+      }
     }
   }
 
@@ -1649,7 +1749,7 @@ export class Renderer {
         ctx.ellipse(s.x, s.y - r * 0.4 + bob, r * 1.1, r * 0.7, 0, 0, Math.PI * 2);
         ctx.fill();
       }
-    } else {
+    } else if (e.species === "bear") {
       // Bear — chunky dark-brown blob.
       ctx.fillStyle = "#4a2f1c";
       ctx.beginPath();
@@ -1689,6 +1789,126 @@ export class Renderer {
         ctx.fillStyle = tint("");
         ctx.beginPath();
         ctx.ellipse(s.x, s.y - r * 0.5 + bob, r * 1.05, r * 0.85, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (e.species === "sweeper_bot") {
+      // Small round trash-can shape on a wheeled base. Two LED
+      // eyes face the direction of facing; eyes turn red when
+      // angry. Antenna with a blinking light up top.
+      const cx = s.x;
+      const cy = s.y - r * 0.4 + bob;
+      // Wheel base (dark cylinder)
+      ctx.fillStyle = "#1a1d22";
+      ctx.beginPath();
+      ctx.ellipse(cx, s.y, r * 0.85, r * 0.22, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Body — silver dome with a darker bottom band
+      ctx.fillStyle = "#9aa5b0";
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, r * 0.85, r * 0.72, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#5a6470";
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + r * 0.35, r * 0.85, r * 0.25, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#222830";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, r * 0.85, r * 0.72, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      // Highlight stripe
+      ctx.fillStyle = "rgba(255,255,255,0.35)";
+      ctx.beginPath();
+      ctx.ellipse(cx - r * 0.3, cy - r * 0.35, r * 0.2, r * 0.32, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Eyes — two glowing LEDs, color depends on mood. Always
+      // point in facing direction.
+      const facingY = Math.sin(e.facing);
+      const eyeR = r * 0.13;
+      const eyeOffset = r * 0.32;
+      const eyeBaseX = cx + facingX * r * 0.25;
+      const eyeBaseY = cy + facingY * r * 0.05;
+      ctx.fillStyle = aggressive ? "#ff5a3a" : "#5af0c4";
+      ctx.beginPath();
+      ctx.arc(eyeBaseX - facingY * eyeOffset, eyeBaseY + facingX * eyeOffset, eyeR, 0, Math.PI * 2);
+      ctx.arc(eyeBaseX + facingY * eyeOffset, eyeBaseY - facingX * eyeOffset, eyeR, 0, Math.PI * 2);
+      ctx.fill();
+      // Antenna with a blinking red light.
+      ctx.strokeStyle = "#222830";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - r * 0.65);
+      ctx.lineTo(cx + r * 0.05, cy - r * 1.1);
+      ctx.stroke();
+      const blink = (Math.sin(performance.now() / 200) + 1) * 0.5;
+      ctx.fillStyle = `rgba(255, 80, 60, ${0.55 + blink * 0.45})`;
+      ctx.beginPath();
+      ctx.arc(cx + r * 0.05, cy - r * 1.1, r * 0.1, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (e.species === "welder_bot") {
+      // Bigger stationary industrial arm: bolted base, joint,
+      // arm extending in facing direction with a torch tip
+      // that glows when angry.
+      const cx = s.x;
+      const cy = s.y - r * 0.2;
+      // Bolted base
+      ctx.fillStyle = "#3a3e44";
+      ctx.beginPath();
+      ctx.ellipse(cx, s.y, r * 0.95, r * 0.3, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#1a1d22";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.ellipse(cx, s.y, r * 0.95, r * 0.3, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      // Pillar
+      ctx.fillStyle = "#6e7681";
+      ctx.fillRect(cx - r * 0.3, s.y - r * 0.9, r * 0.6, r * 0.8);
+      ctx.strokeRect(cx - r * 0.3, s.y - r * 0.9, r * 0.6, r * 0.8);
+      // Joint shoulder
+      ctx.fillStyle = "#9aa3ad";
+      ctx.beginPath();
+      ctx.arc(cx, cy - r * 0.3, r * 0.35, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      // Arm extends in facing direction
+      const facingY = Math.sin(e.facing);
+      const armLen = r * 1.0;
+      const tipX = cx + facingX * armLen;
+      const tipY = cy - r * 0.3 + facingY * armLen;
+      ctx.strokeStyle = "#6e7681";
+      ctx.lineWidth = r * 0.32;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - r * 0.3);
+      ctx.lineTo(tipX, tipY);
+      ctx.stroke();
+      ctx.strokeStyle = "#1a1d22";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - r * 0.3);
+      ctx.lineTo(tipX, tipY);
+      ctx.stroke();
+      // Torch tip — small dark nozzle with glow when angry
+      ctx.fillStyle = "#1a1d22";
+      ctx.beginPath();
+      ctx.arc(tipX, tipY, r * 0.18, 0, Math.PI * 2);
+      ctx.fill();
+      if (aggressive) {
+        const sparkR = r * 0.4 + Math.sin(performance.now() / 60) * r * 0.15;
+        const sg = ctx.createRadialGradient(tipX, tipY, 0, tipX, tipY, sparkR);
+        sg.addColorStop(0, "rgba(255, 220, 80, 0.95)");
+        sg.addColorStop(0.5, "rgba(255, 120, 40, 0.55)");
+        sg.addColorStop(1, "rgba(255, 80, 30, 0)");
+        ctx.fillStyle = sg;
+        ctx.beginPath();
+        ctx.arc(tipX, tipY, sparkR, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        // Calm: tiny green status LED on the shoulder.
+        ctx.fillStyle = "#5af070";
+        ctx.beginPath();
+        ctx.arc(cx + r * 0.18, cy - r * 0.45, r * 0.06, 0, Math.PI * 2);
         ctx.fill();
       }
     }

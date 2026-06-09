@@ -291,9 +291,20 @@ export class Engine {
         if (!an || an.kind !== "animal" || an.dead) continue;
         an.brushMeter += touch.depth * dt * BEAR_BRUSH_BUILD;
         an.lastBrusherId = c.id;
-        if (an.species === "bear" && an.brushMeter >= BEAR_BRUSH_ANGER) {
+        // Charge species — bear, welder_bot, sweeper_bot all
+        // transition to chase on brush threshold. Deer
+        // accumulate the meter (for the brush sound + flee
+        // reaction) but never charge.
+        if (
+          an.brushMeter >= BEAR_BRUSH_ANGER &&
+          (an.species === "bear" ||
+           an.species === "welder_bot" ||
+           an.species === "sweeper_bot")
+        ) {
           an.mood = "chase";
-          an.moodTimer = 6;
+          // Sweeper bots spin for a shorter window — they're
+          // grumpy, not dangerous. Welders zap for longer.
+          an.moodTimer = an.species === "sweeper_bot" ? 3 : 6;
           an.targetId = c.id;
           an.reactionDecided = true;
           an.brushMeter = 0;
@@ -779,17 +790,44 @@ export class Engine {
       const dx = targetChar.pos.x - a.pos.x;
       const dy = targetChar.pos.y - a.pos.y;
       const d = Math.hypot(dx, dy) || 1;
-      desiredX = dx / d;
-      desiredY = dy / d;
-      desiredSpeed = a.speed * 1.3;
-      // Contact bite — short cooldown so big bears can't shred
-      // through invincibility status.
-      if (d < a.radius + 18 && a.biteCooldown <= 0) {
-        const targetEntity = world.allCharacters().find((c) => c.id === a.targetId) ?? null;
-        if (targetEntity && !targetEntity.invincible) {
-          targetEntity.hp -= a.species === "bear" ? 18 : 8;
+      if (a.species === "sweeper_bot") {
+        // Sweeper bot is grumpy, not dangerous. In "chase" it
+        // doesn't actually approach — it spins in place
+        // (zero linear velocity, fast facing rotation handled
+        // in the facing block below). The beeping audio loop
+        // does the work of telling the player to back off.
+        desiredX = 0;
+        desiredY = 0;
+        desiredSpeed = 0;
+      } else if (a.species === "welder_bot") {
+        // Welder bot rotates to face the brusher and emits a
+        // contact zap if they stay too close. Doesn't move
+        // (it's bolted to the floor).
+        desiredX = 0;
+        desiredY = 0;
+        desiredSpeed = 0;
+        if (d < a.radius + 36 && a.biteCooldown <= 0) {
+          const targetEntity = world.allCharacters().find((c) => c.id === a.targetId) ?? null;
+          if (targetEntity && !targetEntity.invincible) {
+            targetEntity.hp -= 10;
+          }
+          a.biteCooldown = 1.2;
         }
-        a.biteCooldown = 0.7;
+      } else {
+        // Default chase (bears + future creatures): close the
+        // distance and bite on contact.
+        desiredX = dx / d;
+        desiredY = dy / d;
+        desiredSpeed = a.speed * 1.3;
+        // Contact bite — short cooldown so big bears can't shred
+        // through invincibility status.
+        if (d < a.radius + 18 && a.biteCooldown <= 0) {
+          const targetEntity = world.allCharacters().find((c) => c.id === a.targetId) ?? null;
+          if (targetEntity && !targetEntity.invincible) {
+            targetEntity.hp -= a.species === "bear" ? 18 : 8;
+          }
+          a.biteCooldown = 0.7;
+        }
       }
     } else {
       // Wander — head toward the current wanderTarget.
@@ -815,6 +853,15 @@ export class Engine {
     a.vel = { x: desiredX * desiredSpeed, y: desiredY * desiredSpeed };
     if (Math.abs(a.vel.x) + Math.abs(a.vel.y) > 0.5) {
       a.facing = Math.atan2(a.vel.y, a.vel.x);
+    } else if (a.mood === "chase" && a.species === "sweeper_bot") {
+      // Sweeper bot's "grumpy spin" — rotate facing fast in
+      // place. Renderer reads facing for the body sprite, so
+      // the bot visibly spins in chase mode.
+      a.facing += dt * 12;
+    } else if (a.mood === "chase" && a.species === "welder_bot" && targetChar) {
+      // Welder bot rotates to face the brusher (so its torch
+      // tip points at them).
+      a.facing = Math.atan2(targetChar.pos.y - a.pos.y, targetChar.pos.x - a.pos.x);
     }
 
     // Apply movement + clamp to arena bounds. Animals don't push

@@ -99,6 +99,8 @@ export type SoundId =
   | "brush_growl"     // bear
   | "brush_bleat"     // deer
   | "brush_wall"      // arena fence
+  | "brush_beep"      // sweeper bot (Factory Map 4)
+  | "brush_buzz"      // welder bot (Factory Map 4)
   // UI sounds (crisp, short — under ~100ms — so they don't pile up).
   | "ui_click"
   | "ui_pick"
@@ -384,6 +386,19 @@ const SOUND_DEFS: Record<SoundId, SoundDef> = {
   brush_wall: (c, dest) => {
     envOsc(c, dest, "sine", 70, 45, 0.16, 0.40);
     envNoise(c, dest, 0.05, 0.14, 400);
+  },
+  // Sweeper bot beep: cheerful electronic chirp — two square
+  // pulses ascending. The "annoyed" overlay is just retrigger
+  // cadence: heavier brush = more beeps per second.
+  brush_beep: (c, dest) => {
+    envOsc(c, dest, "square", 880, 880, 0.06, 0.32);
+    envOsc(c, dest, "square", 1320, 1320, 0.06, 0.26, 0.07);
+  },
+  // Welder bot buzz: industrial low-mid hum with sawtooth grit.
+  brush_buzz: (c, dest) => {
+    envOsc(c, dest, "sawtooth", 220, 180, 0.20, 0.30);
+    envOsc(c, dest, "square", 110, 90, 0.18, 0.20);
+    envNoise(c, dest, 0.12, 0.10, 1200);
   },
 };
 

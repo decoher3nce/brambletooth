@@ -243,14 +243,23 @@ export interface ConveyorEntity extends BaseEntity {
   // Cosmetic only; spin rate is driven by flowSpeed in the
   // renderer.
   showGears?: boolean;
+  // True = render decorative cargo (crates + gears) sliding
+  // along the belt in the flow direction. Purely cosmetic
+  // (the cargo doesn't collide with anything) — purpose is to
+  // make the belt visibly *running*, used by Factory Map 4's
+  // assembly-floor look.
+  showCargo?: boolean;
 }
 
-// Forest NPC (Forest Map 4+). Wanders around its spawn point; pushes
-// characters back on contact (blocking collision). When hp drops it
-// rolls a one-time reaction — sometimes flees from the attacker,
-// sometimes chases and bites them. Returns to wander after the
-// reaction window expires.
-export type AnimalSpecies = "deer" | "bear";
+// Wandering NPC — the kind label is "animal" for legacy reasons but
+// it now covers both wildlife (deer, bear — Forest Map 4+) and the
+// Factory Map 4 robots (sweeper_bot, welder_bot). All share the
+// same AI scaffolding (wander/flee/chase mood machine + brushMeter
+// for the "I've been bumped too much" aggression trigger); per-
+// species branching in tickAnimal handles their behavioral
+// differences (deer flee, bears charge, sweeper bots spin angrily,
+// welder bots zap nearby characters).
+export type AnimalSpecies = "deer" | "bear" | "sweeper_bot" | "welder_bot";
 export type AnimalMood = "wander" | "flee" | "chase";
 export interface AnimalEntity extends BaseEntity {
   kind: "animal";

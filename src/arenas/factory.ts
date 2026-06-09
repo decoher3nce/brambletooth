@@ -6,7 +6,7 @@
 // in without changes.
 
 import type { World, ArenaConfig } from "../core/world";
-import type { PropEntity, ConveyorEntity } from "../core/entity";
+import type { PropEntity, ConveyorEntity, AnimalEntity, AnimalSpecies } from "../core/entity";
 import { distToSegment } from "../core/math";
 
 export const FACTORY_ARENA_CONFIG: ArenaConfig = {
@@ -281,5 +281,109 @@ export function buildFactory3(world: World, seed: number, objectiveCount: number
     dead: false,
   });
   clearPropsFromConveyor(world, g2A, g2B, beltWidth);
+}
+
+// Helper: spawn one wandering NPC (used for robots in Factory
+// Map 4). Same shape as the forest's buildAnimal but lives here
+// to keep arena spawn data co-located with the maps that need it.
+function spawnRobot(
+  world: World,
+  pos: { x: number; y: number },
+  species: AnimalSpecies,
+): void {
+  const isWelder = species === "welder_bot";
+  world.spawn<AnimalEntity>({
+    kind: "animal",
+    species,
+    pos: { ...pos },
+    // Sweepers are smaller and more mobile; welders are big and bolted.
+    radius: isWelder ? 26 : 18,
+    dead: false,
+    // High HP per spec.
+    hp: isWelder ? 150 : 110,
+    maxHp: isWelder ? 150 : 110,
+    speed: isWelder ? 0 : 55,
+    facing: Math.random() * Math.PI * 2,
+    vel: { x: 0, y: 0 },
+    mood: "wander",
+    moodTimer: 0,
+    wanderTarget: { ...pos },
+    home: { ...pos },
+    // Welders don't wander at all (radius 0 → stays on home).
+    wanderRadius: isWelder ? 0 : 110,
+    targetId: null,
+    reactionDecided: false,
+    biteCooldown: 0,
+    brushMeter: 0,
+    lastBrusherId: null,
+  });
+}
+
+// Factory Map 4 — "Assembly Floor". A crowded production line:
+//   - Many SHORT conveyor belts running in varied directions
+//     (horizontal, vertical, diagonal), each with cargo + gears
+//     visibly riding along.
+//   - Two sweeper bots wander between the belts, beeping when
+//     brushed and spinning grumpily when bumped too much.
+//   - Two welder bots bolted near the center, beeping a low buzz
+//     when brushed and zapping a small contact zone when angered.
+//   - Standard prop clutter (crates / pipes / drums / pallets)
+//     for cover, plus the same north/south spawn + SE exit
+//     layout as the other Factory maps so HuntMode just works.
+export function buildFactory4(world: World, seed: number, objectiveCount: number): void {
+  buildFactory(world, seed, objectiveCount);
+  const beltWidth = 38; // narrower than Map 2 — these are short belts
+
+  // Belt template: place a short belt between two world-space
+  // points with the given flow vector and a per-belt
+  // showCargo + showGears.
+  const placeBelt = (
+    ax: number, ay: number, bx: number, by: number,
+    flowX: number, flowY: number, speed: number,
+  ): void => {
+    const a = { x: ax, y: ay };
+    const b = { x: bx, y: by };
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    world.spawn<ConveyorEntity>({
+      kind: "conveyor",
+      pos: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
+      radius: len / 2 + beltWidth,
+      a, b,
+      width: beltWidth,
+      flow: { x: flowX, y: flowY },
+      flowSpeed: speed,
+      elevated: false,
+      showGears: true,
+      showCargo: true,
+      dead: false,
+    });
+    clearPropsFromConveyor(world, a, b, beltWidth);
+  };
+
+  // Ten short conveyors in varied directions. Each is ~180-260
+  // world units long (much shorter than Map 2's 1200+) and the
+  // mix of horizontal / vertical / diagonal gives the floor an
+  // "assembly line" feel rather than a single super-highway.
+  // Speeds vary so the cargo on different belts moves at
+  // different rates.
+  placeBelt(-560, -300, -260, -300,  1,  0, 90);   // top-W horizontal east
+  placeBelt(-200, -300,   60, -300,  1,  0, 110);  // top-mid horizontal east
+  placeBelt( 100, -260,  280, -100,  0.66, 0.75, 95); // top-E diagonal SE
+  placeBelt( 350, -260,  580, -260,  1,  0, 100);  // top-E horizontal east
+  placeBelt(-450,  -50, -450,  150,  0,  1, 95);   // W vertical south
+  placeBelt(-200,    0,   80,    0,  1,  0, 105);  // mid horizontal east
+  placeBelt( 140,    0,  140,  200,  0,  1, 90);   // mid-E vertical south
+  placeBelt( 450,    0,  450,  220,  0,  1, 100);  // E vertical south
+  placeBelt(-560,  280, -300,  280,  1,  0, 95);   // bottom-W horizontal east
+  placeBelt(  60,  300,  280,  280,  1, -0.1, 100); // bottom-mid horizontal east
+  placeBelt( 350,  280,  580,  280,  1,  0, 90);   // bottom-E horizontal east
+  placeBelt(-260, -300, -260, -100,  0,  1, 85);   // W-vertical south
+
+  // Robots. Two sweepers wandering between belt clusters, two
+  // welders bolted at chokepoints near the center.
+  spawnRobot(world, { x: -380, y: -90 },  "sweeper_bot");
+  spawnRobot(world, { x:  240, y:  80 },  "sweeper_bot");
+  spawnRobot(world, { x: -120, y: -120 }, "welder_bot");
+  spawnRobot(world, { x:  300, y:  120 }, "welder_bot");
 }
 

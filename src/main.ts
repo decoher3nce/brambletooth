@@ -3123,7 +3123,12 @@ function detectBrushSounds(
 function brushSoundFor(kind: BrushKind): SoundId | null {
   if (kind.tag === "wall") return "brush_wall";
   if (kind.tag === "animal") {
-    return kind.species === "bear" ? "brush_growl" : "brush_bleat";
+    switch (kind.species) {
+      case "bear":         return "brush_growl";
+      case "deer":         return "brush_bleat";
+      case "sweeper_bot":  return "brush_beep";
+      case "welder_bot":   return "brush_buzz";
+    }
   }
   // prop
   switch (kind.shape) {

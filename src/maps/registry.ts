@@ -23,7 +23,7 @@ import {
   buildForest4,
   buildForest5,
 } from "../arenas/forest";
-import { FACTORY_ARENA_CONFIG, buildFactory, buildFactory2, buildFactory3 } from "../arenas/factory";
+import { FACTORY_ARENA_CONFIG, buildFactory, buildFactory2, buildFactory3, buildFactory4 } from "../arenas/factory";
 import { CAVE_ARENA_CONFIG, buildCave1 } from "../arenas/cave";
 
 // How many maps must be completed in a world to unlock the next via
@@ -528,6 +528,62 @@ function thumbFactory3(
   drawThumbBeltSegment(ctx, x, y, w, h, 0.74, 0.06, 0.50, -1, "ground");
 }
 
+// Tiny silver dome + green LED — Factory Map 4's sweeper bot,
+// shrunk to a thumbnail icon.
+function drawThumbSweeperBot(
+  ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number,
+): void {
+  ctx.fillStyle = "#9aa5b0";
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#222830";
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
+  ctx.fillStyle = "#5af0c4";
+  ctx.beginPath();
+  ctx.arc(cx, cy, r * 0.3, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// Thumb-scale welder bot: arm on a pillar.
+function drawThumbWelderBot(
+  ctx: CanvasRenderingContext2D, cx: number, cy: number, r: number,
+): void {
+  ctx.fillStyle = "#3a3e44";
+  ctx.fillRect(cx - r * 0.4, cy - r * 0.2, r * 0.8, r * 1.0);
+  ctx.fillStyle = "#9aa3ad";
+  ctx.beginPath();
+  ctx.arc(cx, cy - r * 0.2, r * 0.45, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#6e7681";
+  ctx.lineWidth = r * 0.35;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - r * 0.2);
+  ctx.lineTo(cx + r * 0.9, cy - r * 0.6);
+  ctx.stroke();
+}
+
+function thumbFactory4(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+): void {
+  drawFactoryBase(ctx, x, y, w, h);
+  // Several short belt segments in varied directions — quick
+  // doodles that match the in-map layout vibe.
+  drawThumbBeltSegment(ctx, x, y, w, h, 0.20, 0.08, 0.32, 1, "ground");
+  drawThumbBeltSegment(ctx, x, y, w, h, 0.20, 0.38, 0.62, 1, "ground");
+  drawThumbBeltSegment(ctx, x, y, w, h, 0.20, 0.70, 0.92, 1, "ground");
+  drawThumbBeltSegment(ctx, x, y, w, h, 0.78, 0.08, 0.32, -1, "ground");
+  drawThumbBeltSegment(ctx, x, y, w, h, 0.78, 0.38, 0.62, -1, "ground");
+  drawThumbBeltSegment(ctx, x, y, w, h, 0.78, 0.70, 0.92, -1, "ground");
+  // Two robot icons in the center.
+  drawThumbSweeperBot(ctx, x + w * 0.32, y + h * 0.50, Math.min(w, h) * 0.05);
+  drawThumbSweeperBot(ctx, x + w * 0.68, y + h * 0.55, Math.min(w, h) * 0.05);
+  drawThumbWelderBot(ctx, x + w * 0.50, y + h * 0.48, Math.min(w, h) * 0.06);
+}
+
 const FOREST_MAPS: MapDef[] = [
   {
     id: "forest_1",
@@ -597,6 +653,14 @@ const FACTORY_MAPS: MapDef[] = [
     arenaConfig: FACTORY_ARENA_CONFIG,
     buildArena: (w, seed) => buildFactory3(w, seed, 0),
     thumbnail: thumbFactory3,
+  },
+  {
+    id: "factory_4",
+    name: "Assembly Floor",
+    worldId: "factory",
+    arenaConfig: FACTORY_ARENA_CONFIG,
+    buildArena: (w, seed) => buildFactory4(w, seed, 0),
+    thumbnail: thumbFactory4,
   },
 ];
 
