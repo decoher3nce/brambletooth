@@ -18,7 +18,17 @@ import { CHARACTERS } from "../characters/characters";
 const ABILITY_KEYS = ["q", "e", "r", "f"];
 
 export class HumanController implements Controller {
-  constructor(private input: InputState) {}
+  // Optional shop-ownership gate. If supplied, the held-sprint
+  // state is only forwarded to the engine when this returns true
+  // — so a player who hasn't bought Sprint Boots presses Shift
+  // with no effect. main.ts wires this to the local inventory.
+  // Network-driven HumanControllers (for remote players) leave
+  // it null since they shouldn't gate on the local profile's
+  // inventory.
+  constructor(
+    private input: InputState,
+    private canSprint: (() => boolean) | null = null,
+  ) {}
 
   update(self: CharacterEntity, _world: World, _dt: number): AIIntent {
     const input = this.input;
@@ -99,6 +109,12 @@ export class HumanController implements Controller {
     // fires once. (The engine used to clear this centrally.)
     input.pressedAbilities.clear();
 
-    return { moveDir, aim, abilitiesToFire: fired };
+    // Sprint is gated on shop ownership. Without the canSprint
+    // callback supplied, the gate is open (e.g. older code paths
+    // / network-driven controllers). The engine separately
+    // requires stamina > 0 to actually apply the boost.
+    const sprintHeld = input.sprintHeld && (this.canSprint?.() ?? true);
+
+    return { moveDir, aim, abilitiesToFire: fired, sprintHeld };
   }
 }

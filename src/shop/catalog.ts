@@ -75,6 +75,14 @@ export const SHOP_CATALOG: Record<string, ShopItem> = {
     price: 60,
     iconColor: "#4a4f55",
   },
+  sprint_boots: {
+    id: "sprint_boots",
+    kind: "upgrade",
+    name: "Sprint Boots",
+    description: "Hold Shift to sprint. +10% speed for 2s · 10s recharge (5s standing still).",
+    price: 700,
+    iconColor: "#ffd84a",
+  },
 };
 
 export function getShopItem(id: string): ShopItem | undefined {

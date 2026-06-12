@@ -106,6 +106,12 @@ export interface CharacterEntity extends BaseEntity {
   // most-kills win condition. Optional so existing modes that
   // don't read it stay unaffected.
   lastDamagerId?: EntityId;
+  // Sprint stamina, 0..1. Drains while the player holds sprint;
+  // regenerates when not sprinting (faster when standing still).
+  // Always present on every character so the engine math is
+  // uniform — but the UI / sprint-trigger gate only fires when
+  // the local player owns the Sprint Boots shop item.
+  stamina: number;
 }
 
 export interface ProjectileEntity extends BaseEntity {

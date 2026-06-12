@@ -123,6 +123,7 @@ export class FFAMode implements GameMode {
         isPlayer: i === 0,
         objectivesCollected: 0,
         exited: false,
+        stamina: 1,
       });
     }
 

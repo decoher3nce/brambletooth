@@ -1002,7 +1002,7 @@ function startRound(
   const controllers = new Map<number, Controller>();
   for (const c of world.allCharacters()) {
     if (c.isPlayer) {
-      controllers.set(c.id, new HumanController(input));
+      controllers.set(c.id, new HumanController(input, hasSprintBoots));
     } else {
       const ai = createAIController(c.characterId);
       if (ai) controllers.set(c.id, ai);
@@ -1080,7 +1080,7 @@ function startFFARound(chosenId: string): void {
   const controllers = new Map<number, Controller>();
   for (const c of world.allCharacters()) {
     if (c.isPlayer) {
-      controllers.set(c.id, new HumanController(input));
+      controllers.set(c.id, new HumanController(input, hasSprintBoots));
     } else {
       // Reuse the per-character AI for FFA. The existing
       // controllers were tuned for HuntMode (Slagy hunts
@@ -1175,6 +1175,7 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
       // already shows them, so the mini list would be redundant.
       showSurvivorList: false,
       dangerMode: computeDangerMode(p.world),
+      showStaminaBar: hasSprintBoots(),
     });
     if (input.isTouchMode) {
       touchControls.draw(ctx, dims, p.world, p.engine.outcome, p.engine.paused);
@@ -1387,6 +1388,7 @@ function drawNetGameScene(dt: number, dims: { w: number; h: number }, n: NetClie
     // alike have visibility into team status.
     showSurvivorList: true,
     dangerMode: computeDangerMode(netViewWorld),
+    showStaminaBar: hasSprintBoots(),
   });
   if (input.isTouchMode) {
     touchControls.draw(ctx, dims, netViewWorld, n.outcome, false);
@@ -3318,6 +3320,14 @@ function getRecentAchievements(limit: number): EarnedAchievement[] {
 // server which merges using the earliest-known timestamp.
 const INVENTORY_KEY = "brambletooth.inventory";
 interface PurchasedItem { id: string; purchasedAt: number; }
+
+// Sprint Boots shop item — gates the in-game sprint key. Bigfoot
+// god-mode also gets it for free so test runs don't have to grind
+// 700 points first.
+function hasSprintBoots(): boolean {
+  if (loggedIn && isInvincibleProfile(getName(), getPin())) return true;
+  return isItemOwned("sprint_boots");
+}
 
 function getInventory(): PurchasedItem[] {
   try {

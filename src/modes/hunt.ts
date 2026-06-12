@@ -58,6 +58,7 @@ export class HuntMode implements GameMode {
       isPlayer: this.cfg.playerRole === "hunter",
       objectivesCollected: 0,
       exited: false,
+      stamina: 1,
     });
 
     // Survivors spawn distributed across the north edge.
@@ -88,6 +89,7 @@ export class HuntMode implements GameMode {
         isPlayer: this.cfg.playerRole === "survivor" && i === 0,
         objectivesCollected: 0,
         exited: false,
+        stamina: 1,
       });
     }
 

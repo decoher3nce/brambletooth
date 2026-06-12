@@ -62,6 +62,24 @@ export const BEAR_BRUSH_BUILD = 4.0;
 export const BEAR_BRUSH_DECAY = 0.5;
 export const BEAR_BRUSH_ANGER = 3.0;
 
+// ---- Sprint / stamina ----
+// Speed multiplier applied while sprinting.
+export const SPRINT_SPEED_MULT = 1.10;
+// Seconds of continuous sprinting before the stamina bar
+// drains from full to empty.
+export const SPRINT_DURATION = 2.0;
+// Seconds to regenerate the bar from empty -> full while
+// moving normally.
+export const STAMINA_REGEN_TIME = 10.0;
+// While the character is standing still (very low velocity), the
+// regen rate is multiplied by this — full bar in
+// STAMINA_REGEN_TIME / IDLE_BONUS seconds. 2 here gives the spec'd
+// 5-second idle recharge.
+export const STAMINA_IDLE_REGEN_MULT = 2.0;
+// Velocity magnitude below which a character is considered to
+// be "standing still" for regen-bonus purposes.
+const STAMINA_IDLE_VEL = 6;
+
 // Brush info for one character on one tick — the worst (deepest)
 // overlap across every obstacle the character touches, plus the
 // list of every obstacle/wall they're currently brushing. Engine
@@ -191,6 +209,20 @@ export class Engine {
       if (c.statuses["overdrive"] > 0) speedMult *= 1.35;
       if (c.statuses["slowed"] > 0) speedMult *= 0.5;
       if (dangerMode && c.team === "hunter") speedMult *= 1.1;
+
+      // Sprint: held + has stamina → +10% speed and drain.
+      // When not sprinting, regen — faster when standing still
+      // (low velocity from the previous tick).
+      const wantsSprint = !!intent.sprintHeld && c.stamina > 0;
+      if (wantsSprint) {
+        speedMult *= SPRINT_SPEED_MULT;
+        c.stamina = Math.max(0, c.stamina - dt / SPRINT_DURATION);
+      } else {
+        const idle = len(c.vel) < STAMINA_IDLE_VEL;
+        const regenPerSec =
+          (1 / STAMINA_REGEN_TIME) * (idle ? STAMINA_IDLE_REGEN_MULT : 1);
+        c.stamina = Math.min(1, c.stamina + dt * regenPerSec);
+      }
 
       const desired = intent.moveDir;
       const dmag = len(desired);

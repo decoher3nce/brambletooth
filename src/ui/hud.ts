@@ -34,6 +34,11 @@ export interface HUDOptions {
   // buffs are active. Renders a pulsing DANGER badge under the
   // timer so survivors and hunter both feel the shift.
   dangerMode: boolean;
+  // True when the local player owns the Sprint Boots shop item.
+  // Surfaces the stamina bar under the points row + lets the
+  // player see their drain/regen. When false the bar is hidden
+  // (no clutter for players who haven't unlocked sprint yet).
+  showStaminaBar: boolean;
 }
 
 // Layout constants shared so callers can mirror our top-left stack
@@ -52,7 +57,7 @@ export function drawHUD(
   world: World,
   opts: HUDOptions,
 ): void {
-  const { dimensions: dims, isTouchMode, points, outcome, paused, objectivesRequired, showSurvivorList, dangerMode } = opts;
+  const { dimensions: dims, isTouchMode, points, outcome, paused, objectivesRequired, showSurvivorList, dangerMode, showStaminaBar } = opts;
   const cw = dims.w;
   const ch = dims.h;
   const player = world.playerCharacter();
@@ -70,6 +75,12 @@ export function drawHUD(
     stackY += ABILITY_BAR_H + ROW_GAP;
   }
   drawPoints(ctx, points, STACK_X, stackY);
+  stackY += POINTS_H + ROW_GAP;
+  // Stamina bar — only shown when the local player owns Sprint
+  // Boots. Compact pill-shaped indicator under the points row.
+  if (showStaminaBar && player) {
+    drawStaminaBar(ctx, player.stamina, STACK_X, stackY);
+  }
 
   // ---- Top-center: timer + objective progress ----
   const remaining = Math.max(0, world.timeLimit - world.elapsed);
@@ -263,6 +274,44 @@ function drawPoints(ctx: CanvasRenderingContext2D, points: number, x: number, y:
   ctx.fillStyle = "#ffd84a";
   ctx.textAlign = "left";
   ctx.fillText(label, x + 12, y + 22);
+}
+
+// Stamina bar — narrow horizontal pill showing how much sprint
+// the player has left. Drained while sprinting, regenerates when
+// not. Caller has already gated visibility on shop ownership.
+function drawStaminaBar(
+  ctx: CanvasRenderingContext2D, stamina: number, x: number, y: number,
+): void {
+  const w = 140;
+  const h = 14;
+  // Background pill.
+  ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+  ctx.fillRect(x, y, w, h);
+  // Fill — green when there's stamina, redder as it depletes so
+  // the player feels the cost at a glance.
+  const t = Math.max(0, Math.min(1, stamina));
+  // Lerp green → orange → red.
+  let r: number, g: number, b: number;
+  if (t > 0.5) {
+    const k = (t - 0.5) / 0.5;
+    r = Math.round(255 * (1 - k) + 80 * k);
+    g = Math.round(180 * (1 - k) + 220 * k);
+    b = 80;
+  } else {
+    const k = t / 0.5;
+    r = 230;
+    g = Math.round(80 + 100 * k);
+    b = 60;
+  }
+  ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+  ctx.fillRect(x + 1, y + 1, (w - 2) * t, h - 2);
+  // Label
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.font = "bold 9px system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText("SPRINT", x + 6, y + h / 2 + 1);
+  ctx.textBaseline = "alphabetic";
 }
 
 // Compact list of every survivor's HP, top-right anchored. Shown in

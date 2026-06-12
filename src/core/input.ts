@@ -34,6 +34,12 @@ export interface InputState {
   // Edge-triggered: true for one frame when Start is pressed.
   // Consumed by main.ts to toggle pause.
   gamepadStartPressed: boolean;
+  // Sprint HELD state — true while the player is currently
+  // holding the sprint key (keyboard Shift) or the gamepad
+  // right trigger. Drives the engine's stamina drain + speed
+  // boost. The gate on whether sprint is even ALLOWED (shop
+  // ownership) lives in HumanController, not here.
+  sprintHeld: boolean;
 }
 
 export function createInput(): InputState {
@@ -50,6 +56,7 @@ export function createInput(): InputState {
     gamepadMove: { x: 0, y: 0 },
     gamepadAim: { x: 0, y: 0 },
     gamepadStartPressed: false,
+    sprintHeld: false,
   };
 }
 
@@ -62,10 +69,15 @@ export function bindInput(canvas: HTMLCanvasElement, input: InputState): void {
       input.pressedAbilities.add(k);
     }
     input.keys.add(k);
+    // Sprint — held while Shift is down. Sprint gating (shop
+    // ownership) happens in HumanController; here we just track
+    // physical key state.
+    if (ev.key === "Shift") input.sprintHeld = true;
   });
 
   window.addEventListener("keyup", (ev) => {
     input.keys.delete(ev.key.toLowerCase());
+    if (ev.key === "Shift") input.sprintHeld = false;
   });
 
   canvas.addEventListener("mousemove", (ev) => {
@@ -86,6 +98,7 @@ export function bindInput(canvas: HTMLCanvasElement, input: InputState): void {
   window.addEventListener("blur", () => {
     input.keys.clear();
     input.mouseDown = false;
+    input.sprintHeld = false;
   });
 
   // ---- Gamepad lifecycle ----
@@ -202,6 +215,19 @@ export function pollGamepad(input: InputState): void {
   const startWas = prevButtonPressed[BTN_START] ?? false;
   if (startNow && !startWas) input.gamepadStartPressed = true;
   prevButtonPressed[BTN_START] = startNow;
+
+  // Sprint: held while either trigger is past its activation
+  // threshold (~30% pull). Triggers report a 0..1 value via
+  // `value` on Standard mapping; some non-standard pads only
+  // give pressed booleans, in which case any press counts.
+  // Either trigger works so the player can use whichever hand
+  // is comfortable.
+  const RT = pad.buttons[7];
+  const LT = pad.buttons[6];
+  const rtPull = RT?.value ?? (RT?.pressed ? 1 : 0);
+  const ltPull = LT?.value ?? (LT?.pressed ? 1 : 0);
+  if (rtPull > 0.30 || ltPull > 0.30) input.sprintHeld = true;
+  else if (input.isGamepadMode) input.sprintHeld = false;
 }
 
 function applyDeadzone(v: number): number {

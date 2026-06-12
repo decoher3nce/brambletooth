@@ -13,6 +13,11 @@ export interface AIIntent {
   moveDir: Vec2;         // unit-ish vector, magnitude clamped to 1
   aim: Vec2;             // world-space aim point
   abilitiesToFire: string[]; // ability ids to attempt this tick
+  // Hold the sprint key. Engine applies the +10% speed boost
+  // and drains stamina while this is true. AI never sets this
+  // in v1; only HumanController does (gated on shop ownership
+  // via the canSprint callback).
+  sprintHeld?: boolean;
 }
 
 export interface AIController {
