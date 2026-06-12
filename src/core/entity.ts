@@ -157,6 +157,11 @@ export interface PropEntity extends BaseEntity {
   kind: "prop";
   shape: PropShape;
   blocking: boolean;
+  // Optional auto-despawn. Set by temporary props (Gravemarch's
+  // Rock Wall) so they vanish after their window. Static props
+  // (trees, crates, crystals) leave it undefined and live for
+  // the whole round.
+  ttl?: number;
 }
 
 // Iron plate placed by Magnek. Persistent (no ttl), non-blocking, navigable

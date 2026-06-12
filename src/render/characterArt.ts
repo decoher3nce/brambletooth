@@ -1088,8 +1088,325 @@ function drawHeraldicWing(
   ctx.stroke();
 }
 
+// ---- Gravemarch ----
+// Stone golem hunter. Blocky body and head carved from grey rock,
+// hairline blue cracks running across the surface, glowing-blue
+// eye slits in an angry triangle, blue snarl mouth, blue V-chest
+// glyph. Heavy mace held in one hand — grey shaft with a blue-
+// spiked head. He's a little angry and a little scary by design
+// — eye slits are narrow, mouth is a grimace, shoulders are
+// hunched.
+//
+// Charging Rock Wall or Stone Step paints a blue energy glow
+// through the cracks. While `shielded` is active (drawn on top
+// by the renderer via a wrapped rock barrier), the cracks pulse
+// brighter to signal the up state.
+function drawGravemarch(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  radius: number,
+  facing: number,
+  anim: CharacterAnim,
+): CharacterArtResult {
+  const r = radius;
+  // Subtle vertical bob with walk speed (heavy steps).
+  const bob = Math.sin(anim.phase * 4) * 1.4 * anim.walkSpeed;
+  // Layout (all relative to the (cx, cy) ground anchor):
+  //   Feet at cy
+  //   Body block from cy-r*0.4 to cy-r*1.8
+  //   Head from cy-r*2.0 to cy-r*3.2
+  const baseY = cy - 2;
+  const bodyTopY = cy - r * 1.85 + bob;
+  const bodyBotY = cy - r * 0.35 + bob;
+  const headTopY = cy - r * 3.05 + bob;
+  const headBotY = cy - r * 2.05 + bob;
+
+  // Ground shadow.
+  ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+  ctx.beginPath();
+  ctx.ellipse(cx, baseY, r * 0.95, r * 0.32, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Facing-aware mace hand offset — mace stays on his RIGHT
+  // (screen-right), held outward when facing right, tucked
+  // closer when facing left. Adds a sense of which way he's
+  // looking even though the body itself is symmetric.
+  const faceRight = Math.cos(facing) >= 0;
+  const maceSide = faceRight ? 1 : -1;
+
+  // ---- Mace (drawn first so the arm overlaps it cleanly) ----
+  // Shaft + blue-spiked head off to the side.
+  const maceShaftX = cx + maceSide * r * 1.25;
+  const maceShaftBotY = cy - r * 0.05 + bob;
+  const maceShaftTopY = cy - r * 1.05 + bob;
+  ctx.strokeStyle = "#6e7681";
+  ctx.lineWidth = r * 0.22;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(maceShaftX, maceShaftBotY);
+  ctx.lineTo(maceShaftX + maceSide * r * 0.2, maceShaftTopY);
+  ctx.stroke();
+  // Mace head ball.
+  const maceHeadX = maceShaftX + maceSide * r * 0.28;
+  const maceHeadY = maceShaftTopY - r * 0.32;
+  ctx.fillStyle = "#5a6470";
+  ctx.beginPath();
+  ctx.arc(maceHeadX, maceHeadY, r * 0.42, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#222830";
+  ctx.lineWidth = 1.2;
+  ctx.stroke();
+  // Blue spikes radiating from the mace ball.
+  const spikeColor = "#3aa0ff";
+  ctx.fillStyle = spikeColor;
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    const sx0 = maceHeadX + Math.cos(a) * r * 0.42;
+    const sy0 = maceHeadY + Math.sin(a) * r * 0.42;
+    const sx1 = maceHeadX + Math.cos(a) * r * 0.72;
+    const sy1 = maceHeadY + Math.sin(a) * r * 0.72;
+    const perpX = -Math.sin(a) * r * 0.14;
+    const perpY = Math.cos(a) * r * 0.14;
+    ctx.beginPath();
+    ctx.moveTo(sx0 + perpX, sy0 + perpY);
+    ctx.lineTo(sx1, sy1);
+    ctx.lineTo(sx0 - perpX, sy0 - perpY);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // Bright blue core highlight on the mace ball.
+  ctx.fillStyle = "rgba(110, 200, 255, 0.85)";
+  ctx.beginPath();
+  ctx.arc(maceHeadX - r * 0.12, maceHeadY - r * 0.12, r * 0.12, 0, Math.PI * 2);
+  ctx.fill();
+
+  // ---- Body block ----
+  const bodyHalfW = r * 0.95;
+  ctx.fillStyle = "#6e7681";
+  ctx.fillRect(cx - bodyHalfW, bodyTopY, bodyHalfW * 2, bodyBotY - bodyTopY);
+  // Darker bottom band (shadow under the chest).
+  ctx.fillStyle = "#4a5058";
+  ctx.fillRect(cx - bodyHalfW, bodyTopY + (bodyBotY - bodyTopY) * 0.55,
+    bodyHalfW * 2, (bodyBotY - bodyTopY) * 0.45);
+  // Outline.
+  ctx.strokeStyle = "#1f2228";
+  ctx.lineWidth = 1.6;
+  ctx.strokeRect(cx - bodyHalfW, bodyTopY, bodyHalfW * 2, bodyBotY - bodyTopY);
+  // Highlight side (lit).
+  ctx.fillStyle = "rgba(220, 225, 235, 0.18)";
+  ctx.fillRect(cx - bodyHalfW + 2, bodyTopY + 2, bodyHalfW * 0.45, bodyBotY - bodyTopY - 4);
+
+  // ---- Shoulders ----
+  // Slightly larger rocks perched on either corner of the body.
+  ctx.fillStyle = "#5a6470";
+  ctx.beginPath();
+  ctx.moveTo(cx - bodyHalfW - r * 0.25, bodyTopY + r * 0.05);
+  ctx.lineTo(cx - bodyHalfW + r * 0.15, bodyTopY - r * 0.25);
+  ctx.lineTo(cx - bodyHalfW + r * 0.55, bodyTopY + r * 0.05);
+  ctx.lineTo(cx - bodyHalfW + r * 0.45, bodyTopY + r * 0.35);
+  ctx.lineTo(cx - bodyHalfW - r * 0.1, bodyTopY + r * 0.4);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = "#1f2228";
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx + bodyHalfW - r * 0.55, bodyTopY + r * 0.05);
+  ctx.lineTo(cx + bodyHalfW - r * 0.15, bodyTopY - r * 0.25);
+  ctx.lineTo(cx + bodyHalfW + r * 0.25, bodyTopY + r * 0.05);
+  ctx.lineTo(cx + bodyHalfW + r * 0.1, bodyTopY + r * 0.4);
+  ctx.lineTo(cx + bodyHalfW - r * 0.45, bodyTopY + r * 0.35);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // Blue shoulder highlights — small angular accent stones.
+  ctx.fillStyle = "#3aa0ff";
+  ctx.beginPath();
+  ctx.moveTo(cx - bodyHalfW + r * 0.2, bodyTopY - r * 0.08);
+  ctx.lineTo(cx - bodyHalfW + r * 0.35, bodyTopY - r * 0.2);
+  ctx.lineTo(cx - bodyHalfW + r * 0.45, bodyTopY - r * 0.05);
+  ctx.lineTo(cx - bodyHalfW + r * 0.25, bodyTopY + r * 0.0);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx + bodyHalfW - r * 0.2, bodyTopY - r * 0.08);
+  ctx.lineTo(cx + bodyHalfW - r * 0.35, bodyTopY - r * 0.2);
+  ctx.lineTo(cx + bodyHalfW - r * 0.45, bodyTopY - r * 0.05);
+  ctx.lineTo(cx + bodyHalfW - r * 0.25, bodyTopY + r * 0.0);
+  ctx.closePath();
+  ctx.fill();
+
+  // ---- Chest V glyph ----
+  // Inverted-V plate in vibrant blue, dead center of the body.
+  const chestTopY = bodyTopY + (bodyBotY - bodyTopY) * 0.18;
+  const chestBotY = bodyTopY + (bodyBotY - bodyTopY) * 0.62;
+  const chestHalfW = r * 0.55;
+  ctx.fillStyle = "#3aa0ff";
+  ctx.beginPath();
+  ctx.moveTo(cx - chestHalfW, chestTopY);
+  ctx.lineTo(cx + chestHalfW, chestTopY);
+  ctx.lineTo(cx, chestBotY);
+  ctx.closePath();
+  ctx.fill();
+  // Darker shadow side on the chest V.
+  ctx.fillStyle = "#1860a0";
+  ctx.beginPath();
+  ctx.moveTo(cx, chestTopY);
+  ctx.lineTo(cx + chestHalfW, chestTopY);
+  ctx.lineTo(cx, chestBotY);
+  ctx.closePath();
+  ctx.fill();
+  // Bright blue highlight stripe.
+  ctx.fillStyle = "rgba(180, 230, 255, 0.65)";
+  ctx.beginPath();
+  ctx.moveTo(cx - chestHalfW * 0.7, chestTopY + 2);
+  ctx.lineTo(cx - 1, chestBotY - 2);
+  ctx.lineTo(cx + 1, chestBotY - 2);
+  ctx.lineTo(cx - chestHalfW * 0.4, chestTopY + 2);
+  ctx.closePath();
+  ctx.fill();
+
+  // ---- Blue cracks across body ----
+  ctx.strokeStyle = "rgba(58, 160, 255, 0.85)";
+  ctx.lineWidth = 1.6;
+  ctx.lineCap = "round";
+  // Crack 1: top-left diagonal across body to chest area.
+  ctx.beginPath();
+  ctx.moveTo(cx - bodyHalfW + 3, bodyTopY + r * 0.45);
+  ctx.lineTo(cx - bodyHalfW + r * 0.55, bodyTopY + r * 0.7);
+  ctx.lineTo(cx - bodyHalfW + r * 0.85, bodyTopY + r * 0.55);
+  ctx.stroke();
+  // Crack 2: right side mid.
+  ctx.beginPath();
+  ctx.moveTo(cx + bodyHalfW - 3, bodyTopY + r * 0.85);
+  ctx.lineTo(cx + bodyHalfW - r * 0.45, bodyTopY + r * 1.05);
+  ctx.lineTo(cx + bodyHalfW - r * 0.6, bodyTopY + r * 1.25);
+  ctx.stroke();
+  // Crack 3: bottom horizontal jag.
+  ctx.beginPath();
+  ctx.moveTo(cx - bodyHalfW + r * 0.2, bodyBotY - r * 0.15);
+  ctx.lineTo(cx, bodyBotY - r * 0.25);
+  ctx.lineTo(cx + bodyHalfW - r * 0.2, bodyBotY - r * 0.05);
+  ctx.stroke();
+
+  // ---- Arms ----
+  // Stubby grey rectangles hanging from the shoulders.
+  const armW = r * 0.5;
+  const armH = r * 1.05;
+  // Left arm (no weapon).
+  ctx.fillStyle = "#5a6470";
+  ctx.fillRect(cx - bodyHalfW - armW + 4, bodyTopY + r * 0.25, armW, armH);
+  ctx.strokeStyle = "#1f2228";
+  ctx.lineWidth = 1.4;
+  ctx.strokeRect(cx - bodyHalfW - armW + 4, bodyTopY + r * 0.25, armW, armH);
+  // Right arm (holding mace) — slightly extended toward the mace.
+  const rightArmX = cx + bodyHalfW - 4;
+  ctx.fillStyle = "#5a6470";
+  ctx.fillRect(rightArmX, bodyTopY + r * 0.25, armW, armH);
+  ctx.strokeRect(rightArmX, bodyTopY + r * 0.25, armW, armH);
+
+  // ---- Legs ----
+  // Two stubby legs.
+  const legW = r * 0.5;
+  const legGap = r * 0.15;
+  const legY = bodyBotY;
+  const legH = r * 0.35;
+  for (const sgn of [-1, 1]) {
+    const lx = cx + sgn * (legGap + legW * 0.5) - legW * 0.5;
+    ctx.fillStyle = "#4a5058";
+    ctx.fillRect(lx, legY, legW, legH);
+    ctx.strokeStyle = "#1f2228";
+    ctx.lineWidth = 1.4;
+    ctx.strokeRect(lx, legY, legW, legH);
+  }
+
+  // ---- Head block ----
+  const headHalfW = r * 0.85;
+  ctx.fillStyle = "#6e7681";
+  ctx.fillRect(cx - headHalfW, headTopY, headHalfW * 2, headBotY - headTopY);
+  ctx.fillStyle = "#4a5058";
+  ctx.fillRect(cx - headHalfW, headTopY + (headBotY - headTopY) * 0.6,
+    headHalfW * 2, (headBotY - headTopY) * 0.4);
+  ctx.strokeStyle = "#1f2228";
+  ctx.lineWidth = 1.6;
+  ctx.strokeRect(cx - headHalfW, headTopY, headHalfW * 2, headBotY - headTopY);
+  // Highlight side.
+  ctx.fillStyle = "rgba(220, 225, 235, 0.20)";
+  ctx.fillRect(cx - headHalfW + 2, headTopY + 2, headHalfW * 0.4, headBotY - headTopY - 4);
+
+  // ---- Angry brow + eye slits ----
+  // Two horizontal blue slits tilted inward (angry "V" brow).
+  // The pupils nudge in the facing direction so the eyes track.
+  const eyeY = headTopY + (headBotY - headTopY) * 0.42;
+  const eyeHalfW = headHalfW * 0.30;
+  const eyeOffset = headHalfW * 0.32;
+  const eyeNudge = Math.cos(facing) * 1.6;
+  const eyeNudgeY = Math.sin(facing) * 0.6;
+  ctx.fillStyle = "#3aa0ff";
+  ctx.beginPath();
+  ctx.moveTo(cx - eyeOffset - eyeHalfW + eyeNudge, eyeY + 2 + eyeNudgeY);
+  ctx.lineTo(cx - eyeOffset + eyeHalfW + eyeNudge, eyeY - 3 + eyeNudgeY);
+  ctx.lineTo(cx - eyeOffset + eyeHalfW + eyeNudge, eyeY + 1 + eyeNudgeY);
+  ctx.lineTo(cx - eyeOffset - eyeHalfW + eyeNudge, eyeY + 5 + eyeNudgeY);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx + eyeOffset - eyeHalfW + eyeNudge, eyeY - 3 + eyeNudgeY);
+  ctx.lineTo(cx + eyeOffset + eyeHalfW + eyeNudge, eyeY + 2 + eyeNudgeY);
+  ctx.lineTo(cx + eyeOffset + eyeHalfW + eyeNudge, eyeY + 5 + eyeNudgeY);
+  ctx.lineTo(cx + eyeOffset - eyeHalfW + eyeNudge, eyeY + 1 + eyeNudgeY);
+  ctx.closePath();
+  ctx.fill();
+  // Bright inner glow on each eye.
+  ctx.fillStyle = "rgba(180, 230, 255, 0.85)";
+  ctx.fillRect(cx - eyeOffset - 4 + eyeNudge, eyeY - 1 + eyeNudgeY, 8, 2);
+  ctx.fillRect(cx + eyeOffset - 4 + eyeNudge, eyeY - 1 + eyeNudgeY, 8, 2);
+
+  // ---- Snarl mouth ----
+  // Horizontal blue rectangle with jagged top edge for a grimace.
+  const mouthY = headTopY + (headBotY - headTopY) * 0.78;
+  const mouthHalfW = headHalfW * 0.55;
+  ctx.fillStyle = "#3aa0ff";
+  ctx.fillRect(cx - mouthHalfW, mouthY, mouthHalfW * 2, headHalfW * 0.18);
+  // Teeth notches (3 dark gaps along the top edge).
+  ctx.fillStyle = "#1860a0";
+  for (let i = 0; i < 3; i++) {
+    const tx = cx - mouthHalfW + (i + 0.5) * (mouthHalfW * 2 / 3) - 2;
+    ctx.fillRect(tx, mouthY - 1, 4, headHalfW * 0.06);
+  }
+
+  // ---- Head cracks ----
+  ctx.strokeStyle = "rgba(58, 160, 255, 0.85)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(cx - headHalfW + 2, headTopY + r * 0.18);
+  ctx.lineTo(cx - headHalfW + r * 0.45, headTopY + r * 0.32);
+  ctx.lineTo(cx - headHalfW + r * 0.7, headTopY + r * 0.22);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx + headHalfW - 2, headTopY + r * 0.50);
+  ctx.lineTo(cx + headHalfW - r * 0.4, headTopY + r * 0.62);
+  ctx.lineTo(cx + headHalfW - r * 0.6, headTopY + r * 0.55);
+  ctx.stroke();
+
+  // ---- Charge glow ----
+  if (anim.chargeGlow != null && anim.chargeGlow > 0) {
+    const g = anim.chargeGlow;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = `rgba(58, 160, 255, ${0.18 + g * 0.30})`;
+    ctx.beginPath();
+    ctx.arc(cx, cy - r * 1.3, r * (1.8 + g * 0.5), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  return { topY: headTopY, centerY: bodyTopY + (bodyBotY - bodyTopY) * 0.5 };
+}
+
 export const CHARACTER_ART: Record<string, CharacterArtFn> = {
   magnek: drawMagnek,
   slagy: drawSlagy,
   necro: drawNecro,
+  gravemarch: drawGravemarch,
 };

@@ -136,6 +136,12 @@ export class SelectScreen {
   // Hover/pin state for player rows so main can draw a profile tooltip.
   private playerRows: Array<{ rect: ButtonRect; name: string }> = [];
   private pinnedPlayer: string | null = null;
+  // Predicate: returns true if a character id is unlocked for the
+  // local player. main.ts sets it from inventory + Bigfoot
+  // god-mode. When false, the character is filtered out of the
+  // roster entirely — surfaces as an empty "?" tile that
+  // collapses into the same shape as not-yet-shipped characters.
+  isCharacterAllowed: (id: string) => boolean = () => true;
 
   // Toggle networked-lobby chrome. Pass null to render the local picker.
   setLobbyView(view: LobbyView | null): void {
@@ -367,7 +373,9 @@ export class SelectScreen {
   }
 
   private charactersByRole(role: CharacterRole): CharacterDef[] {
-    return Object.values(CHARACTERS).filter((c) => c.role === role);
+    return Object.values(CHARACTERS)
+      .filter((c) => c.role === role)
+      .filter((c) => this.isCharacterAllowed(c.id));
   }
 
   // The character shown in the detail panel = hover if any, else selected.

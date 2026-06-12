@@ -83,6 +83,15 @@ export const SHOP_CATALOG: Record<string, ShopItem> = {
     price: 700,
     iconColor: "#ffd84a",
   },
+  gravemarch: {
+    id: "gravemarch",
+    kind: "character",
+    name: "Gravemarch",
+    description: "Stone hunter — slow but unstoppable. Slash, Rock Wall, Rock Shield, Stone Step.",
+    price: 1500,
+    characterId: "gravemarch",
+    iconColor: "#3a3e44",
+  },
 };
 
 export function getShopItem(id: string): ShopItem | undefined {

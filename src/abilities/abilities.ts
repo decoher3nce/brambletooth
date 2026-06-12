@@ -7,6 +7,7 @@ import type {
   ProjectileEntity,
   TrapEntity,
   PlateEntity,
+  PropEntity,
   ZombieEntity,
 } from "../core/entity";
 import { isPlate, isZombie } from "../core/entity";
@@ -79,6 +80,7 @@ registerAbility({
     for (const e of slashTargets) {
       if (e.dead) continue;
       if (e.id === caster.id) continue;
+      if (e.statuses["shielded"] > 0) continue;
       if (dist(e.pos, hitCenter) <= arcRadius + e.radius) {
         e.hp -= 18;
         e.lastDamagerId = caster.id;
@@ -403,5 +405,125 @@ registerAbility({
       z.modeTimer = NECRO_COMMAND_DURATION;
       z.targetId = target.id;
     }
+  },
+});
+
+// ---- Gravemarch's abilities ----
+
+export const GRAVEMARCH_SLASH_DAMAGE = 23;
+export const ROCK_WALL_TTL = 10;          // seconds the rocks persist
+export const ROCK_WALL_ROCK_COUNT = 5;    // rocks per wall
+export const ROCK_WALL_SPACING = 56;      // gap between adjacent rocks
+export const ROCK_SHIELD_DURATION = 10;   // seconds of damage immunity
+export const STONE_STEP_DURATION = 0.55;  // seconds the tunnel arc takes
+
+// Heavy stone swipe — 23 dmg variant of Slagy's slash, slightly
+// longer reach to reflect Gravemarch's size + mace.
+registerAbility({
+  id: "gravemarch_slash",
+  name: "Slash",
+  description: `Heavy stone swipe in front of you. ${GRAVEMARCH_SLASH_DAMAGE} damage.`,
+  cooldown: 0.7,
+  cast: ({ world, caster, aim }) => {
+    const dir = normalize(sub(aim, caster.pos));
+    const reach = 72;
+    const arcRadius = 52;
+    const hitCenter = add(caster.pos, scale(dir, reach * 0.6));
+    const targets = world.ffaMode
+      ? world.allCharacters()
+      : world.charactersOnTeam("survivor");
+    for (const e of targets) {
+      if (e.dead) continue;
+      if (e.id === caster.id) continue;
+      if (e.statuses["shielded"] > 0) continue;
+      if (dist(e.pos, hitCenter) <= arcRadius + e.radius) {
+        e.hp -= GRAVEMARCH_SLASH_DAMAGE;
+        e.lastDamagerId = caster.id;
+      }
+    }
+    // Visual slash flash (same pattern as Slagy slash).
+    world.spawn<ProjectileEntity>({
+      kind: "projectile",
+      pos: hitCenter,
+      radius: arcRadius,
+      vel: { x: 0, y: 0 },
+      ownerId: caster.id,
+      ttl: 0.12,
+      damage: 0,
+      targetTeam: "survivor",
+      dead: false,
+    });
+  },
+});
+
+// Rock Wall — slam the ground at the aim point; rocks erupt in a
+// line PERPENDICULAR to the aim direction so the wall cuts across
+// a survivor's escape route. Rocks are real blocking props with a
+// ttl — they auto-despawn after ROCK_WALL_TTL seconds.
+registerAbility({
+  id: "rock_wall",
+  name: "Rock Wall",
+  description: `Slam the floor; ${ROCK_WALL_ROCK_COUNT} rocks erupt as a wall at your aim. Lasts ${ROCK_WALL_TTL}s.`,
+  cooldown: 14,
+  chargeTime: 0.7,
+  cast: () => { /* windup, no-op until charge completes */ },
+  onChargeComplete: ({ world, caster, aim }) => {
+    // Direction caster aimed; wall is perpendicular to this.
+    const dir = normalize(sub(aim, caster.pos));
+    const perpX = -dir.y;
+    const perpY = dir.x;
+    for (let i = 0; i < ROCK_WALL_ROCK_COUNT; i++) {
+      const offset = (i - (ROCK_WALL_ROCK_COUNT - 1) / 2) * ROCK_WALL_SPACING;
+      const px = aim.x + perpX * offset;
+      const py = aim.y + perpY * offset;
+      world.spawn<PropEntity>({
+        kind: "prop",
+        pos: { x: px, y: py },
+        radius: 22,
+        shape: "rock",
+        blocking: true,
+        ttl: ROCK_WALL_TTL,
+        dead: false,
+      });
+    }
+  },
+});
+
+// Rock Shield — total damage immunity for 10s. Engine projectile,
+// trap, slash, and zombie-bite paths all check the "shielded"
+// status and skip damage. The "show arrows to all survivors"
+// effect is rendered client-side in the renderer: when the local
+// viewer is Gravemarch and shielded > 0, arrows are drawn above
+// each survivor's head.
+registerAbility({
+  id: "rock_shield",
+  name: "Rock Shield",
+  description: `Encase yourself in stone — block all damage for ${ROCK_SHIELD_DURATION}s. Survivors marked.`,
+  cooldown: 26,
+  cast: ({ caster }) => {
+    caster.statuses["shielded"] = ROCK_SHIELD_DURATION;
+  },
+});
+
+// Stone Step — tunnel underground and surface at the aim point.
+// Uses the existing TransportState arc so the character is non-
+// interactive during the move (no input, no damage applied). The
+// "stone_step" source string lets the renderer hide the body and
+// draw a dust trail instead.
+registerAbility({
+  id: "stone_step",
+  name: "Stone Step",
+  description: "Tunnel under the ground and surface at your aim point.",
+  cooldown: 11,
+  chargeTime: 0.3,
+  cast: () => { /* windup */ },
+  onChargeComplete: ({ caster, aim }) => {
+    caster.transport = {
+      fromPos: { ...caster.pos },
+      toPos: { ...aim },
+      elapsed: 0,
+      duration: STONE_STEP_DURATION,
+      source: "stone_step",
+    };
   },
 });

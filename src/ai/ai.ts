@@ -418,6 +418,74 @@ export class NecroAI implements AIController {
   }
 }
 
+// Gravemarch hunter AI. Slow stone golem — closes distance toward the
+// nearest survivor, slams them with the heavy slash in melee range,
+// drops Rock Wall to cut off escape routes when they're fleeing
+// faster than he can pursue, pops Rock Shield when wounded to
+// reveal survivors and tank damage, and uses Stone Step to
+// tunnel-close when the target is far. He's intentionally less
+// twitchy than Slagy — high HP and Shield mean he doesn't need
+// to scramble.
+export class GravemarchAI implements AIController {
+  update(self: CharacterEntity, world: World, _dt: number): AIIntent {
+    const survivors = world.charactersOnTeam("survivor");
+    if (survivors.length === 0) {
+      return { moveDir: { x: 0, y: 0 }, aim: self.pos, abilitiesToFire: [] };
+    }
+    // Closest non-exited survivor.
+    let target = survivors[0];
+    let bestD = Infinity;
+    for (const s of survivors) {
+      if (s.exited) continue;
+      const d = dist(self.pos, s.pos);
+      if (d < bestD) { bestD = d; target = s; }
+    }
+    const toTarget = sub(target.pos, self.pos);
+    const dir = normalize(toTarget);
+    const d = bestD;
+
+    const intent: AIIntent = {
+      moveDir: navigate(self, world, dir),
+      aim: target.pos,
+      abilitiesToFire: [],
+    };
+
+    // Rock Shield when wounded — pop early so the reveal helps
+    // hunt down the survivors who knocked HP off.
+    if (
+      self.hp < self.maxHp * 0.55 &&
+      !(self.statuses["shielded"] > 0) &&
+      (self.cooldowns["rock_shield"] ?? 0) <= 0
+    ) {
+      intent.abilitiesToFire.push("rock_shield");
+    }
+
+    // Heavy slash in melee.
+    if (d < 60 && (self.cooldowns["gravemarch_slash"] ?? 0) <= 0) {
+      intent.abilitiesToFire.push("gravemarch_slash");
+    }
+
+    // Stone Step to close from far away.
+    if (d > 360 && (self.cooldowns["stone_step"] ?? 0) <= 0 && !self.charging) {
+      intent.aim = target.pos;
+      intent.abilitiesToFire.push("stone_step");
+    }
+
+    // Rock Wall at the survivor's position when they're at
+    // mid-range — drops in front of them to cut the escape.
+    if (
+      d > 110 && d < 320 &&
+      (self.cooldowns["rock_wall"] ?? 0) <= 0 &&
+      !self.charging
+    ) {
+      intent.aim = target.pos;
+      intent.abilitiesToFire.push("rock_wall");
+    }
+
+    return intent;
+  }
+}
+
 // Factory: build the right controller for a character id. Returns null for
 // characters without an AI (they'd stand still — callers should avoid
 // putting them on the AI side). Centralizes the id→controller mapping so
@@ -432,6 +500,8 @@ export function createAIController(characterId: string): AIController | null {
       return new NecroAI();
     case "magnek":
       return new MagnekAI();
+    case "gravemarch":
+      return new GravemarchAI();
     default:
       return null;
   }

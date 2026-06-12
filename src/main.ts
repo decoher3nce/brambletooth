@@ -85,8 +85,15 @@ const TIME_LIMIT_SECONDS = 3 * 60 + 30;
 // First survivor to collect this many objectives wins for survivors.
 // Objectives spawn one at a time and respawn on collect.
 const OBJECTIVES_REQUIRED = 5;
-const AI_HUNTERS = ["slagy"];
+const AI_HUNTERS_ALL = ["slagy", "gravemarch"];
 const AI_SURVIVORS = ["match", "magnek", "necro"];
+// AI hunter pool the engine actually rolls from. Filtered by
+// ownership so a player who hasn't bought Gravemarch doesn't see
+// him as the AI opponent in Vs Computer — that would spoil the
+// purchase reveal.
+function aiHunters(): string[] {
+  return AI_HUNTERS_ALL.filter(isCharacterUnlocked);
+}
 
 function pickRandom<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
@@ -480,6 +487,9 @@ const netSmoothed = new Map<number, { x: number; y: number }>();
 
 // --- Select screen (local picker + networked lobby) ---
 const selectScreen = new SelectScreen();
+// Wire shop-locked characters out of the select screen. Bigfoot
+// god-mode also unlocks everything for testing.
+selectScreen.isCharacterAllowed = isCharacterUnlocked;
 selectScreen.bind(canvas, logicalSize, {
   onStart: (chosenId) => {
     if (appMode === "net" && net) {
@@ -970,7 +980,10 @@ function startRound(
     survivorId = pickRandom(AI_SURVIVORS);
     playerRole = "hunter";
   } else {
-    hunterId = pickRandom(AI_HUNTERS);
+    // Pull from the OWNED hunter pool — Gravemarch only appears
+    // as the AI opponent once the player has purchased him.
+    const pool = aiHunters();
+    hunterId = pool.length > 0 ? pickRandom(pool) : "slagy";
     survivorId = chosenId;
     playerRole = "survivor";
   }
@@ -1039,7 +1052,7 @@ function goToSelect(): void {
 // Returned in CHARACTERS-declaration order so the AI roster
 // composition stays deterministic per registry.
 function availableFFACharacters(): string[] {
-  return Object.keys(CHARACTERS);
+  return Object.keys(CHARACTERS).filter(isCharacterUnlocked);
 }
 
 // Spin up a single-player FFA round. Total fighters = min(8,
@@ -1164,6 +1177,7 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
     // flashlight cone + crystal ambient circles + a small halo
     // around every other character.
     renderer.drawFlashlightMask(p.world, p.cam, p.world.playerCharacter()?.id ?? null);
+    drawGravemarchSurvivorMarkers(p.world, p.cam);
     drawHUD(ctx, canvas, p.world, {
       outcome: p.engine.outcome,
       paused: p.engine.paused,
@@ -1377,6 +1391,7 @@ function drawNetGameScene(dt: number, dims: { w: number; h: number }, n: NetClie
   renderer.drawEntities(netViewWorld, netCam, netVis);
   drawClientEffects(netCam);
   renderer.drawFlashlightMask(netViewWorld, netCam, n.yourEntityId);
+  drawGravemarchSurvivorMarkers(netViewWorld, netCam);
   drawHUD(ctx, canvas, netViewWorld, {
     outcome: n.outcome,
     paused: n.paused,
@@ -1397,6 +1412,55 @@ function drawNetGameScene(dt: number, dims: { w: number; h: number }, n: NetClie
 
 // Big-number countdown centered on screen. Used at 5,4 over the lobby and
 // at 3,2,1 over the (frozen) game. ceil() so 4.7s reads "5", 0.1s reads "1".
+// Gravemarch's Rock Shield reveals survivors — when the local
+// viewer is Gravemarch and his shielded status is up, paint a
+// pulsing blue downward arrow above every living survivor so
+// they can't hide behind obstacles. Renderer-side only; the
+// effect is purely cosmetic to the viewer.
+function drawGravemarchSurvivorMarkers(
+  world: World, cam: { target: { x: number; y: number }; zoom: number },
+): void {
+  const viewer = world.playerCharacter();
+  if (!viewer) return;
+  if (viewer.characterId !== "gravemarch") return;
+  if (!(viewer.statuses["shielded"] > 0)) return;
+  const cw = renderer.cw;
+  const ch = renderer.ch;
+  // Pulse alpha so the marker reads as an active effect.
+  const pulse = 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(performance.now() / 220));
+  for (const s of world.charactersOnTeam("survivor")) {
+    if (s.exited) continue;
+    const p = worldToScreen(s.pos, cam, cw, ch);
+    const baseY = p.y - 70;
+    ctx.save();
+    // Drop shadow.
+    ctx.fillStyle = `rgba(0, 0, 0, ${0.45 * pulse})`;
+    ctx.beginPath();
+    ctx.moveTo(p.x, baseY + 12);
+    ctx.lineTo(p.x - 11, baseY - 2);
+    ctx.lineTo(p.x + 11, baseY - 2);
+    ctx.closePath();
+    ctx.fill();
+    // Blue arrow.
+    ctx.fillStyle = `rgba(58, 160, 255, ${0.92 * pulse})`;
+    ctx.beginPath();
+    ctx.moveTo(p.x, baseY + 10);
+    ctx.lineTo(p.x - 10, baseY - 4);
+    ctx.lineTo(p.x + 10, baseY - 4);
+    ctx.closePath();
+    ctx.fill();
+    // White highlight stripe.
+    ctx.fillStyle = `rgba(220, 240, 255, ${0.85 * pulse})`;
+    ctx.beginPath();
+    ctx.moveTo(p.x - 6, baseY - 4);
+    ctx.lineTo(p.x + 6, baseY - 4);
+    ctx.lineTo(p.x, baseY + 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
 function drawCountdownOverlay(dims: { w: number; h: number }, remaining: number): void {
   const n = Math.max(1, Math.ceil(remaining));
   ctx.save();
@@ -3327,6 +3391,25 @@ interface PurchasedItem { id: string; purchasedAt: number; }
 function hasSprintBoots(): boolean {
   if (loggedIn && isInvincibleProfile(getName(), getPin())) return true;
   return isItemOwned("sprint_boots");
+}
+
+// Whether a character is available to the local player. Any
+// character whose SHOP_CATALOG entry has kind "character" + a
+// characterId field is locked until purchased. Characters that
+// aren't gated by any shop entry are always available. Bigfoot
+// god-mode unlocks everything for testing.
+function isCharacterUnlocked(characterId: string): boolean {
+  if (loggedIn && isInvincibleProfile(getName(), getPin())) return true;
+  // Scan the catalog for a character-kind item whose characterId
+  // matches; if found, the character is gated on that item.
+  for (const id of Object.keys(SHOP_CATALOG)) {
+    const item = SHOP_CATALOG[id];
+    if (!item || item.kind !== "character") continue;
+    if (item.characterId !== characterId) continue;
+    return isItemOwned(id);
+  }
+  // No gate — always available.
+  return true;
 }
 
 function getInventory(): PurchasedItem[] {

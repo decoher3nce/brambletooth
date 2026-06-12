@@ -468,6 +468,7 @@ export class Engine {
         if (c.id === e.ownerId) continue;
         if (c.exited) continue;            // escaped survivors aren't hittable
         if (c.statuses["phased"] > 0) continue;
+        if (c.statuses["shielded"] > 0) continue; // Gravemarch Rock Shield
         if (circlesOverlap(e.pos, e.radius, c.pos, c.radius)) {
           if (!c.invincible) {
             c.hp -= e.damage;
@@ -542,6 +543,7 @@ export class Engine {
         if (c.id === e.ownerId) continue;
         if (c.exited) continue;
         if (c.statuses["phased"] > 0) continue;
+        if (c.statuses["shielded"] > 0) continue; // Gravemarch Rock Shield
         if (circlesOverlap(e.pos, e.radius, c.pos, c.radius)) {
           if (!c.invincible) {
             c.hp -= e.damage;
@@ -636,6 +638,15 @@ export class Engine {
     for (const z of world.entities) {
       if (!isZombie(z)) continue;
       if (z.hp <= 0 && !z.dead) z.dead = true;
+    }
+
+    // Tick prop ttl (Rock Wall etc.) — props with a finite ttl
+    // count down and self-destruct at 0.
+    for (const p of world.entities) {
+      if (!isProp(p) || p.dead) continue;
+      if (p.ttl == null) continue;
+      p.ttl -= dt;
+      if (p.ttl <= 0) p.dead = true;
     }
 
     world.cleanupDead();
@@ -997,7 +1008,11 @@ export class Engine {
         // can't trigger via a normal cast — kept as defense in
         // depth against any future AI path or bug that points
         // targetId at the owner.
-        if (target.id !== z.ownerId && !target.invincible) {
+        if (
+          target.id !== z.ownerId &&
+          !target.invincible &&
+          !(target.statuses["shielded"] > 0)
+        ) {
           target.hp -= 4;
           // Attribute the kill to Necro, not the zombie itself —
           // the swarm is the summoner's weapon.

@@ -103,4 +103,23 @@ export const CHARACTERS: Record<string, CharacterDef> = {
       { label: "Command duration", value: `${NECRO_COMMAND_DURATION}s` },
     ],
   },
+  gravemarch: {
+    id: "gravemarch",
+    name: "Gravemarch",
+    role: "hunter",
+    maxHp: 200,
+    speed: 115,
+    radius: 25,
+    color: "#6e7681",     // weathered stone grey
+    colorDark: "#3a3e44", // shadow grey
+    abilities: ["gravemarch_slash", "rock_wall", "rock_shield", "stone_step"],
+    narrative:
+      "Hewn from cave stone, slow but unstoppable. Blue veins run hot under the granite skin — the old kind of magic that calls walls up from the floor and tunnels through solid rock.",
+    displayStats: () => [
+      { label: "HP", value: "200" },
+      { label: "Speed", value: "115" },
+      { label: "Slash damage", value: "23" },
+      { label: "Shield duration", value: "10s" },
+    ],
+  },
 };
