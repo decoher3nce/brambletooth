@@ -17,6 +17,7 @@ export type EntityKind =
   | "plate"
   | "exit"
   | "stream"
+  | "lava"
   | "cliff"
   | "animal"
   | "conveyor"
@@ -164,7 +165,11 @@ export type PropShape =
   // Cave props — caverock is a chunky stalagmite / boulder pile
   // (blocking, no light). crystal is a glowing geode cluster
   // (blocking, emits ambient light in cave FOV mode).
-  | "caverock" | "crystal";
+  | "caverock" | "crystal"
+  // Volcano props — the volcano cone itself (huge blocking
+  // centerpiece with a glowing crater) and scattered chunks
+  // of cooled obsidian (sharp, dark, blocking).
+  | "volcano" | "obsidian";
 
 export interface PropEntity extends BaseEntity {
   kind: "prop";
@@ -238,6 +243,31 @@ export interface StreamEntity extends BaseEntity {
   flowSpeed: number;
   // 0..1 multiplier applied to the character's intent velocity.
   slowFactor: number;
+}
+
+// Flowing lava (Volcano World). Same polyline-of-capsules shape as
+// StreamEntity, but with two key differences:
+//   - Touching it BURNS — the engine deals `damagePerSec` HP per
+//     second, gated by a per-character cooldown so the damage
+//     applies in clean ticks instead of every frame. Gravemarch
+//     takes a reduced fraction (he's a rock) — see engine's
+//     applyLavaDamage path
+//   - Push along the local segment direction is slow and sticky
+//     rather than fast — the molten flow drags rather than rushes,
+//     so survivors who step into it can't be flung free by the
+//     current
+// `pos` and `radius` are the bounding-box center + bounding-circle
+// radius for the whole curve (cheap broad-phase).
+export interface LavaEntity extends BaseEntity {
+  kind: "lava";
+  points: Vec2[];
+  width: number;
+  flowSpeed: number;
+  slowFactor: number;
+  // HP per second applied to a character standing in the lava.
+  // Engine ticks damage in `lavaDamageCooldown`-second pulses so
+  // it's not invisibly applied every frame.
+  damagePerSec: number;
 }
 
 // Industrial conveyor belt (Factory Map 2+). Capsule defined by line
@@ -388,6 +418,7 @@ export type Entity =
   | PlateEntity
   | ExitEntity
   | StreamEntity
+  | LavaEntity
   | CliffEntity
   | AnimalEntity
   | ConveyorEntity
@@ -417,6 +448,9 @@ export function isExit(e: Entity): e is ExitEntity {
 }
 export function isStream(e: Entity): e is StreamEntity {
   return e.kind === "stream";
+}
+export function isLava(e: Entity): e is LavaEntity {
+  return e.kind === "lava";
 }
 export function isCliff(e: Entity): e is CliffEntity {
   return e.kind === "cliff";

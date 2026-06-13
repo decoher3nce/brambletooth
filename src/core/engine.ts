@@ -11,7 +11,7 @@ import type {
   Entity,
   PropEntity,
 } from "../core/entity";
-import { isCharacter, isProjectile, isTrap, isObjective, isProp, isExit, isStream, isCliff, isAnimal, isConveyor, isZombie } from "../core/entity";
+import { isCharacter, isProjectile, isTrap, isObjective, isProp, isExit, isStream, isLava, isCliff, isAnimal, isConveyor, isZombie } from "../core/entity";
 import type { AnimalEntity, ZombieEntity } from "../core/entity";
 import type { Vec2 } from "../core/math";
 import { add, scale, normalize, sub, len, dist, clamp, circlesOverlap, segmentsIntersect, distToSegment } from "../core/math";
@@ -61,6 +61,18 @@ export const WALL_BRUSH_BAND = 10;
 export const BEAR_BRUSH_BUILD = 4.0;
 export const BEAR_BRUSH_DECAY = 0.5;
 export const BEAR_BRUSH_ANGER = 3.0;
+
+// ---- Lava ----
+// Per-character cooldown (seconds) between successive lava damage
+// pulses. A single tick of lava costs the LavaEntity's
+// damagePerSec * this — e.g. 10 dmg/s × 0.5s = 5 dmg per pulse,
+// fired every half-second while standing in molten rock. Stops
+// frame-rate from leaking into balance.
+export const LAVA_DAMAGE_COOLDOWN = 0.5;
+// Damage multiplier for Gravemarch — he's a stone golem so molten
+// rock is uncomfortable but not fatal. 0.30 means he takes 30% of
+// the listed damagePerSec. Other characters take 1.00 (full).
+export const LAVA_DAMAGE_MULT_GRAVEMARCH = 0.30;
 
 // ---- Sprint / stamina ----
 // Speed multiplier applied while sprinting.
@@ -294,6 +306,53 @@ export class Engine {
         c.vel.y *= s.slowFactor;
         c.vel.x += bestDirX * s.flowSpeed;
         c.vel.y += bestDirY * s.flowSpeed;
+      }
+      // Lava: same capsule-around-polyline shape as a stream, but
+      // it BURNS. Push is slow + sticky (drags rather than rushes)
+      // and a damage tick fires every LAVA_DAMAGE_COOLDOWN seconds
+      // while the character is inside. Gravemarch takes a fraction
+      // of the damage per LAVA_DAMAGE_MULT_GRAVEMARCH — he's stone.
+      // Shielded / phased / invincible all skip the burn (same
+      // gates as the rest of the damage paths).
+      for (const lv of world.entities) {
+        if (!isLava(lv)) continue;
+        if (!circlesOverlap(c.pos, c.radius, lv.pos, lv.radius)) continue;
+        let bestD = Infinity;
+        let bestDirX = 0;
+        let bestDirY = 0;
+        for (let i = 0; i < lv.points.length - 1; i++) {
+          const a = lv.points[i]!;
+          const b = lv.points[i + 1]!;
+          const d = distToSegment(c.pos, a, b);
+          if (d < bestD) {
+            bestD = d;
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const sl = Math.hypot(dx, dy) || 1;
+            bestDirX = dx / sl;
+            bestDirY = dy / sl;
+          }
+        }
+        if (bestD > lv.width + c.radius) continue;
+        // Drag + push (same shape as stream).
+        c.vel.x *= lv.slowFactor;
+        c.vel.y *= lv.slowFactor;
+        c.vel.x += bestDirX * lv.flowSpeed;
+        c.vel.y += bestDirY * lv.flowSpeed;
+        // Burn tick.
+        if ((c.cooldowns["lava_burn"] ?? 0) > 0) continue;
+        if (c.statuses["shielded"] > 0) continue;
+        if (c.statuses["phased"] > 0) continue;
+        if (c.invincible) continue;
+        const mult = c.characterId === "gravemarch"
+          ? LAVA_DAMAGE_MULT_GRAVEMARCH
+          : 1.0;
+        const hitDmg = lv.damagePerSec * LAVA_DAMAGE_COOLDOWN * mult;
+        c.hp -= hitDmg;
+        c.cooldowns["lava_burn"] = LAVA_DAMAGE_COOLDOWN;
+        // Lava has no owner — leave lastDamagerId alone so a
+        // survivor who dies to lava doesn't credit a kill to a
+        // random hunter.
       }
       // Conveyor: same shape (segment + width) but no slow factor —
       // mechanical belts don't drag your feet. Just adds the belt's

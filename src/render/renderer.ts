@@ -7,7 +7,7 @@
 
 import type { World } from "../core/world";
 import type { Entity } from "../core/entity";
-import { isCharacter, isProjectile, isTrap, isObjective, isProp, isPlate, isExit, isStream, isCliff, isAnimal, isConveyor, isZombie } from "../core/entity";
+import { isCharacter, isProjectile, isTrap, isObjective, isProp, isPlate, isExit, isStream, isLava, isCliff, isAnimal, isConveyor, isZombie } from "../core/entity";
 import type { Vec2 } from "../core/math";
 import { CHARACTERS } from "../characters/characters";
 import { ABILITIES } from "../abilities/abilities";
@@ -228,7 +228,7 @@ export class Renderer {
     const bandOf = (e: Entity): number => {
       if (
         e.kind === "plate" || e.kind === "exit" ||
-        e.kind === "stream" || e.kind === "cliff" ||
+        e.kind === "stream" || e.kind === "lava" || e.kind === "cliff" ||
         (e.kind === "conveyor" && !e.elevated)
       ) {
         return 0;
@@ -535,6 +535,7 @@ export class Renderer {
     else if (isPlate(e)) this.drawPlate(e, cam);
     else if (isExit(e)) this.drawExit(e, cam);
     else if (isStream(e)) this.drawStream(e, cam);
+    else if (isLava(e)) this.drawLava(e, cam);
     else if (isCliff(e)) this.drawCliff(e, cam);
     else if (isConveyor(e)) this.drawConveyor(e, cam);
     else if (isAnimal(e)) this.drawAnimal(e, cam);
@@ -1003,6 +1004,158 @@ export class Renderer {
       ctx.lineTo(s.x - r * 0.08, s.y - r * 0.6);
       ctx.closePath();
       ctx.fill();
+    } else if (e.shape === "volcano") {
+      // Volcano cone — large impassable centerpiece for Volcano
+      // World. Two-tone basalt slope, jagged silhouette, a
+      // glowing molten crater on top, and a thin animated heat-
+      // shimmer plume. radius drives overall size.
+      const r = e.radius;
+      // Ground footprint shadow.
+      ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+      ctx.beginPath();
+      ctx.ellipse(s.x, s.y + r * 0.18, r * 1.10, r * 0.40, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Slope silhouette — 7-point jagged outline so the mountain
+      // doesn't read as a smooth cone. Lit side (upper-left)
+      // lighter, shadow side (right) darker.
+      const peakY = s.y - r * 1.65;
+      const baseY = s.y;
+      const litPath = new Path2D();
+      litPath.moveTo(s.x - r * 1.05, baseY);
+      litPath.lineTo(s.x - r * 0.78, s.y - r * 0.50);
+      litPath.lineTo(s.x - r * 0.45, s.y - r * 0.95);
+      litPath.lineTo(s.x - r * 0.22, s.y - r * 1.35);
+      litPath.lineTo(s.x - r * 0.06, peakY);
+      litPath.lineTo(s.x + r * 0.30, peakY + r * 0.10);
+      litPath.lineTo(s.x + r * 0.30, baseY);
+      litPath.closePath();
+      ctx.fillStyle = "#4e3a30";
+      ctx.fill(litPath);
+      const darkPath = new Path2D();
+      darkPath.moveTo(s.x + r * 0.30, baseY);
+      darkPath.lineTo(s.x + r * 0.30, peakY + r * 0.10);
+      darkPath.lineTo(s.x + r * 0.55, s.y - r * 1.15);
+      darkPath.lineTo(s.x + r * 0.80, s.y - r * 0.65);
+      darkPath.lineTo(s.x + r * 1.05, s.y - r * 0.10);
+      darkPath.lineTo(s.x + r * 1.10, baseY);
+      darkPath.closePath();
+      ctx.fillStyle = "#2c1e18";
+      ctx.fill(darkPath);
+      // Outline so the silhouette stays readable on any map.
+      ctx.strokeStyle = "#13090a";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(s.x - r * 1.05, baseY);
+      ctx.lineTo(s.x - r * 0.78, s.y - r * 0.50);
+      ctx.lineTo(s.x - r * 0.45, s.y - r * 0.95);
+      ctx.lineTo(s.x - r * 0.22, s.y - r * 1.35);
+      ctx.lineTo(s.x - r * 0.06, peakY);
+      ctx.lineTo(s.x + r * 0.30, peakY + r * 0.10);
+      ctx.lineTo(s.x + r * 0.55, s.y - r * 1.15);
+      ctx.lineTo(s.x + r * 0.80, s.y - r * 0.65);
+      ctx.lineTo(s.x + r * 1.05, s.y - r * 0.10);
+      ctx.lineTo(s.x + r * 1.10, baseY);
+      ctx.stroke();
+      // Lava streaks running down the lit face — bright orange.
+      ctx.strokeStyle = "rgba(255, 110, 30, 0.85)";
+      ctx.lineWidth = 2.2;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(s.x - r * 0.10, s.y - r * 1.5);
+      ctx.lineTo(s.x - r * 0.30, s.y - r * 0.7);
+      ctx.lineTo(s.x - r * 0.35, s.y - r * 0.1);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(s.x + r * 0.04, s.y - r * 1.5);
+      ctx.lineTo(s.x + r * 0.18, s.y - r * 0.8);
+      ctx.lineTo(s.x + r * 0.10, s.y - r * 0.15);
+      ctx.stroke();
+      // Crater rim + glowing molten pool.
+      ctx.fillStyle = "#1a0e0a";
+      ctx.beginPath();
+      ctx.ellipse(s.x + r * 0.12, peakY + r * 0.05, r * 0.30, r * 0.12, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const craterGlow = ctx.createRadialGradient(
+        s.x + r * 0.12, peakY + r * 0.05, 0,
+        s.x + r * 0.12, peakY + r * 0.05, r * 0.65,
+      );
+      craterGlow.addColorStop(0, "rgba(255, 240, 160, 0.95)");
+      craterGlow.addColorStop(0.4, "rgba(255, 140, 40, 0.55)");
+      craterGlow.addColorStop(1, "rgba(255, 80, 20, 0)");
+      ctx.fillStyle = craterGlow;
+      ctx.beginPath();
+      ctx.arc(s.x + r * 0.12, peakY + r * 0.05, r * 0.65, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      // Crater molten center.
+      ctx.fillStyle = "#ffaa3a";
+      ctx.beginPath();
+      ctx.ellipse(s.x + r * 0.12, peakY + r * 0.05, r * 0.20, r * 0.07, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Heat-shimmer plume — three faint translucent puff
+      // ellipses rising and fading. Animated via performance.now.
+      const tNow = performance.now() / 800;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (let i = 0; i < 3; i++) {
+        const ph = (tNow + i * 0.33) % 1;
+        const dy = -ph * r * 0.7;
+        const a = (1 - ph) * 0.30;
+        const pr = r * (0.18 + ph * 0.10);
+        ctx.fillStyle = `rgba(255, 200, 120, ${a})`;
+        ctx.beginPath();
+        ctx.ellipse(s.x + r * 0.12, peakY + dy - r * 0.15, pr, pr * 0.6, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    } else if (e.shape === "obsidian") {
+      // Obsidian shard — small sharp dark glass cluster. Faces
+      // catch a faint blue-purple sheen so it doesn't read as a
+      // plain rock. Two-tone (lit / shadow).
+      const r = e.radius;
+      ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
+      ctx.beginPath();
+      ctx.ellipse(s.x, s.y + 2, r * 0.85, r * 0.30, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Main shard cluster — three jagged points.
+      ctx.fillStyle = "#1a1320";
+      ctx.beginPath();
+      ctx.moveTo(s.x - r * 0.95, s.y);
+      ctx.lineTo(s.x - r * 0.30, s.y - r * 1.10);
+      ctx.lineTo(s.x + r * 0.20, s.y - r * 0.40);
+      ctx.lineTo(s.x + r * 0.60, s.y - r * 1.30);
+      ctx.lineTo(s.x + r * 0.95, s.y - r * 0.20);
+      ctx.lineTo(s.x + r * 0.80, s.y);
+      ctx.closePath();
+      ctx.fill();
+      // Lit highlight (upper-left facets).
+      ctx.fillStyle = "#3a2a4a";
+      ctx.beginPath();
+      ctx.moveTo(s.x - r * 0.30, s.y - r * 1.10);
+      ctx.lineTo(s.x - r * 0.05, s.y - r * 0.50);
+      ctx.lineTo(s.x - r * 0.50, s.y - r * 0.30);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(s.x + r * 0.60, s.y - r * 1.30);
+      ctx.lineTo(s.x + r * 0.85, s.y - r * 0.70);
+      ctx.lineTo(s.x + r * 0.40, s.y - r * 0.55);
+      ctx.closePath();
+      ctx.fill();
+      // Outline.
+      ctx.strokeStyle = "#0a060d";
+      ctx.lineWidth = 1.3;
+      ctx.beginPath();
+      ctx.moveTo(s.x - r * 0.95, s.y);
+      ctx.lineTo(s.x - r * 0.30, s.y - r * 1.10);
+      ctx.lineTo(s.x + r * 0.20, s.y - r * 0.40);
+      ctx.lineTo(s.x + r * 0.60, s.y - r * 1.30);
+      ctx.lineTo(s.x + r * 0.95, s.y - r * 0.20);
+      ctx.lineTo(s.x + r * 0.80, s.y);
+      ctx.closePath();
+      ctx.stroke();
     }
   }
 
@@ -1295,6 +1448,111 @@ export class Renderer {
       ctx.moveTo(backX + px * chevH, backY + py * chevH);
       ctx.lineTo(tipX, tipY);
       ctx.lineTo(backX - px * chevH, backY - py * chevH);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Flowing lava — same capsule-around-polyline construction as
+  // a stream, but with a darker basalt crust, an orange-red
+  // molten body, a bright additive yellow inner shimmer, and
+  // animated bright cracks marching outward. Designed to read
+  // as MOLTEN at a glance — no chance a player mistakes it for
+  // a river. The bright inner glow uses globalCompositeOperation
+  // "lighter" so it brightens whatever map ground sits beneath.
+  private drawLava(
+    e: Extract<Entity, { kind: "lava" }>,
+    cam: Camera,
+  ): void {
+    const ctx = this.ctx;
+    const pts = e.points.map((p) => worldToScreen(p, cam, this.cw, this.ch));
+    if (pts.length < 2) return;
+    const w = e.width;
+
+    const buildPath = (target: CanvasRenderingContext2D) => {
+      target.moveTo(pts[0]!.x, pts[0]!.y);
+      for (let i = 1; i < pts.length - 1; i++) {
+        const mx = (pts[i]!.x + pts[i + 1]!.x) / 2;
+        const my = (pts[i]!.y + pts[i + 1]!.y) / 2;
+        target.quadraticCurveTo(pts[i]!.x, pts[i]!.y, mx, my);
+      }
+      target.lineTo(pts[pts.length - 1]!.x, pts[pts.length - 1]!.y);
+    };
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    // Charred crust (basalt edge).
+    ctx.lineWidth = (w + 8) * 2;
+    ctx.strokeStyle = "rgba(40, 18, 12, 0.85)";
+    ctx.beginPath();
+    buildPath(ctx);
+    ctx.stroke();
+    // Molten body — orange-red gradient lookalike via two passes.
+    ctx.lineWidth = w * 2;
+    ctx.strokeStyle = "#d83a14";
+    ctx.beginPath();
+    buildPath(ctx);
+    ctx.stroke();
+    ctx.lineWidth = w * 1.55;
+    ctx.strokeStyle = "#ff7a2a";
+    ctx.beginPath();
+    buildPath(ctx);
+    ctx.stroke();
+    // Bright inner shimmer — additive so the lava feels luminous on
+    // any background.
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineWidth = w * 1.0;
+    ctx.strokeStyle = "rgba(255, 220, 90, 0.55)";
+    ctx.beginPath();
+    buildPath(ctx);
+    ctx.stroke();
+    ctx.lineWidth = w * 0.45;
+    ctx.strokeStyle = "rgba(255, 255, 200, 0.45)";
+    ctx.beginPath();
+    buildPath(ctx);
+    ctx.stroke();
+    ctx.globalCompositeOperation = "source-over";
+    ctx.restore();
+
+    // Cracked-crust segments — small dark lines crossing the body
+    // perpendicular to the flow at regular arc-length intervals.
+    // Phase shift moves them outward over time so the lava reads
+    // as flowing rather than frozen.
+    const segs: { p0: { x: number; y: number }; p1: { x: number; y: number }; len: number; cum: number }[] = [];
+    let totalLen = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i]!;
+      const p1 = pts[i + 1]!;
+      const l = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+      segs.push({ p0, p1, len: l, cum: totalLen });
+      totalLen += l;
+    }
+    if (totalLen < 1) return;
+
+    const t = (performance.now() / 1100) % 1;
+    const spacing = 36;
+    const crackW = Math.min(w * 0.85, 22);
+    ctx.save();
+    ctx.strokeStyle = "rgba(20, 8, 4, 0.7)";
+    ctx.lineWidth = 1.5;
+    ctx.lineCap = "round";
+    for (let s = -spacing + t * spacing; s < totalLen; s += spacing) {
+      if (s < 0) continue;
+      let seg = segs[0]!;
+      for (const sg of segs) {
+        if (s >= sg.cum && s <= sg.cum + sg.len) { seg = sg; break; }
+      }
+      const localT = (s - seg.cum) / (seg.len || 1);
+      const cx = seg.p0.x + (seg.p1.x - seg.p0.x) * localT;
+      const cy = seg.p0.y + (seg.p1.y - seg.p0.y) * localT;
+      const ex = (seg.p1.x - seg.p0.x) / (seg.len || 1);
+      const ey = (seg.p1.y - seg.p0.y) / (seg.len || 1);
+      const px = -ey;
+      const py = ex;
+      ctx.beginPath();
+      ctx.moveTo(cx + px * crackW, cy + py * crackW);
+      ctx.lineTo(cx - px * crackW, cy - py * crackW);
       ctx.stroke();
     }
     ctx.restore();

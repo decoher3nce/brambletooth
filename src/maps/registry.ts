@@ -25,6 +25,7 @@ import {
 } from "../arenas/forest";
 import { FACTORY_ARENA_CONFIG, buildFactory, buildFactory2, buildFactory3, buildFactory4 } from "../arenas/factory";
 import { CAVE_ARENA_CONFIG, buildCave1 } from "../arenas/cave";
+import { VOLCANO_ARENA_CONFIG, buildVolcano1 } from "../arenas/volcano";
 
 // How many maps must be completed in a world to unlock the next via
 // the default "after-world" gate.
@@ -728,6 +729,129 @@ function thumbCave1(
   drawCaveBase(ctx, x, y, w, h);
 }
 
+// ---- Volcano World thumbnails ----
+// Dark volcanic ground + a small iso volcano cone in the center
+// with a glowing crater + four lava arms radiating outward to the
+// tile edges. Mirrors the in-world centerpiece + radial lava
+// layout so the tile reads instantly as "the volcano map."
+function drawVolcanoBase(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+): void {
+  // Charcoal / basalt ground with a faint warm-red horizon band.
+  ctx.fillStyle = "#1a1110";
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = "#28181a";
+  ctx.fillRect(x, y + h * 0.42, w, h * 0.58);
+  // Faint ash-smear iso lines.
+  ctx.strokeStyle = "rgba(255, 140, 60, 0.06)";
+  ctx.lineWidth = 1;
+  for (let i = -h; i < w + h; i += 16) {
+    ctx.beginPath();
+    ctx.moveTo(x + i, y + h);
+    ctx.lineTo(x + i + h * 2, y);
+    ctx.stroke();
+  }
+  // Volcano cone in the center.
+  const cx = x + w * 0.5;
+  const cy = y + h * 0.62;
+  const peakY = y + h * 0.22;
+  // Lit slope.
+  ctx.fillStyle = "#4e3a30";
+  ctx.beginPath();
+  ctx.moveTo(cx - w * 0.32, cy);
+  ctx.lineTo(cx - w * 0.10, y + h * 0.34);
+  ctx.lineTo(cx + w * 0.02, peakY);
+  ctx.lineTo(cx + w * 0.10, y + h * 0.28);
+  ctx.lineTo(cx + w * 0.10, cy);
+  ctx.closePath();
+  ctx.fill();
+  // Shadow slope.
+  ctx.fillStyle = "#2c1e18";
+  ctx.beginPath();
+  ctx.moveTo(cx + w * 0.10, cy);
+  ctx.lineTo(cx + w * 0.10, y + h * 0.28);
+  ctx.lineTo(cx + w * 0.20, y + h * 0.36);
+  ctx.lineTo(cx + w * 0.32, cy);
+  ctx.closePath();
+  ctx.fill();
+  // Outline so the cone reads from across the screen.
+  ctx.strokeStyle = "#13090a";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(cx - w * 0.32, cy);
+  ctx.lineTo(cx - w * 0.10, y + h * 0.34);
+  ctx.lineTo(cx + w * 0.02, peakY);
+  ctx.lineTo(cx + w * 0.10, y + h * 0.28);
+  ctx.lineTo(cx + w * 0.20, y + h * 0.36);
+  ctx.lineTo(cx + w * 0.32, cy);
+  ctx.stroke();
+  // Crater rim + molten glow.
+  const craterX = cx + w * 0.04;
+  const craterY = peakY + h * 0.03;
+  ctx.fillStyle = "#1a0e0a";
+  ctx.beginPath();
+  ctx.ellipse(craterX, craterY, w * 0.06, w * 0.025, 0, 0, Math.PI * 2);
+  ctx.fill();
+  const craterGlow = ctx.createRadialGradient(craterX, craterY, 0, craterX, craterY, w * 0.12);
+  craterGlow.addColorStop(0, "rgba(255, 240, 160, 0.9)");
+  craterGlow.addColorStop(0.45, "rgba(255, 140, 40, 0.5)");
+  craterGlow.addColorStop(1, "rgba(255, 80, 20, 0)");
+  ctx.fillStyle = craterGlow;
+  ctx.beginPath();
+  ctx.arc(craterX, craterY, w * 0.12, 0, Math.PI * 2);
+  ctx.fill();
+  // Four lava arms radiating from the crater outward (NE, SE, SW, NW).
+  const arms: [number, number][] = [
+    [ 0.62,  0.10],
+    [ 0.62,  0.45],
+    [-0.62,  0.45],
+    [-0.62,  0.10],
+  ];
+  for (const [ax, ay] of arms) {
+    const ex = craterX + w * 0.5 * ax;
+    const ey = craterY + h * 0.6 * ay;
+    // Black crust outline.
+    ctx.strokeStyle = "rgba(40, 18, 12, 0.85)";
+    ctx.lineWidth = 8;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(craterX, craterY);
+    ctx.lineTo(ex, ey);
+    ctx.stroke();
+    // Molten body.
+    ctx.strokeStyle = "#d83a14";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(craterX, craterY);
+    ctx.lineTo(ex, ey);
+    ctx.stroke();
+    ctx.strokeStyle = "#ff7a2a";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(craterX, craterY);
+    ctx.lineTo(ex, ey);
+    ctx.stroke();
+  }
+  // Exit glow SE corner (cool teal so it stands out against the warm map).
+  const exr = x + w * 0.88;
+  const eyr = y + h * 0.90;
+  const eg = ctx.createRadialGradient(exr, eyr, 0, exr, eyr, w * 0.10);
+  eg.addColorStop(0, "rgba(170, 240, 180, 0.8)");
+  eg.addColorStop(1, "rgba(170, 240, 180, 0)");
+  ctx.fillStyle = eg;
+  ctx.beginPath();
+  ctx.ellipse(exr, eyr, w * 0.11, w * 0.06, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function thumbVolcano1(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+): void {
+  drawVolcanoBase(ctx, x, y, w, h);
+}
+
 const CAVE_MAPS: MapDef[] = [
   {
     id: "cave_1",
@@ -736,6 +860,17 @@ const CAVE_MAPS: MapDef[] = [
     arenaConfig: CAVE_ARENA_CONFIG,
     buildArena: (w, seed) => buildCave1(w, seed, 0),
     thumbnail: thumbCave1,
+  },
+];
+
+const VOLCANO_MAPS: MapDef[] = [
+  {
+    id: "volcano_1",
+    name: "Eruption",
+    worldId: "volcano",
+    arenaConfig: VOLCANO_ARENA_CONFIG,
+    buildArena: (w, seed) => buildVolcano1(w, seed, 0),
+    thumbnail: thumbVolcano1,
   },
 ];
 
@@ -770,6 +905,17 @@ export const WORLDS: WorldDef[] = [
     // more cave maps ship.
     unlock: { kind: "default" },
     accentColor: "#a070ff",
+  },
+  {
+    id: "volcano",
+    name: "Volcano World",
+    maps: VOLCANO_MAPS,
+    // Default-unlocked for now while only one map ships — Gravemarch
+    // (1500-pt purchase) is the obvious owner here, so leaving it
+    // playable by anyone lets every profile try it. Tighten to
+    // after-cave-or-shop in a follow-up when more maps ship.
+    unlock: { kind: "default" },
+    accentColor: "#d83a14",
   },
 ];
 
