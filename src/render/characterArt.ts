@@ -1114,10 +1114,11 @@ function drawGravemarch(
   const baseY = cy - 2;
   const bodyTopY = cy - r * 1.85 + bob;
   const bodyBotY = cy - r * 0.35 + bob;
-  // Head lifted to make room for a neck between body top and
-  // head bottom. neckY band fills the 0.45r gap.
-  const headTopY = cy - r * 3.30 + bob;
-  const headBotY = cy - r * 2.30 + bob;
+  // Head sits just above a short stout neck. Gap between body
+  // top and head bottom is the neck band — small (0.22r) so the
+  // golem reads as thick-necked, not long-necked.
+  const headTopY = cy - r * 3.07 + bob;
+  const headBotY = cy - r * 2.07 + bob;
   const neckTopY = headBotY;
   const neckBotY = bodyTopY;
 
@@ -1140,23 +1141,24 @@ function drawGravemarch(
   ctx.ellipse(cx, baseY, r * 0.95, r * 0.32, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Jagged-crack helper. Replaces hand-authored 3-point polylines
-  // with a multi-segment zigzag that alternates sides for a
-  // real fractured-stone read. Stroke style + width are set by
-  // the caller. Deterministic per-start position so the cracks
-  // are stable across frames (otherwise they'd shimmer).
+  // Crack helper. Originally drew a multi-segment zigzag —
+  // toned down per playtest to a gentle 3-point polyline
+  // (start, one mid waypoint, end) with a small perpendicular
+  // bend. Reads as a fracture with one dog-leg, not a buzz-saw.
+  // segments + ampMul are kept in the signature for API compat
+  // with the existing call sites but effectively ignored; the
+  // bend amplitude is a fixed small fraction of the length.
   const jaggedCrack = (
     sx: number, sy: number, ex: number, ey: number,
-    segments: number = 6, ampMul: number = 0.12,
+    _segments: number = 3, _ampMul: number = 0.10,
   ): void => {
+    void _segments; void _ampMul;
     const dx = ex - sx;
     const dy = ey - sy;
     const segLen = Math.hypot(dx, dy);
     if (segLen < 1) return;
-    const ux = dx / segLen;
-    const uy = dy / segLen;
-    const px = -uy;
-    const py = ux;
+    const px = -dy / segLen;
+    const py = dx / segLen;
     // Deterministic seed from the start point so the same crack
     // always looks the same.
     let seed = Math.floor(Math.abs(sx * 9.71 + sy * 3.13) * 1000) % 233280;
@@ -1164,21 +1166,14 @@ function drawGravemarch(
       seed = (seed * 9301 + 49297) % 233280;
       return seed / 233280;
     };
+    const amp = (0.5 + rand() * 0.5) * segLen * 0.10;
+    const sign = rand() > 0.5 ? 1 : -1;
+    const midX = sx + dx * 0.5 + px * amp * sign;
+    const midY = sy + dy * 0.5 + py * amp * sign;
     ctx.beginPath();
     ctx.moveTo(sx, sy);
-    for (let i = 1; i <= segments; i++) {
-      const t = i / segments;
-      const baseX = sx + dx * t;
-      const baseY = sy + dy * t;
-      // Endpoint with no perpendicular jitter.
-      if (i === segments) {
-        ctx.lineTo(ex, ey);
-        break;
-      }
-      const amp = (0.6 + rand() * 0.8) * segLen * ampMul;
-      const sign = (i % 2 === 0) ? 1 : -1;
-      ctx.lineTo(baseX + px * amp * sign, baseY + py * amp * sign);
-    }
+    ctx.lineTo(midX, midY);
+    ctx.lineTo(ex, ey);
     ctx.stroke();
   };
 
@@ -1475,10 +1470,11 @@ function drawGravemarch(
   jaggedCrack(cx + bodyHalfW - r * 0.10,     bodyTopY + r * 0.20, cx + bodyHalfW - r * 0.50, bodyTopY + r * 0.42, 6, 0.20);
   jaggedCrack(cx - r * 0.4,                  bodyTopY + r * 1.05, cx + r * 0.25,             bodyTopY + r * 1.10, 7, 0.14);
 
-  // ---- NECK — a short stone block between body top and head bottom. ----
-  // Narrower than both for that "thick-necked golem" silhouette,
-  // with the same three-tone shading + an outline + a crack.
-  const neckHalfW = r * 0.55;
+  // ---- NECK — short stout stone block between body and head. ----
+  // Slightly narrower than body+head (r * 0.70) but wider than
+  // the v1 neck so it reads as a thick golem column rather than
+  // a slender stalk.
+  const neckHalfW = r * 0.70;
   const neckH = neckBotY - neckTopY;
   ctx.fillStyle = STONE_MID;
   ctx.fillRect(cx - neckHalfW, neckTopY, neckHalfW * 2, neckH * 0.55);
@@ -1491,21 +1487,58 @@ function drawGravemarch(
   ctx.fillStyle = "rgba(220, 225, 235, 0.18)";
   ctx.fillRect(cx - neckHalfW + 2, neckTopY + 2, neckHalfW * 0.55, neckH * 0.45);
 
-  // ---- HEAD block — three-tone shaded. ----
+  // ---- HEAD — lumpy boulder-ish silhouette, three-tone shaded. ----
+  // Replaces the clean rectangle with a polygon that has small
+  // rock bumps on every side so the outline reads as a chunk
+  // of broken stone, not a rendered building. Three horizontal
+  // bands inside the clip provide the lit / mid / shadow
+  // banding without having to compose them around the lumps.
   const headHalfW = r * 0.85;
   const headH = headBotY - headTopY;
-  ctx.fillStyle = STONE_LIT;
-  ctx.fillRect(cx - headHalfW, headTopY, headHalfW * 2, headH * 0.35);
-  ctx.fillStyle = STONE_MID;
-  ctx.fillRect(cx - headHalfW, headTopY + headH * 0.35, headHalfW * 2, headH * 0.35);
+  // L = lump magnitude. Each side picks up 2-3 outward bumps
+  // of this size.
+  const L = r * 0.10;
+  const headPath = new Path2D();
+  // Walk perimeter clockwise from top-left.
+  headPath.moveTo(cx - headHalfW - L * 0.3, headTopY + L * 0.4);                  // upper-left corner (rounded out)
+  headPath.lineTo(cx - headHalfW * 0.65,    headTopY - L * 0.5);                  // top edge bump 1 (up)
+  headPath.lineTo(cx - headHalfW * 0.25,    headTopY + L * 0.2);                  // top edge dip
+  headPath.lineTo(cx + headHalfW * 0.10,    headTopY - L * 0.8);                  // top edge bump 2 (peak)
+  headPath.lineTo(cx + headHalfW * 0.55,    headTopY - L * 0.1);                  // top edge bump 3
+  headPath.lineTo(cx + headHalfW + L * 0.4, headTopY + L * 0.3);                  // upper-right corner
+  headPath.lineTo(cx + headHalfW + L * 0.8, headTopY + headH * 0.30);             // right edge bump out
+  headPath.lineTo(cx + headHalfW - L * 0.1, headTopY + headH * 0.50);             // right edge slight dip
+  headPath.lineTo(cx + headHalfW + L * 0.7, headTopY + headH * 0.70);             // right edge bump out
+  headPath.lineTo(cx + headHalfW + L * 0.1, headTopY + headH - L * 0.3);          // lower-right corner
+  headPath.lineTo(cx + headHalfW * 0.40,    headTopY + headH + L * 0.3);          // bottom edge bump down
+  headPath.lineTo(cx + headHalfW * 0.0,     headTopY + headH - L * 0.2);          // bottom edge dip
+  headPath.lineTo(cx - headHalfW * 0.40,    headTopY + headH + L * 0.6);          // bottom edge bump down (chin)
+  headPath.lineTo(cx - headHalfW - L * 0.1, headTopY + headH - L * 0.2);          // lower-left corner
+  headPath.lineTo(cx - headHalfW - L * 0.7, headTopY + headH * 0.65);             // left edge bump out
+  headPath.lineTo(cx - headHalfW + L * 0.1, headTopY + headH * 0.45);             // left edge slight dip
+  headPath.lineTo(cx - headHalfW - L * 0.6, headTopY + headH * 0.25);             // left edge bump out
+  headPath.closePath();
+  // Fill with shadow (darkest band — anything not overdrawn
+  // by the lit/mid stripes stays this color).
   ctx.fillStyle = STONE_SHADOW;
-  ctx.fillRect(cx - headHalfW, headTopY + headH * 0.70, headHalfW * 2, headH * 0.30);
-  ctx.strokeStyle = OUTLINE;
-  ctx.lineWidth = 1.6;
-  ctx.strokeRect(cx - headHalfW, headTopY, headHalfW * 2, headH);
-  // Light highlight stripe.
+  ctx.fill(headPath);
+  // Clip to the lumpy silhouette, then stripe the three bands
+  // horizontally inside.
+  ctx.save();
+  ctx.clip(headPath);
+  ctx.fillStyle = STONE_LIT;
+  ctx.fillRect(cx - headHalfW - L * 2, headTopY - L * 2, headHalfW * 2 + L * 4, headH * 0.35 + L * 2);
+  ctx.fillStyle = STONE_MID;
+  ctx.fillRect(cx - headHalfW - L * 2, headTopY + headH * 0.35, headHalfW * 2 + L * 4, headH * 0.35);
+  // Highlight stripe on the lit side.
   ctx.fillStyle = "rgba(220, 225, 235, 0.20)";
   ctx.fillRect(cx - headHalfW + 2, headTopY + 2, headHalfW * 0.4, headH - 4);
+  ctx.restore();
+  // Outline the lumpy silhouette.
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 1.6;
+  ctx.lineJoin = "round";
+  ctx.stroke(headPath);
 
   // ---- ANGRY half-circle eyes slanted DOWN toward the nose ----
   // Each eye is a downward-opening half-circle whose flat edge is
