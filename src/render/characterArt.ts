@@ -1114,8 +1114,12 @@ function drawGravemarch(
   const baseY = cy - 2;
   const bodyTopY = cy - r * 1.85 + bob;
   const bodyBotY = cy - r * 0.35 + bob;
-  const headTopY = cy - r * 3.05 + bob;
-  const headBotY = cy - r * 2.05 + bob;
+  // Head lifted to make room for a neck between body top and
+  // head bottom. neckY band fills the 0.45r gap.
+  const headTopY = cy - r * 3.30 + bob;
+  const headBotY = cy - r * 2.30 + bob;
+  const neckTopY = headBotY;
+  const neckBotY = bodyTopY;
 
   // Stone color palette — light to dark, used across every body
   // part so head/shoulders/arms/legs/hands/feet all share a
@@ -1135,6 +1139,48 @@ function drawGravemarch(
   ctx.beginPath();
   ctx.ellipse(cx, baseY, r * 0.95, r * 0.32, 0, 0, Math.PI * 2);
   ctx.fill();
+
+  // Jagged-crack helper. Replaces hand-authored 3-point polylines
+  // with a multi-segment zigzag that alternates sides for a
+  // real fractured-stone read. Stroke style + width are set by
+  // the caller. Deterministic per-start position so the cracks
+  // are stable across frames (otherwise they'd shimmer).
+  const jaggedCrack = (
+    sx: number, sy: number, ex: number, ey: number,
+    segments: number = 6, ampMul: number = 0.12,
+  ): void => {
+    const dx = ex - sx;
+    const dy = ey - sy;
+    const segLen = Math.hypot(dx, dy);
+    if (segLen < 1) return;
+    const ux = dx / segLen;
+    const uy = dy / segLen;
+    const px = -uy;
+    const py = ux;
+    // Deterministic seed from the start point so the same crack
+    // always looks the same.
+    let seed = Math.floor(Math.abs(sx * 9.71 + sy * 3.13) * 1000) % 233280;
+    const rand = (): number => {
+      seed = (seed * 9301 + 49297) % 233280;
+      return seed / 233280;
+    };
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    for (let i = 1; i <= segments; i++) {
+      const t = i / segments;
+      const baseX = sx + dx * t;
+      const baseY = sy + dy * t;
+      // Endpoint with no perpendicular jitter.
+      if (i === segments) {
+        ctx.lineTo(ex, ey);
+        break;
+      }
+      const amp = (0.6 + rand() * 0.8) * segLen * ampMul;
+      const sign = (i % 2 === 0) ? 1 : -1;
+      ctx.lineTo(baseX + px * amp * sign, baseY + py * amp * sign);
+    }
+    ctx.stroke();
+  };
 
   const faceRight = Math.cos(facing) >= 0;
   const maceSide = faceRight ? 1 : -1;
@@ -1158,11 +1204,7 @@ function drawGravemarch(
     // Crack on each leg.
     ctx.strokeStyle = CRACK;
     ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    ctx.moveTo(lx + legW * 0.15, legY + legH * 0.15);
-    ctx.lineTo(lx + legW * 0.55, legY + legH * 0.35);
-    ctx.lineTo(lx + legW * 0.35, legY + legH * 0.65);
-    ctx.stroke();
+    jaggedCrack(lx + legW * 0.15, legY + legH * 0.10, lx + legW * 0.55, legY + legH * 0.85, 5, 0.18);
   }
   // ---- LUMPY FEET ----
   // Wider than the legs, irregular blob clusters with toe-bumps.
@@ -1193,11 +1235,7 @@ function drawGravemarch(
     // Crack across the foot.
     ctx.strokeStyle = CRACK;
     ctx.lineWidth = 1.3;
-    ctx.beginPath();
-    ctx.moveTo(fx - legW * 0.6, fy - legH * 0.05);
-    ctx.lineTo(fx - legW * 0.1, fy + legH * 0.05);
-    ctx.lineTo(fx + legW * 0.4, fy - legH * 0.08);
-    ctx.stroke();
+    jaggedCrack(fx - legW * 0.7, fy - legH * 0.08, fx + legW * 0.5, fy - legH * 0.05, 6, 0.10);
   }
 
   // ---- BODY block ----
@@ -1257,14 +1295,10 @@ function drawGravemarch(
     ctx.lineTo(sideX + r * 0.18, bodyTopY - r * 0.30);
     ctx.lineTo(sideX + r * 0.35, bodyTopY + r * 0.05);
     ctx.stroke();
-    // Blue crack.
+    // Blue crack across the shoulder.
     ctx.strokeStyle = CRACK;
     ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    ctx.moveTo(sideX - r * 0.15, bodyTopY - r * 0.05);
-    ctx.lineTo(sideX + r * 0.02, bodyTopY - r * 0.18);
-    ctx.lineTo(sideX + r * 0.12, bodyTopY - r * 0.08);
-    ctx.stroke();
+    jaggedCrack(sideX - r * 0.18, bodyTopY - r * 0.03, sideX + r * 0.18, bodyTopY - r * 0.20, 5, 0.18);
   };
   drawShoulder(cx - bodyHalfW + r * 0.05);
   drawShoulder(cx + bodyHalfW - r * 0.05);
@@ -1289,18 +1323,11 @@ function drawGravemarch(
     // Light highlight on the lit side.
     ctx.fillStyle = "rgba(220, 225, 235, 0.18)";
     ctx.fillRect(ax + 1, armTopY + 2, armW * 0.3, armH - 4);
-    // Two cracks per arm.
+    // Two jagged cracks per arm.
     ctx.strokeStyle = CRACK;
     ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    ctx.moveTo(ax + armW * 0.15, armTopY + armH * 0.20);
-    ctx.lineTo(ax + armW * 0.65, armTopY + armH * 0.32);
-    ctx.lineTo(ax + armW * 0.45, armTopY + armH * 0.50);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(ax + armW * 0.55, armTopY + armH * 0.62);
-    ctx.lineTo(ax + armW * 0.20, armTopY + armH * 0.75);
-    ctx.stroke();
+    jaggedCrack(ax + armW * 0.10, armTopY + armH * 0.18, ax + armW * 0.75, armTopY + armH * 0.55, 6, 0.16);
+    jaggedCrack(ax + armW * 0.70, armTopY + armH * 0.65, ax + armW * 0.15, armTopY + armH * 0.85, 5, 0.18);
   };
   drawArm(leftArmX);
   drawArm(rightArmX);
@@ -1330,14 +1357,10 @@ function drawGravemarch(
     ctx.beginPath();
     ctx.arc(handCx, handCy, r * 0.30, 0, Math.PI * 2);
     ctx.stroke();
-    // Crack across the hand.
+    // Jagged crack across the hand.
     ctx.strokeStyle = CRACK;
     ctx.lineWidth = 1.3;
-    ctx.beginPath();
-    ctx.moveTo(handCx - r * 0.20, handCy + r * 0.05);
-    ctx.lineTo(handCx, handCy - r * 0.02);
-    ctx.lineTo(handCx + r * 0.18, handCy + r * 0.08);
-    ctx.stroke();
+    jaggedCrack(handCx - r * 0.22, handCy + r * 0.07, handCx + r * 0.22, handCy + r * 0.08, 6, 0.18);
   };
   const leftHandX = leftArmX + armW * 0.5;
   const leftHandY = armTopY + armH + r * 0.05;
@@ -1438,42 +1461,35 @@ function drawGravemarch(
   ctx.closePath();
   ctx.stroke();
 
-  // ---- More body cracks ----
+  // ---- Body cracks (jagged) ----
   ctx.strokeStyle = CRACK;
   ctx.lineWidth = 1.6;
   ctx.lineCap = "round";
-  // Existing three cracks…
-  ctx.beginPath();
-  ctx.moveTo(cx - bodyHalfW + 3, bodyTopY + r * 0.45);
-  ctx.lineTo(cx - bodyHalfW + r * 0.55, bodyTopY + r * 0.7);
-  ctx.lineTo(cx - bodyHalfW + r * 0.85, bodyTopY + r * 0.55);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(cx + bodyHalfW - 3, bodyTopY + r * 0.85);
-  ctx.lineTo(cx + bodyHalfW - r * 0.45, bodyTopY + r * 1.05);
-  ctx.lineTo(cx + bodyHalfW - r * 0.6, bodyTopY + r * 1.25);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(cx - bodyHalfW + r * 0.2, bodyBotY - r * 0.15);
-  ctx.lineTo(cx, bodyBotY - r * 0.25);
-  ctx.lineTo(cx + bodyHalfW - r * 0.2, bodyBotY - r * 0.05);
-  ctx.stroke();
-  // …plus three new ones.
-  ctx.beginPath();
-  ctx.moveTo(cx - bodyHalfW + r * 0.10, bodyTopY + r * 0.15);
-  ctx.lineTo(cx - bodyHalfW + r * 0.32, bodyTopY + r * 0.30);
-  ctx.lineTo(cx - bodyHalfW + r * 0.20, bodyTopY + r * 0.42);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(cx + bodyHalfW - r * 0.10, bodyTopY + r * 0.20);
-  ctx.lineTo(cx + bodyHalfW - r * 0.32, bodyTopY + r * 0.35);
-  ctx.lineTo(cx + bodyHalfW - r * 0.50, bodyTopY + r * 0.42);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(cx - r * 0.4, bodyTopY + r * 1.05);
-  ctx.lineTo(cx - r * 0.1, bodyTopY + r * 1.20);
-  ctx.lineTo(cx + r * 0.25, bodyTopY + r * 1.10);
-  ctx.stroke();
+  // Six cracks: three diagonals across the body face, two near
+  // the lower edges, one along the bottom band. Each routed
+  // through jaggedCrack for a zigzag fracture read.
+  jaggedCrack(cx - bodyHalfW + 3,            bodyTopY + r * 0.45, cx - bodyHalfW + r * 0.85, bodyTopY + r * 0.55, 7, 0.16);
+  jaggedCrack(cx + bodyHalfW - 3,            bodyTopY + r * 0.85, cx + bodyHalfW - r * 0.6,  bodyTopY + r * 1.25, 7, 0.16);
+  jaggedCrack(cx - bodyHalfW + r * 0.2,      bodyBotY - r * 0.15, cx + bodyHalfW - r * 0.2,  bodyBotY - r * 0.05, 8, 0.10);
+  jaggedCrack(cx - bodyHalfW + r * 0.10,     bodyTopY + r * 0.15, cx - bodyHalfW + r * 0.20, bodyTopY + r * 0.42, 5, 0.30);
+  jaggedCrack(cx + bodyHalfW - r * 0.10,     bodyTopY + r * 0.20, cx + bodyHalfW - r * 0.50, bodyTopY + r * 0.42, 6, 0.20);
+  jaggedCrack(cx - r * 0.4,                  bodyTopY + r * 1.05, cx + r * 0.25,             bodyTopY + r * 1.10, 7, 0.14);
+
+  // ---- NECK — a short stone block between body top and head bottom. ----
+  // Narrower than both for that "thick-necked golem" silhouette,
+  // with the same three-tone shading + an outline + a crack.
+  const neckHalfW = r * 0.55;
+  const neckH = neckBotY - neckTopY;
+  ctx.fillStyle = STONE_MID;
+  ctx.fillRect(cx - neckHalfW, neckTopY, neckHalfW * 2, neckH * 0.55);
+  ctx.fillStyle = STONE_SHADOW;
+  ctx.fillRect(cx - neckHalfW, neckTopY + neckH * 0.55, neckHalfW * 2, neckH * 0.45);
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(cx - neckHalfW, neckTopY, neckHalfW * 2, neckH);
+  // Small lit highlight on the upper-left of the neck.
+  ctx.fillStyle = "rgba(220, 225, 235, 0.18)";
+  ctx.fillRect(cx - neckHalfW + 2, neckTopY + 2, neckHalfW * 0.55, neckH * 0.45);
 
   // ---- HEAD block — three-tone shaded. ----
   const headHalfW = r * 0.85;
@@ -1506,7 +1522,13 @@ function drawGravemarch(
     // RIGHT side is lower (inner closer to nose drops). slantSign=+1
     // (right eye) tilts so the LEFT side is lower. The angle is
     // negative for left, positive for right.
-    const angle = slantSign * 0.45; // ~26 degrees
+    // Tilt with the INNER corner (toward the nose) DROPPING and
+    // the OUTER corner LIFTING — that's the cartoon angry-brow
+    // read the kid asked for. slantSign=-1 is the left eye:
+    // angle = +0.45 (CW) drops its right side (inner). slantSign
+    // = +1 is the right eye: angle = -0.45 (CCW) drops its
+    // left side (inner). Inversion of the v1 direction.
+    const angle = -slantSign * 0.45; // ~26 degrees
     ctx.save();
     ctx.translate(cxE, cyE);
     ctx.rotate(angle);
@@ -1544,9 +1566,9 @@ function drawGravemarch(
   // ---- MONSTER zig-zag MOUTH ----
   // Closed-shape jagged maw with sawtooth top + bottom edges.
   const mouthY = headTopY + headH * 0.78;
-  const mouthHalfW = headHalfW * 0.60;
-  const mouthH = headH * 0.16;
-  const teeth = 5;
+  const mouthHalfW = headHalfW * 0.42;
+  const mouthH = headH * 0.11;
+  const teeth = 4;
   const stepX = (mouthHalfW * 2) / teeth;
   // Build a closed path: zigzag top + zigzag bottom.
   ctx.fillStyle = BLUE_MID;
@@ -1606,31 +1628,19 @@ function drawGravemarch(
   }
   ctx.stroke();
 
-  // ---- More HEAD cracks ----
+  // ---- Head + neck cracks (jagged) ----
   ctx.strokeStyle = CRACK;
   ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(cx - headHalfW + 2, headTopY + r * 0.18);
-  ctx.lineTo(cx - headHalfW + r * 0.45, headTopY + r * 0.32);
-  ctx.lineTo(cx - headHalfW + r * 0.7, headTopY + r * 0.22);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(cx + headHalfW - 2, headTopY + r * 0.50);
-  ctx.lineTo(cx + headHalfW - r * 0.4, headTopY + r * 0.62);
-  ctx.lineTo(cx + headHalfW - r * 0.6, headTopY + r * 0.55);
-  ctx.stroke();
-  // New crack across the forehead (between the eyes, just above).
-  ctx.beginPath();
-  ctx.moveTo(cx - headHalfW * 0.5, headTopY + r * 0.12);
-  ctx.lineTo(cx - r * 0.05, headTopY + r * 0.22);
-  ctx.lineTo(cx + headHalfW * 0.4, headTopY + r * 0.10);
-  ctx.stroke();
-  // New crack on the chin (between mouth and head bottom).
-  ctx.beginPath();
-  ctx.moveTo(cx - headHalfW * 0.4, headTopY + headH * 0.92);
-  ctx.lineTo(cx + r * 0.05, headTopY + headH * 0.96);
-  ctx.lineTo(cx + headHalfW * 0.45, headTopY + headH * 0.90);
-  ctx.stroke();
+  // Upper-left side, forehead diagonal.
+  jaggedCrack(cx - headHalfW + 2, headTopY + r * 0.18, cx - headHalfW + r * 0.7, headTopY + r * 0.22, 6, 0.20);
+  // Right cheek.
+  jaggedCrack(cx + headHalfW - 2, headTopY + r * 0.50, cx + headHalfW - r * 0.6, headTopY + r * 0.55, 6, 0.20);
+  // Forehead across (between the eyes, just above).
+  jaggedCrack(cx - headHalfW * 0.5, headTopY + r * 0.12, cx + headHalfW * 0.4, headTopY + r * 0.10, 7, 0.18);
+  // Chin (between mouth and head bottom).
+  jaggedCrack(cx - headHalfW * 0.4, headTopY + headH * 0.92, cx + headHalfW * 0.45, headTopY + headH * 0.90, 6, 0.18);
+  // Neck — one jagged crack across the front.
+  jaggedCrack(cx - neckHalfW + 4, neckTopY + neckH * 0.4, cx + neckHalfW - 4, neckTopY + neckH * 0.55, 5, 0.20);
 
   // ---- Charge glow ----
   if (anim.chargeGlow != null && anim.chargeGlow > 0) {
