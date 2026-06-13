@@ -53,6 +53,12 @@ export interface TransportState {
   elapsed: number;  // seconds since transport began
   duration: number; // total travel time
   source: string;   // ability id that started the transport (for fx)
+  // Per-character one-shot ids — engine adds to this set each time
+  // the transport's caster damages another character mid-arc, so
+  // the same target can't be re-hit within one transport instance.
+  // Currently used by Gravemarch's Stone Step; undefined for
+  // transports that don't deal damage (e.g. Magnek's Magnesis).
+  hitIds?: Set<EntityId>;
 }
 
 export interface CharacterEntity extends BaseEntity {
@@ -167,6 +173,12 @@ export interface PropEntity extends BaseEntity {
   // Rock Wall so the caster can walk through their own arc while
   // every other character is blocked + brush-slowed by it.
   ownerId?: EntityId;
+  // Optional contact damage — when set, the engine applies this
+  // damage to any non-owner character that overlaps the prop's
+  // CORE radius. Repeats gated by a per-character cooldown stored
+  // in c.cooldowns["rock_wall_hit"] so brushing the wall doesn't
+  // stack a damage tick every frame.
+  contactDamage?: number;
 }
 
 // Iron plate placed by Magnek. Persistent (no ttl), non-blocking, navigable

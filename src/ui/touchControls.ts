@@ -275,14 +275,6 @@ export class TouchControls {
 
   private recomputeHitZones(dims: { w: number; h: number }, world: World): void {
     this.pauseButton = { x: dims.w - 36, y: 36, r: this.PAUSE_R };
-    // Sprint button — fixed bottom-left corner. Always recomputed
-    // regardless of whether the player has sprint; the live gate is
-    // sprintAvailable() at hit-test time.
-    this.sprintButton = {
-      x: this.SPRINT_R + 20,
-      y: dims.h - this.SPRINT_R - 24,
-      r: this.SPRINT_R,
-    };
 
     const player = world.playerCharacter();
     const abilityIds: (string | undefined)[] = player
@@ -304,6 +296,19 @@ export class TouchControls {
       });
     }
     this.abilityButtons = out;
+
+    // Sprint button — sits IMMEDIATELY LEFT of the ability column
+    // at the bottom slot's height. Right-thumb holds sprint while
+    // the same thumb taps abilities just to the right; left thumb
+    // stays free for the joystick. Original bottom-left position
+    // (v1) blocked the left thumb from moving + sprinting at the
+    // same time on iPad.
+    const sprintX = x - r - 16 - this.SPRINT_R;
+    this.sprintButton = {
+      x: sprintX,
+      y: bottomY,
+      r: this.SPRINT_R,
+    };
   }
 
   private sprintAvailable(hooks: TouchControlsHooks): boolean {

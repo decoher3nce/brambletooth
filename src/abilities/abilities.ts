@@ -410,7 +410,7 @@ registerAbility({
 
 // ---- Gravemarch's abilities ----
 
-export const GRAVEMARCH_SLASH_DAMAGE = 23;
+export const GRAVEMARCH_SLASH_DAMAGE = 40;
 export const ROCK_WALL_TTL = 10;          // seconds the rocks persist
 export const ROCK_WALL_ROCK_COUNT = 7;    // rocks per arc
 export const ROCK_WALL_START_OFFSET = 90; // pixels ahead of Gravemarch before the arc starts
@@ -419,9 +419,19 @@ export const ROCK_WALL_CURVE_DEPTH = 70;  // how far the arc's midpoint bows tow
 // Radii pattern across the 7 rocks (centered, symmetric, biggest in
 // the middle). Each entry is a rock's pixel radius.
 export const ROCK_WALL_RADII = [20, 26, 18, 30, 18, 26, 20] as const;
+// Per-hit damage when a non-owner character makes core contact with
+// a Rock Wall rock. Engine gates repeat hits via a per-character
+// cooldown so brushing the wall once doesn't stack 60 dmg/frame.
+export const ROCK_WALL_CONTACT_DAMAGE = 12;
+export const ROCK_WALL_HIT_COOLDOWN = 0.7;
 export const ROCK_SHIELD_DURATION = 10;   // seconds of damage immunity
 export const STONE_STEP_DURATION = 0.55;  // seconds the tunnel arc takes
 export const STONE_STEP_DISTANCE = 320;   // pixels Gravemarch surfaces ahead of his start point
+// Damage dealt to any non-caster character Gravemarch passes
+// THROUGH during the Stone Step transport arc. Per-character one-
+// shot (transport hitIds set prevents double-hits during the same
+// step).
+export const STONE_STEP_HIT_DAMAGE = 18;
 
 // Heavy stone swipe — 23 dmg variant of Slagy's slash, slightly
 // longer reach to reflect Gravemarch's size + mace.
@@ -475,9 +485,9 @@ registerAbility({
 registerAbility({
   id: "rock_wall",
   name: "Rock Wall",
-  description: `${ROCK_WALL_ROCK_COUNT} rocks erupt in an arc curving toward the nearest survivor. You walk through; they don't. Lasts ${ROCK_WALL_TTL}s.`,
+  description: `${ROCK_WALL_ROCK_COUNT} rocks erupt in an arc curving toward the nearest survivor. You walk through; they take ${ROCK_WALL_CONTACT_DAMAGE} damage on contact. Lasts ${ROCK_WALL_TTL}s.`,
   cooldown: 14,
-  chargeTime: 0.7,
+  chargeTime: 0.3,
   cast: () => { /* windup, no-op until charge completes */ },
   onChargeComplete: ({ world, caster, aim }) => {
     // Forward direction: prefer the nearest living survivor (the
@@ -533,6 +543,7 @@ registerAbility({
         blocking: true,
         ttl: ROCK_WALL_TTL,
         ownerId: caster.id,
+        contactDamage: ROCK_WALL_CONTACT_DAMAGE,
         dead: false,
       });
     }
@@ -549,7 +560,7 @@ registerAbility({
   id: "rock_shield",
   name: "Rock Shield",
   description: `Encase yourself in stone — block all damage for ${ROCK_SHIELD_DURATION}s. Survivors marked.`,
-  cooldown: 26,
+  cooldown: 14,
   cast: ({ caster }) => {
     caster.statuses["shielded"] = ROCK_SHIELD_DURATION;
   },
@@ -606,6 +617,7 @@ registerAbility({
       elapsed: 0,
       duration: STONE_STEP_DURATION,
       source: "stone_step",
+      hitIds: new Set<number>(),
     };
   },
 });

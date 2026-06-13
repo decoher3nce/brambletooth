@@ -15,7 +15,7 @@ import { isCharacter, isProjectile, isTrap, isObjective, isProp, isExit, isStrea
 import type { AnimalEntity, ZombieEntity } from "../core/entity";
 import type { Vec2 } from "../core/math";
 import { add, scale, normalize, sub, len, dist, clamp, circlesOverlap, segmentsIntersect, distToSegment } from "../core/math";
-import { ABILITIES } from "../abilities/abilities";
+import { ABILITIES, STONE_STEP_HIT_DAMAGE, ROCK_WALL_HIT_COOLDOWN } from "../abilities/abilities";
 import { CHARACTERS } from "../characters/characters";
 import type { GameMode, RoundOutcome } from "../modes/mode";
 import type { Controller, AIIntent } from "../ai/ai";
@@ -190,6 +190,34 @@ export class Engine {
         c.pos = { x: newX, y: newY };
         // Face the destination throughout the arc.
         c.facing = Math.atan2(ty - fy, tx - fx);
+        // Stone Step pass-through damage. Any non-caster character
+        // whose body overlaps Gravemarch's body during the arc
+        // takes STONE_STEP_HIT_DAMAGE — but only once per transport
+        // instance (hitIds tracks who's already been counted).
+        // Skips shielded targets (Rock Shield analogue) and
+        // invincible (Bigfoot god-mode). FFA hunts everyone;
+        // team modes hunt the opposite team.
+        if (c.transport.source === "stone_step" && c.transport.hitIds) {
+          const hitIds = c.transport.hitIds;
+          const others = world.ffaMode
+            ? world.allCharacters()
+            : world.charactersOnTeam(c.team === "hunter" ? "survivor" : "hunter");
+          for (const target of others) {
+            if (target.id === c.id) continue;
+            if (target.dead) continue;
+            if (target.exited) continue;
+            if (hitIds.has(target.id)) continue;
+            if (target.statuses["shielded"] > 0) continue;
+            if (target.statuses["phased"] > 0) continue;
+            if (circlesOverlap(c.pos, c.radius, target.pos, target.radius)) {
+              if (!target.invincible) {
+                target.hp -= STONE_STEP_HIT_DAMAGE;
+                target.lastDamagerId = c.id;
+              }
+              hitIds.add(target.id);
+            }
+          }
+        }
         if (c.transport.elapsed >= c.transport.duration) {
           // Snap to exact destination then clear.
           c.pos = { x: tx, y: ty };
@@ -378,6 +406,44 @@ export class Engine {
         if (!onElevatedBelt) c.elevated = false;
       } else {
         if (nearElevatedEntry) c.elevated = true;
+      }
+    }
+
+    // ---- Prop contact damage (Gravemarch's Rock Wall) ----
+    // After every character has moved this tick, scan props that
+    // deal contact damage. A character takes the prop's damage
+    // when:
+    //   - their center overlaps the prop's CORE radius (same
+    //     boundary the resolveCharacterMove pushout uses, so a
+    //     character can brush the OUTER ring without being hit)
+    //   - they don't own the prop (Gravemarch walks through his
+    //     own arc — no damage, no slow)
+    //   - they aren't shielded, phased, invincible, dead, or exited
+    //   - their per-character "rock_wall_hit" cooldown is 0
+    // On hit, the cooldown resets to ROCK_WALL_HIT_COOLDOWN so a
+    // character stuck against the wall doesn't take damage every
+    // frame. Damage source-attributes to the prop's owner so kill
+    // credit / achievements work.
+    for (const c of world.allCharacters()) {
+      if (c.dead || c.exited) continue;
+      if ((c.cooldowns["rock_wall_hit"] ?? 0) > 0) continue;
+      if (c.statuses["shielded"] > 0) continue;
+      if (c.statuses["phased"] > 0) continue;
+      if (c.invincible) continue;
+      for (const p of world.entities) {
+        if (!isProp(p)) continue;
+        if (!p.contactDamage || p.contactDamage <= 0) continue;
+        if (p.ownerId === c.id) continue;
+        const coreR = p.radius * CORE_FRAC;
+        const dx = c.pos.x - p.pos.x;
+        const dy = c.pos.y - p.pos.y;
+        const reach = c.radius + coreR;
+        if (dx * dx + dy * dy < reach * reach) {
+          c.hp -= p.contactDamage;
+          if (p.ownerId !== undefined) c.lastDamagerId = p.ownerId;
+          c.cooldowns["rock_wall_hit"] = ROCK_WALL_HIT_COOLDOWN;
+          break; // one rock per cooldown window
+        }
       }
     }
 
