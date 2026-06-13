@@ -32,10 +32,18 @@ export interface ShopItem {
 
 // Render order. Items not listed here are hidden from the shop even
 // if they exist in the catalog dict (useful for hiding WIP items).
+// Real items come first within each kind so they sit at the top of
+// their tab; the sample stubs remain for buy-flow testing.
 export const SHOP_ITEM_ORDER: string[] = [
+  // Characters
+  "gravemarch",
   "sample_character",
+  // Outfits
   "sample_outfit",
+  // Upgrades
+  "sprint_boots",
   "sample_upgrade",
+  // Worlds
   "factory_world_key",
 ];
 
