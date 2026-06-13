@@ -2120,9 +2120,83 @@ export class Renderer {
       ctx.globalAlpha = 0.5;
     }
 
+    // Sprint Boots overlay — two small yellow boots at the
+    // character's feet whenever they own the upgrade. Reads from
+    // a distance so every player can tell who can sprint.
+    if (e.hasSprintBoots) {
+      this.drawSprintBootsOverlay(s.x, s.y, e.radius);
+    }
+
     // HP bar + name tag.
     ctx.globalAlpha = 1;
     this.drawCharacterHud(e, s.x, topY, def);
+  }
+
+  // Pair of small yellow boots sitting at the character's foot
+  // level — one slightly forward, one slightly behind, both
+  // straddling the iso shadow ellipse so they read as on the
+  // ground regardless of body art. Each boot has a tiny black
+  // lightning bolt on the shaft to match the shop icon. Size
+  // scales with character radius so a small character (Match,
+  // r=20) and a big one (Gravemarch, r=25) both get
+  // proportionate boots.
+  private drawSprintBootsOverlay(sx: number, sy: number, radius: number): void {
+    const ctx = this.ctx;
+    // Boot footprint width — scales with radius.
+    const bw = radius * 0.58;
+    const bh = bw * 0.58;
+    // Two boots offset along the iso "feet axis" — left foot
+    // slightly behind+left of center, right foot slightly
+    // forward+right. The sy + ~0.3*radius nudge sits the boots
+    // just below the body's apparent ground line so they peek out
+    // from under the character without floating.
+    const baseY = sy + radius * 0.28;
+    const sideOff = radius * 0.42;
+    this.drawSingleBoot(sx - sideOff, baseY - bh * 0.35, bw, bh);
+    this.drawSingleBoot(sx + sideOff, baseY + bh * 0.15, bw, bh);
+  }
+
+  // One yellow boot in top-down iso view: a small rounded
+  // rectangle with a darker sole strip + a 3-segment black
+  // lightning bolt. Anchored at center.
+  private drawSingleBoot(cx: number, cy: number, w: number, h: number): void {
+    const ctx = this.ctx;
+    ctx.save();
+    // Boot body — yellow rounded rectangle.
+    ctx.fillStyle = "#ffd84a";
+    ctx.strokeStyle = "#1a0e08";
+    ctx.lineWidth = Math.max(1, w * 0.06);
+    const r = Math.min(w, h) * 0.32;
+    const x = cx - w / 2;
+    const y = cy - h / 2;
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y,     x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x,     y + h, r);
+    ctx.arcTo(x,     y + h, x,     y,     r);
+    ctx.arcTo(x,     y,     x + w, y,     r);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    // Sole — dark strip across the bottom third.
+    ctx.fillStyle = "#1a0e08";
+    ctx.fillRect(x + r * 0.4, y + h * 0.62, w - r * 0.8, h * 0.22);
+    // Black lightning bolt across the top.
+    ctx.fillStyle = "#0a0a0a";
+    const lx = cx;
+    const ly = cy - h * 0.08;
+    const u = w * 0.08;
+    ctx.beginPath();
+    ctx.moveTo(lx + 0.3 * u, ly - 3.0 * u);
+    ctx.lineTo(lx - 1.7 * u, ly - 0.4 * u);
+    ctx.lineTo(lx - 0.4 * u, ly - 0.4 * u);
+    ctx.lineTo(lx - 1.2 * u, ly + 2.4 * u);
+    ctx.lineTo(lx + 1.7 * u, ly - 0.8 * u);
+    ctx.lineTo(lx + 0.4 * u, ly - 0.8 * u);
+    ctx.lineTo(lx + 1.2 * u, ly - 3.0 * u);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
   }
 
   // HP bar + name tag drawn above the character's top edge. Extracted

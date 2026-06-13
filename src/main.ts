@@ -498,7 +498,7 @@ selectScreen.bind(canvas, logicalSize, {
       if (me?.ready) {
         net.ready(false);
       } else {
-        net.select(chosenId);
+        net.select(chosenId, hasSprintBoots());
         net.ready(true);
       }
     } else if (appMode === "local") {
@@ -511,7 +511,7 @@ selectScreen.bind(canvas, logicalSize, {
   },
   onSelect: (id) => {
     // Live pick broadcast so the opponent sees it immediately.
-    if (appMode === "net" && net && net.phase === "lobby") net.select(id);
+    if (appMode === "net" && net && net.phase === "lobby") net.select(id, hasSprintBoots());
   },
   isTouchMode: () => input.isTouchMode,
   isActive: () =>
@@ -1013,6 +1013,15 @@ function startRound(
     if (player) player.invincible = true;
   }
 
+  // Mirror local inventory onto the player character so the
+  // renderer can paint the Sprint Boots overlay at their feet.
+  // AI characters never have boots in vs-computer mode — inventory
+  // is per-profile, and only the local human has a profile here.
+  {
+    const player = world.playerCharacter();
+    if (player && hasSprintBoots()) player.hasSprintBoots = true;
+  }
+
   const controllers = new Map<number, Controller>();
   for (const c of world.allCharacters()) {
     if (c.isPlayer) {
@@ -1089,6 +1098,14 @@ function startFFARound(chosenId: string): void {
   if (loggedIn && isInvincibleProfile(getName(), getPin())) {
     const player = world.playerCharacter();
     if (player) player.invincible = true;
+  }
+
+  // Sprint Boots overlay flag — mirrors the local inventory onto
+  // the player character so the renderer can paint the boots at
+  // their feet. AI characters in FFA don't get boots (no profile).
+  {
+    const player = world.playerCharacter();
+    if (player && hasSprintBoots()) player.hasSprintBoots = true;
   }
 
   const controllers = new Map<number, Controller>();
@@ -1279,7 +1296,7 @@ function frameNet(dt: number, dims: { w: number; h: number }): void {
       netCamInit = false;
       if (!netInitialPickSent && n.slot !== null) {
         const sel = selectScreen.getSelected();
-        if (sel) n.select(sel);
+        if (sel) n.select(sel, hasSprintBoots());
         netInitialPickSent = true;
       }
       selectScreen.setLobbyView(buildLobbyView());
@@ -1300,7 +1317,7 @@ function frameNet(dt: number, dims: { w: number; h: number }): void {
         // start sequence rooted where they were waiting.
         if (!netInitialPickSent && n.slot !== null) {
           const sel = selectScreen.getSelected();
-          if (sel) n.select(sel);
+          if (sel) n.select(sel, hasSprintBoots());
           netInitialPickSent = true;
         }
         selectScreen.setLobbyView(buildLobbyView());

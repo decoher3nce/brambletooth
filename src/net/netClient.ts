@@ -266,8 +266,8 @@ export class NetClient {
   }
 
   // ---- Lobby actions ----
-  select(characterId: string): void {
-    this.send({ type: "select", characterId });
+  select(characterId: string, hasSprintBoots: boolean = false): void {
+    this.send({ type: "select", characterId, hasSprintBoots });
   }
   ready(ready: boolean): void {
     this.send({ type: "ready", ready });

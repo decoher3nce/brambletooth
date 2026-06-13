@@ -45,6 +45,12 @@ export interface JoinMessage {
 export interface SelectMessage {
   type: "select";
   characterId: string;
+  // Optional flag — set when the client owns the Sprint Boots
+  // shop item. Server stores it on the slot and stamps it onto
+  // the spawned character so OTHER clients (who don't know this
+  // player's inventory) can render the boots overlay in
+  // snapshots. Absent / false → no boots.
+  hasSprintBoots?: boolean;
 }
 
 export interface ReadyMessage {

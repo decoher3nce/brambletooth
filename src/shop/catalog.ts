@@ -226,8 +226,11 @@ function drawGravemarchIcon(
   ctx.restore();
 }
 
-// Sprint Boots — warm gold/amber frame with a stylized side-profile
-// boot and a small lightning bolt overlay to telegraph "fast."
+// Sprint Boots — warm amber frame with a BRIGHT YELLOW side-profile
+// boot and a BLACK lightning bolt across the shaft. Reads at a
+// glance even when shrunk into the small shop card; pairs visually
+// with the in-world character overlay so a player who sees boots
+// on someone's feet immediately recognizes the shop item.
 function drawSprintBootsIcon(
   ctx: CanvasRenderingContext2D,
   x: number, y: number, size: number,
@@ -238,8 +241,8 @@ function drawSprintBootsIcon(
   const cx = x + size * 0.50;
   const cy = y + size * 0.55;
   const u = size * 0.012; // unit
-  // Shaft + cuff (the leg part).
-  ctx.fillStyle = "#3a2418";
+  // Shaft + cuff (the leg part) — bright yellow.
+  ctx.fillStyle = "#ffd84a";
   ctx.beginPath();
   // Top-left of cuff
   ctx.moveTo(cx - 16 * u, cy - 22 * u);
@@ -254,7 +257,11 @@ function drawSprintBootsIcon(
   ctx.lineTo(cx - 14 * u, cy -  6 * u);
   ctx.closePath();
   ctx.fill();
-  // Sole (lighter brown).
+  // Outline for definition against the yellow frame.
+  ctx.strokeStyle = "#1a0e08";
+  ctx.lineWidth = Math.max(1, u * 1.4);
+  ctx.stroke();
+  // Sole — dark.
   ctx.fillStyle = "#1a0e08";
   ctx.beginPath();
   ctx.moveTo(cx - 20 * u, cy + 12 * u);
@@ -265,22 +272,12 @@ function drawSprintBootsIcon(
   ctx.fill();
   // Heel notch.
   ctx.fillRect(cx - 18 * u, cy + 14 * u, 6 * u, 6 * u);
-  // Cuff fold band.
-  ctx.fillStyle = "#5a3a22";
+  // Cuff fold band — slightly darker yellow so it reads as a separate panel.
+  ctx.fillStyle = "#caa030";
   ctx.fillRect(cx - 16 * u, cy - 22 * u, 22 * u, 4 * u);
-  // Laces — three pale crossbars.
-  ctx.strokeStyle = "#e8d8a0";
-  ctx.lineWidth = Math.max(1, u * 1.2);
-  for (let i = 0; i < 3; i++) {
-    const ly = cy - 14 * u + i * 5 * u;
-    ctx.beginPath();
-    ctx.moveTo(cx - 12 * u, ly);
-    ctx.lineTo(cx +  4 * u, ly);
-    ctx.stroke();
-  }
-  // Lightning bolt across the shaft.
-  ctx.fillStyle = "#fff45e";
-  ctx.strokeStyle = "#1a0e08";
+  // Lightning bolt across the shaft — BLACK now, painted over the yellow.
+  ctx.fillStyle = "#0a0a0a";
+  ctx.strokeStyle = "#0a0a0a";
   ctx.lineWidth = Math.max(1, u * 1.0);
   ctx.beginPath();
   ctx.moveTo(cx - 4 * u, cy - 18 * u);

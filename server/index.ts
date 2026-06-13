@@ -39,6 +39,11 @@ interface ClientConn {
   sessionToken: string;
   name: string;
   characterId: string | null;
+  // Mirror of the client's Sprint Boots ownership at the moment
+  // they picked their character. Stamped onto the spawned entity
+  // so other clients can render the boot overlay even though they
+  // don't have access to this player's profile inventory.
+  hasSprintBoots: boolean;
   ready: boolean;
   // Maps this client has completed in campaign mode (received via the
   // "completedMaps" message after join). Used to compute the lobby
@@ -69,6 +74,7 @@ let pendingMapId: string | null = null; // set when vote concludes, consumed by 
 interface Ghost {
   slot: PlayerSlot;
   characterId: string;
+  hasSprintBoots: boolean;
   name: string;
 }
 
@@ -221,6 +227,7 @@ function tryStartCountdown(): void {
   const picks: SessionPick[] = conns.map((c) => ({
     slot: c.slot,
     characterId: c.characterId!,
+    hasSprintBoots: c.hasSprintBoots,
   }));
   const chosenMap = pendingMapId ?? defaultMapId();
   pendingMapId = null;
@@ -340,6 +347,7 @@ function handleMessage(conn: ClientConn, raw: string): void {
       if (session || countdownRemaining > 0) break;
       if (CHARACTERS[msg.characterId]) {
         conn.characterId = msg.characterId;
+        conn.hasSprintBoots = !!msg.hasSprintBoots;
         conn.ready = false; // changing pick un-readies
         broadcastLobby();
       }
@@ -411,6 +419,7 @@ function tryRejoin(ws: WebSocket, token: string): ClientConn | null {
     sessionToken: token, // keep the same token so subsequent reconnects work
     name: ghost.name,
     characterId: ghost.characterId,
+    hasSprintBoots: ghost.hasSprintBoots,
     ready: true,
     completedMaps: [],
   };
@@ -479,6 +488,7 @@ function onConnection(ws: WebSocket): void {
       sessionToken,
       name: `Player ${slot + 1}`,
       characterId: null,
+      hasSprintBoots: false,
       ready: false,
       completedMaps: [],
     };
@@ -551,6 +561,7 @@ function wireConn(conn: ClientConn): void {
       ghosts.set(conn.sessionToken, {
         slot: conn.slot,
         characterId: conn.characterId ?? "",
+        hasSprintBoots: conn.hasSprintBoots,
         name: conn.name,
       });
       const humansLeft = humansConnected();

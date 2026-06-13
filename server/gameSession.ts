@@ -21,6 +21,11 @@ const OBJECTIVES_REQUIRED = 5; // per-survivor target — first to this wins
 export interface SessionPick {
   slot: PlayerSlot;
   characterId: string;
+  // Set when the picking client owns Sprint Boots (mirrored from
+  // their inventory at character-select time). Stamped onto the
+  // spawned character so every other client renders the boot
+  // overlay on this player.
+  hasSprintBoots?: boolean;
 }
 
 interface SessionPlayer {
@@ -96,6 +101,7 @@ export class GameSession {
     {
       const input = createInput();
       controllers.set(hunterEntity.id, new HumanController(input));
+      if (hunterPick.hasSprintBoots) hunterEntity.hasSprintBoots = true;
       this.players.push({
         slot: hunterPick.slot,
         characterId: hunterPick.characterId,
@@ -109,6 +115,7 @@ export class GameSession {
       const entity = survivorEntities[i];
       const input = createInput();
       controllers.set(entity.id, new HumanController(input));
+      if (pick.hasSprintBoots) entity.hasSprintBoots = true;
       this.players.push({
         slot: pick.slot,
         characterId: pick.characterId,

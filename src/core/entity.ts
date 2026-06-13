@@ -112,6 +112,13 @@ export interface CharacterEntity extends BaseEntity {
   // most-kills win condition. Optional so existing modes that
   // don't read it stay unaffected.
   lastDamagerId?: EntityId;
+  // Whether this character is wearing Sprint Boots — the shop item.
+  // Renderer reads this to overlay a yellow boot at the feet so
+  // other players can identify a sprint-capable character at a
+  // glance. Source-of-truth at spawn time: set by the local play
+  // path from hasSprintBoots(), and by the multiplayer server from
+  // the slot's inventory snapshot sent in the select message.
+  hasSprintBoots?: boolean;
   // Sprint stamina, 0..1. Drains while the player holds sprint;
   // regenerates when not sprinting (faster when standing still).
   // Always present on every character so the engine math is
