@@ -1110,17 +1110,25 @@ function drawGravemarch(
   anim: CharacterAnim,
 ): CharacterArtResult {
   const r = radius;
-  // Subtle vertical bob with walk speed (heavy steps).
   const bob = Math.sin(anim.phase * 4) * 1.4 * anim.walkSpeed;
-  // Layout (all relative to the (cx, cy) ground anchor):
-  //   Feet at cy
-  //   Body block from cy-r*0.4 to cy-r*1.8
-  //   Head from cy-r*2.0 to cy-r*3.2
   const baseY = cy - 2;
   const bodyTopY = cy - r * 1.85 + bob;
   const bodyBotY = cy - r * 0.35 + bob;
   const headTopY = cy - r * 3.05 + bob;
   const headBotY = cy - r * 2.05 + bob;
+
+  // Stone color palette — light to dark, used across every body
+  // part so head/shoulders/arms/legs/hands/feet all share a
+  // consistent rocky shading scheme.
+  const STONE_LIT = "#7a828d";   // top-lit highlight
+  const STONE_MID = "#6e7681";   // baseline
+  const STONE_SHADOW = "#4a5058"; // bottom shadow band
+  const STONE_DARK = "#3a3e44";   // deepest crevice / underside
+  const OUTLINE = "#1f2228";
+  const BLUE_LITE = "#5ab4ff";
+  const BLUE_MID = "#3aa0ff";
+  const BLUE_DARK = "#1860a0";
+  const CRACK = "rgba(58, 160, 255, 0.85)";
 
   // Ground shadow.
   ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
@@ -1128,44 +1136,251 @@ function drawGravemarch(
   ctx.ellipse(cx, baseY, r * 0.95, r * 0.32, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Facing-aware mace hand offset — mace stays on his RIGHT
-  // (screen-right), held outward when facing right, tucked
-  // closer when facing left. Adds a sense of which way he's
-  // looking even though the body itself is symmetric.
   const faceRight = Math.cos(facing) >= 0;
   const maceSide = faceRight ? 1 : -1;
 
-  // ---- Mace (drawn first so the arm overlaps it cleanly) ----
-  // Shaft + blue-spiked head off to the side.
-  const maceShaftX = cx + maceSide * r * 1.25;
-  const maceShaftBotY = cy - r * 0.05 + bob;
-  const maceShaftTopY = cy - r * 1.05 + bob;
-  ctx.strokeStyle = "#6e7681";
+  // ---- LEGS (drawn before body so cracks on body overlay legs at the top) ----
+  // Two stubby legs with two-tone shading + cracks.
+  const legW = r * 0.50;
+  const legGap = r * 0.15;
+  const legY = bodyBotY;
+  const legH = r * 0.40;
+  for (const sgn of [-1, 1]) {
+    const lx = cx + sgn * (legGap + legW * 0.5) - legW * 0.5;
+    // Light upper, dark lower.
+    ctx.fillStyle = STONE_MID;
+    ctx.fillRect(lx, legY, legW, legH * 0.55);
+    ctx.fillStyle = STONE_SHADOW;
+    ctx.fillRect(lx, legY + legH * 0.55, legW, legH * 0.45);
+    ctx.strokeStyle = OUTLINE;
+    ctx.lineWidth = 1.4;
+    ctx.strokeRect(lx, legY, legW, legH);
+    // Crack on each leg.
+    ctx.strokeStyle = CRACK;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(lx + legW * 0.15, legY + legH * 0.15);
+    ctx.lineTo(lx + legW * 0.55, legY + legH * 0.35);
+    ctx.lineTo(lx + legW * 0.35, legY + legH * 0.65);
+    ctx.stroke();
+  }
+  // ---- LUMPY FEET ----
+  // Wider than the legs, irregular blob clusters with toe-bumps.
+  for (const sgn of [-1, 1]) {
+    const fx = cx + sgn * (legGap + legW * 0.5);
+    const fy = legY + legH + r * 0.02;
+    // Main foot blob.
+    ctx.fillStyle = STONE_SHADOW;
+    ctx.beginPath();
+    ctx.ellipse(fx, fy, legW * 0.95, legH * 0.45, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = OUTLINE;
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    // Top highlight on foot (lit upper part).
+    ctx.fillStyle = STONE_MID;
+    ctx.beginPath();
+    ctx.ellipse(fx - legW * 0.1, fy - legH * 0.1, legW * 0.75, legH * 0.18, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Toe bumps — three small circles along the front.
+    ctx.fillStyle = STONE_DARK;
+    for (let i = 0; i < 3; i++) {
+      const tFx = fx - legW * 0.5 + (i + 0.5) * (legW * 1.0 / 3) * (sgn > 0 ? 1 : 1);
+      ctx.beginPath();
+      ctx.arc(tFx, fy + legH * 0.18, legH * 0.10, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Crack across the foot.
+    ctx.strokeStyle = CRACK;
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.moveTo(fx - legW * 0.6, fy - legH * 0.05);
+    ctx.lineTo(fx - legW * 0.1, fy + legH * 0.05);
+    ctx.lineTo(fx + legW * 0.4, fy - legH * 0.08);
+    ctx.stroke();
+  }
+
+  // ---- BODY block ----
+  const bodyHalfW = r * 0.95;
+  ctx.fillStyle = STONE_LIT;
+  ctx.fillRect(cx - bodyHalfW, bodyTopY, bodyHalfW * 2, (bodyBotY - bodyTopY) * 0.45);
+  ctx.fillStyle = STONE_MID;
+  ctx.fillRect(cx - bodyHalfW, bodyTopY + (bodyBotY - bodyTopY) * 0.45,
+    bodyHalfW * 2, (bodyBotY - bodyTopY) * 0.30);
+  ctx.fillStyle = STONE_SHADOW;
+  ctx.fillRect(cx - bodyHalfW, bodyTopY + (bodyBotY - bodyTopY) * 0.75,
+    bodyHalfW * 2, (bodyBotY - bodyTopY) * 0.25);
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 1.6;
+  ctx.strokeRect(cx - bodyHalfW, bodyTopY, bodyHalfW * 2, bodyBotY - bodyTopY);
+
+  // ---- SHOULDER rocks — three-tone shaded, irregular silhouette. ----
+  // (Drawn over body to perch on the corners.)
+  const drawShoulder = (sideX: number): void => {
+    // Outer rough silhouette (darkest underside).
+    ctx.fillStyle = STONE_SHADOW;
+    ctx.beginPath();
+    ctx.moveTo(sideX - r * 0.30, bodyTopY + r * 0.05);
+    ctx.lineTo(sideX - r * 0.10, bodyTopY - r * 0.28);
+    ctx.lineTo(sideX + r * 0.18, bodyTopY - r * 0.30);
+    ctx.lineTo(sideX + r * 0.35, bodyTopY + r * 0.05);
+    ctx.lineTo(sideX + r * 0.25, bodyTopY + r * 0.42);
+    ctx.lineTo(sideX - r * 0.15, bodyTopY + r * 0.42);
+    ctx.closePath();
+    ctx.fill();
+    // Mid-tone top section.
+    ctx.fillStyle = STONE_MID;
+    ctx.beginPath();
+    ctx.moveTo(sideX - r * 0.25, bodyTopY + r * 0.0);
+    ctx.lineTo(sideX - r * 0.10, bodyTopY - r * 0.25);
+    ctx.lineTo(sideX + r * 0.15, bodyTopY - r * 0.28);
+    ctx.lineTo(sideX + r * 0.28, bodyTopY + r * 0.0);
+    ctx.lineTo(sideX + r * 0.18, bodyTopY + r * 0.20);
+    ctx.lineTo(sideX - r * 0.12, bodyTopY + r * 0.20);
+    ctx.closePath();
+    ctx.fill();
+    // Bright highlight peak.
+    ctx.fillStyle = STONE_LIT;
+    ctx.beginPath();
+    ctx.moveTo(sideX - r * 0.05, bodyTopY - r * 0.22);
+    ctx.lineTo(sideX + r * 0.08, bodyTopY - r * 0.26);
+    ctx.lineTo(sideX + r * 0.12, bodyTopY - r * 0.10);
+    ctx.lineTo(sideX - r * 0.02, bodyTopY - r * 0.05);
+    ctx.closePath();
+    ctx.fill();
+    // Outline.
+    ctx.strokeStyle = OUTLINE;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(sideX - r * 0.30, bodyTopY + r * 0.05);
+    ctx.lineTo(sideX - r * 0.10, bodyTopY - r * 0.28);
+    ctx.lineTo(sideX + r * 0.18, bodyTopY - r * 0.30);
+    ctx.lineTo(sideX + r * 0.35, bodyTopY + r * 0.05);
+    ctx.stroke();
+    // Blue crack.
+    ctx.strokeStyle = CRACK;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(sideX - r * 0.15, bodyTopY - r * 0.05);
+    ctx.lineTo(sideX + r * 0.02, bodyTopY - r * 0.18);
+    ctx.lineTo(sideX + r * 0.12, bodyTopY - r * 0.08);
+    ctx.stroke();
+  };
+  drawShoulder(cx - bodyHalfW + r * 0.05);
+  drawShoulder(cx + bodyHalfW - r * 0.05);
+
+  // ---- ARMS — three-tone shaded. ----
+  const armW = r * 0.50;
+  const armH = r * 1.10;
+  const leftArmX = cx - bodyHalfW - armW + 4;
+  const rightArmX = cx + bodyHalfW - 4;
+  const armTopY = bodyTopY + r * 0.25;
+  const drawArm = (ax: number): void => {
+    // Light upper, mid middle, dark lower.
+    ctx.fillStyle = STONE_MID;
+    ctx.fillRect(ax, armTopY, armW, armH * 0.40);
+    ctx.fillStyle = STONE_SHADOW;
+    ctx.fillRect(ax, armTopY + armH * 0.40, armW, armH * 0.40);
+    ctx.fillStyle = STONE_DARK;
+    ctx.fillRect(ax, armTopY + armH * 0.80, armW, armH * 0.20);
+    ctx.strokeStyle = OUTLINE;
+    ctx.lineWidth = 1.4;
+    ctx.strokeRect(ax, armTopY, armW, armH);
+    // Light highlight on the lit side.
+    ctx.fillStyle = "rgba(220, 225, 235, 0.18)";
+    ctx.fillRect(ax + 1, armTopY + 2, armW * 0.3, armH - 4);
+    // Two cracks per arm.
+    ctx.strokeStyle = CRACK;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(ax + armW * 0.15, armTopY + armH * 0.20);
+    ctx.lineTo(ax + armW * 0.65, armTopY + armH * 0.32);
+    ctx.lineTo(ax + armW * 0.45, armTopY + armH * 0.50);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(ax + armW * 0.55, armTopY + armH * 0.62);
+    ctx.lineTo(ax + armW * 0.20, armTopY + armH * 0.75);
+    ctx.stroke();
+  };
+  drawArm(leftArmX);
+  drawArm(rightArmX);
+
+  // ---- LUMPY HANDS — clusters of rocky blobs at the bottom of each arm. ----
+  const drawHand = (handCx: number, handCy: number): void => {
+    // Dark base cluster.
+    ctx.fillStyle = STONE_SHADOW;
+    ctx.beginPath();
+    ctx.arc(handCx, handCy, r * 0.32, 0, Math.PI * 2);
+    ctx.fill();
+    // Three knuckle bumps in a row.
+    ctx.fillStyle = STONE_MID;
+    ctx.beginPath();
+    ctx.arc(handCx - r * 0.18, handCy - r * 0.04, r * 0.13, 0, Math.PI * 2);
+    ctx.arc(handCx, handCy - r * 0.10, r * 0.16, 0, Math.PI * 2);
+    ctx.arc(handCx + r * 0.18, handCy - r * 0.04, r * 0.13, 0, Math.PI * 2);
+    ctx.fill();
+    // Bright highlight bump on top.
+    ctx.fillStyle = STONE_LIT;
+    ctx.beginPath();
+    ctx.arc(handCx - r * 0.05, handCy - r * 0.13, r * 0.07, 0, Math.PI * 2);
+    ctx.fill();
+    // Outline around the cluster.
+    ctx.strokeStyle = OUTLINE;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.arc(handCx, handCy, r * 0.30, 0, Math.PI * 2);
+    ctx.stroke();
+    // Crack across the hand.
+    ctx.strokeStyle = CRACK;
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.moveTo(handCx - r * 0.20, handCy + r * 0.05);
+    ctx.lineTo(handCx, handCy - r * 0.02);
+    ctx.lineTo(handCx + r * 0.18, handCy + r * 0.08);
+    ctx.stroke();
+  };
+  const leftHandX = leftArmX + armW * 0.5;
+  const leftHandY = armTopY + armH + r * 0.05;
+  drawHand(leftHandX, leftHandY);
+  const rightHandX = rightArmX + armW * 0.5;
+  const rightHandY = armTopY + armH + r * 0.05;
+  drawHand(rightHandX, rightHandY);
+
+  // ---- MACE — emerges from the right hand, angled up and out. ----
+  // Shaft starts at the hand and extends outward + upward.
+  const maceTipX = rightHandX + maceSide * r * 1.20;
+  const maceTipY = rightHandY - r * 1.30;
+  // Shaft.
+  ctx.strokeStyle = STONE_MID;
   ctx.lineWidth = r * 0.22;
   ctx.lineCap = "round";
   ctx.beginPath();
-  ctx.moveTo(maceShaftX, maceShaftBotY);
-  ctx.lineTo(maceShaftX + maceSide * r * 0.2, maceShaftTopY);
+  ctx.moveTo(rightHandX, rightHandY - r * 0.05);
+  ctx.lineTo(maceTipX, maceTipY);
+  ctx.stroke();
+  // Shaft outline + darker band for shading.
+  ctx.strokeStyle = STONE_DARK;
+  ctx.lineWidth = r * 0.08;
+  ctx.beginPath();
+  ctx.moveTo(rightHandX + maceSide * r * 0.05, rightHandY - r * 0.05);
+  ctx.lineTo(maceTipX - maceSide * r * 0.02, maceTipY + r * 0.08);
   ctx.stroke();
   // Mace head ball.
-  const maceHeadX = maceShaftX + maceSide * r * 0.28;
-  const maceHeadY = maceShaftTopY - r * 0.32;
   ctx.fillStyle = "#5a6470";
   ctx.beginPath();
-  ctx.arc(maceHeadX, maceHeadY, r * 0.42, 0, Math.PI * 2);
+  ctx.arc(maceTipX, maceTipY, r * 0.42, 0, Math.PI * 2);
   ctx.fill();
-  ctx.strokeStyle = "#222830";
+  ctx.strokeStyle = OUTLINE;
   ctx.lineWidth = 1.2;
   ctx.stroke();
-  // Blue spikes radiating from the mace ball.
-  const spikeColor = "#3aa0ff";
-  ctx.fillStyle = spikeColor;
+  // Blue spikes radiating from the ball.
+  ctx.fillStyle = BLUE_MID;
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2;
-    const sx0 = maceHeadX + Math.cos(a) * r * 0.42;
-    const sy0 = maceHeadY + Math.sin(a) * r * 0.42;
-    const sx1 = maceHeadX + Math.cos(a) * r * 0.72;
-    const sy1 = maceHeadY + Math.sin(a) * r * 0.72;
+    const sx0 = maceTipX + Math.cos(a) * r * 0.42;
+    const sy0 = maceTipY + Math.sin(a) * r * 0.42;
+    const sx1 = maceTipX + Math.cos(a) * r * 0.72;
+    const sy1 = maceTipY + Math.sin(a) * r * 0.72;
     const perpX = -Math.sin(a) * r * 0.14;
     const perpY = Math.cos(a) * r * 0.14;
     ctx.beginPath();
@@ -1175,208 +1390,224 @@ function drawGravemarch(
     ctx.closePath();
     ctx.fill();
   }
-  // Bright blue core highlight on the mace ball.
+  // Bright core highlight on the ball.
   ctx.fillStyle = "rgba(110, 200, 255, 0.85)";
   ctx.beginPath();
-  ctx.arc(maceHeadX - r * 0.12, maceHeadY - r * 0.12, r * 0.12, 0, Math.PI * 2);
+  ctx.arc(maceTipX - r * 0.12, maceTipY - r * 0.12, r * 0.12, 0, Math.PI * 2);
   ctx.fill();
 
-  // ---- Body block ----
-  const bodyHalfW = r * 0.95;
-  ctx.fillStyle = "#6e7681";
-  ctx.fillRect(cx - bodyHalfW, bodyTopY, bodyHalfW * 2, bodyBotY - bodyTopY);
-  // Darker bottom band (shadow under the chest).
-  ctx.fillStyle = "#4a5058";
-  ctx.fillRect(cx - bodyHalfW, bodyTopY + (bodyBotY - bodyTopY) * 0.55,
-    bodyHalfW * 2, (bodyBotY - bodyTopY) * 0.45);
-  // Outline.
-  ctx.strokeStyle = "#1f2228";
-  ctx.lineWidth = 1.6;
-  ctx.strokeRect(cx - bodyHalfW, bodyTopY, bodyHalfW * 2, bodyBotY - bodyTopY);
-  // Highlight side (lit).
-  ctx.fillStyle = "rgba(220, 225, 235, 0.18)";
-  ctx.fillRect(cx - bodyHalfW + 2, bodyTopY + 2, bodyHalfW * 0.45, bodyBotY - bodyTopY - 4);
-
-  // ---- Shoulders ----
-  // Slightly larger rocks perched on either corner of the body.
-  ctx.fillStyle = "#5a6470";
+  // ---- SMALLER chest gem (compact diamond) ----
+  // Per playtest the V was too big — shrunk to a small inverted
+  // diamond/triangle centered on the upper-mid body.
+  const chestCx = cx;
+  const chestCy = bodyTopY + (bodyBotY - bodyTopY) * 0.40;
+  const chestHalfW = r * 0.28;
+  const chestHalfH = r * 0.30;
+  ctx.fillStyle = BLUE_MID;
   ctx.beginPath();
-  ctx.moveTo(cx - bodyHalfW - r * 0.25, bodyTopY + r * 0.05);
-  ctx.lineTo(cx - bodyHalfW + r * 0.15, bodyTopY - r * 0.25);
-  ctx.lineTo(cx - bodyHalfW + r * 0.55, bodyTopY + r * 0.05);
-  ctx.lineTo(cx - bodyHalfW + r * 0.45, bodyTopY + r * 0.35);
-  ctx.lineTo(cx - bodyHalfW - r * 0.1, bodyTopY + r * 0.4);
+  ctx.moveTo(chestCx, chestCy - chestHalfH);
+  ctx.lineTo(chestCx + chestHalfW, chestCy);
+  ctx.lineTo(chestCx, chestCy + chestHalfH);
+  ctx.lineTo(chestCx - chestHalfW, chestCy);
   ctx.closePath();
   ctx.fill();
-  ctx.strokeStyle = "#1f2228";
-  ctx.stroke();
+  // Shadow side.
+  ctx.fillStyle = BLUE_DARK;
   ctx.beginPath();
-  ctx.moveTo(cx + bodyHalfW - r * 0.55, bodyTopY + r * 0.05);
-  ctx.lineTo(cx + bodyHalfW - r * 0.15, bodyTopY - r * 0.25);
-  ctx.lineTo(cx + bodyHalfW + r * 0.25, bodyTopY + r * 0.05);
-  ctx.lineTo(cx + bodyHalfW + r * 0.1, bodyTopY + r * 0.4);
-  ctx.lineTo(cx + bodyHalfW - r * 0.45, bodyTopY + r * 0.35);
+  ctx.moveTo(chestCx, chestCy - chestHalfH);
+  ctx.lineTo(chestCx + chestHalfW, chestCy);
+  ctx.lineTo(chestCx, chestCy + chestHalfH);
   ctx.closePath();
   ctx.fill();
-  ctx.stroke();
-  // Blue shoulder highlights — small angular accent stones.
-  ctx.fillStyle = "#3aa0ff";
-  ctx.beginPath();
-  ctx.moveTo(cx - bodyHalfW + r * 0.2, bodyTopY - r * 0.08);
-  ctx.lineTo(cx - bodyHalfW + r * 0.35, bodyTopY - r * 0.2);
-  ctx.lineTo(cx - bodyHalfW + r * 0.45, bodyTopY - r * 0.05);
-  ctx.lineTo(cx - bodyHalfW + r * 0.25, bodyTopY + r * 0.0);
-  ctx.closePath();
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(cx + bodyHalfW - r * 0.2, bodyTopY - r * 0.08);
-  ctx.lineTo(cx + bodyHalfW - r * 0.35, bodyTopY - r * 0.2);
-  ctx.lineTo(cx + bodyHalfW - r * 0.45, bodyTopY - r * 0.05);
-  ctx.lineTo(cx + bodyHalfW - r * 0.25, bodyTopY + r * 0.0);
-  ctx.closePath();
-  ctx.fill();
-
-  // ---- Chest V glyph ----
-  // Inverted-V plate in vibrant blue, dead center of the body.
-  const chestTopY = bodyTopY + (bodyBotY - bodyTopY) * 0.18;
-  const chestBotY = bodyTopY + (bodyBotY - bodyTopY) * 0.62;
-  const chestHalfW = r * 0.55;
-  ctx.fillStyle = "#3aa0ff";
-  ctx.beginPath();
-  ctx.moveTo(cx - chestHalfW, chestTopY);
-  ctx.lineTo(cx + chestHalfW, chestTopY);
-  ctx.lineTo(cx, chestBotY);
-  ctx.closePath();
-  ctx.fill();
-  // Darker shadow side on the chest V.
-  ctx.fillStyle = "#1860a0";
-  ctx.beginPath();
-  ctx.moveTo(cx, chestTopY);
-  ctx.lineTo(cx + chestHalfW, chestTopY);
-  ctx.lineTo(cx, chestBotY);
-  ctx.closePath();
-  ctx.fill();
-  // Bright blue highlight stripe.
+  // Bright highlight stripe.
   ctx.fillStyle = "rgba(180, 230, 255, 0.65)";
   ctx.beginPath();
-  ctx.moveTo(cx - chestHalfW * 0.7, chestTopY + 2);
-  ctx.lineTo(cx - 1, chestBotY - 2);
-  ctx.lineTo(cx + 1, chestBotY - 2);
-  ctx.lineTo(cx - chestHalfW * 0.4, chestTopY + 2);
+  ctx.moveTo(chestCx - chestHalfW * 0.4, chestCy - chestHalfH * 0.5);
+  ctx.lineTo(chestCx - 1, chestCy);
+  ctx.lineTo(chestCx - chestHalfW * 0.15, chestCy + chestHalfH * 0.3);
   ctx.closePath();
   ctx.fill();
+  // Outline.
+  ctx.strokeStyle = OUTLINE;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(chestCx, chestCy - chestHalfH);
+  ctx.lineTo(chestCx + chestHalfW, chestCy);
+  ctx.lineTo(chestCx, chestCy + chestHalfH);
+  ctx.lineTo(chestCx - chestHalfW, chestCy);
+  ctx.closePath();
+  ctx.stroke();
 
-  // ---- Blue cracks across body ----
-  ctx.strokeStyle = "rgba(58, 160, 255, 0.85)";
+  // ---- More body cracks ----
+  ctx.strokeStyle = CRACK;
   ctx.lineWidth = 1.6;
   ctx.lineCap = "round";
-  // Crack 1: top-left diagonal across body to chest area.
+  // Existing three cracks…
   ctx.beginPath();
   ctx.moveTo(cx - bodyHalfW + 3, bodyTopY + r * 0.45);
   ctx.lineTo(cx - bodyHalfW + r * 0.55, bodyTopY + r * 0.7);
   ctx.lineTo(cx - bodyHalfW + r * 0.85, bodyTopY + r * 0.55);
   ctx.stroke();
-  // Crack 2: right side mid.
   ctx.beginPath();
   ctx.moveTo(cx + bodyHalfW - 3, bodyTopY + r * 0.85);
   ctx.lineTo(cx + bodyHalfW - r * 0.45, bodyTopY + r * 1.05);
   ctx.lineTo(cx + bodyHalfW - r * 0.6, bodyTopY + r * 1.25);
   ctx.stroke();
-  // Crack 3: bottom horizontal jag.
   ctx.beginPath();
   ctx.moveTo(cx - bodyHalfW + r * 0.2, bodyBotY - r * 0.15);
   ctx.lineTo(cx, bodyBotY - r * 0.25);
   ctx.lineTo(cx + bodyHalfW - r * 0.2, bodyBotY - r * 0.05);
   ctx.stroke();
+  // …plus three new ones.
+  ctx.beginPath();
+  ctx.moveTo(cx - bodyHalfW + r * 0.10, bodyTopY + r * 0.15);
+  ctx.lineTo(cx - bodyHalfW + r * 0.32, bodyTopY + r * 0.30);
+  ctx.lineTo(cx - bodyHalfW + r * 0.20, bodyTopY + r * 0.42);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx + bodyHalfW - r * 0.10, bodyTopY + r * 0.20);
+  ctx.lineTo(cx + bodyHalfW - r * 0.32, bodyTopY + r * 0.35);
+  ctx.lineTo(cx + bodyHalfW - r * 0.50, bodyTopY + r * 0.42);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx - r * 0.4, bodyTopY + r * 1.05);
+  ctx.lineTo(cx - r * 0.1, bodyTopY + r * 1.20);
+  ctx.lineTo(cx + r * 0.25, bodyTopY + r * 1.10);
+  ctx.stroke();
 
-  // ---- Arms ----
-  // Stubby grey rectangles hanging from the shoulders.
-  const armW = r * 0.5;
-  const armH = r * 1.05;
-  // Left arm (no weapon).
-  ctx.fillStyle = "#5a6470";
-  ctx.fillRect(cx - bodyHalfW - armW + 4, bodyTopY + r * 0.25, armW, armH);
-  ctx.strokeStyle = "#1f2228";
-  ctx.lineWidth = 1.4;
-  ctx.strokeRect(cx - bodyHalfW - armW + 4, bodyTopY + r * 0.25, armW, armH);
-  // Right arm (holding mace) — slightly extended toward the mace.
-  const rightArmX = cx + bodyHalfW - 4;
-  ctx.fillStyle = "#5a6470";
-  ctx.fillRect(rightArmX, bodyTopY + r * 0.25, armW, armH);
-  ctx.strokeRect(rightArmX, bodyTopY + r * 0.25, armW, armH);
-
-  // ---- Legs ----
-  // Two stubby legs.
-  const legW = r * 0.5;
-  const legGap = r * 0.15;
-  const legY = bodyBotY;
-  const legH = r * 0.35;
-  for (const sgn of [-1, 1]) {
-    const lx = cx + sgn * (legGap + legW * 0.5) - legW * 0.5;
-    ctx.fillStyle = "#4a5058";
-    ctx.fillRect(lx, legY, legW, legH);
-    ctx.strokeStyle = "#1f2228";
-    ctx.lineWidth = 1.4;
-    ctx.strokeRect(lx, legY, legW, legH);
-  }
-
-  // ---- Head block ----
+  // ---- HEAD block — three-tone shaded. ----
   const headHalfW = r * 0.85;
-  ctx.fillStyle = "#6e7681";
-  ctx.fillRect(cx - headHalfW, headTopY, headHalfW * 2, headBotY - headTopY);
-  ctx.fillStyle = "#4a5058";
-  ctx.fillRect(cx - headHalfW, headTopY + (headBotY - headTopY) * 0.6,
-    headHalfW * 2, (headBotY - headTopY) * 0.4);
-  ctx.strokeStyle = "#1f2228";
+  const headH = headBotY - headTopY;
+  ctx.fillStyle = STONE_LIT;
+  ctx.fillRect(cx - headHalfW, headTopY, headHalfW * 2, headH * 0.35);
+  ctx.fillStyle = STONE_MID;
+  ctx.fillRect(cx - headHalfW, headTopY + headH * 0.35, headHalfW * 2, headH * 0.35);
+  ctx.fillStyle = STONE_SHADOW;
+  ctx.fillRect(cx - headHalfW, headTopY + headH * 0.70, headHalfW * 2, headH * 0.30);
+  ctx.strokeStyle = OUTLINE;
   ctx.lineWidth = 1.6;
-  ctx.strokeRect(cx - headHalfW, headTopY, headHalfW * 2, headBotY - headTopY);
-  // Highlight side.
+  ctx.strokeRect(cx - headHalfW, headTopY, headHalfW * 2, headH);
+  // Light highlight stripe.
   ctx.fillStyle = "rgba(220, 225, 235, 0.20)";
-  ctx.fillRect(cx - headHalfW + 2, headTopY + 2, headHalfW * 0.4, headBotY - headTopY - 4);
+  ctx.fillRect(cx - headHalfW + 2, headTopY + 2, headHalfW * 0.4, headH - 4);
 
-  // ---- Angry brow + eye slits ----
-  // Two horizontal blue slits tilted inward (angry "V" brow).
-  // The pupils nudge in the facing direction so the eyes track.
-  const eyeY = headTopY + (headBotY - headTopY) * 0.42;
-  const eyeHalfW = headHalfW * 0.30;
-  const eyeOffset = headHalfW * 0.32;
-  const eyeNudge = Math.cos(facing) * 1.6;
-  const eyeNudgeY = Math.sin(facing) * 0.6;
-  ctx.fillStyle = "#3aa0ff";
-  ctx.beginPath();
-  ctx.moveTo(cx - eyeOffset - eyeHalfW + eyeNudge, eyeY + 2 + eyeNudgeY);
-  ctx.lineTo(cx - eyeOffset + eyeHalfW + eyeNudge, eyeY - 3 + eyeNudgeY);
-  ctx.lineTo(cx - eyeOffset + eyeHalfW + eyeNudge, eyeY + 1 + eyeNudgeY);
-  ctx.lineTo(cx - eyeOffset - eyeHalfW + eyeNudge, eyeY + 5 + eyeNudgeY);
-  ctx.closePath();
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(cx + eyeOffset - eyeHalfW + eyeNudge, eyeY - 3 + eyeNudgeY);
-  ctx.lineTo(cx + eyeOffset + eyeHalfW + eyeNudge, eyeY + 2 + eyeNudgeY);
-  ctx.lineTo(cx + eyeOffset + eyeHalfW + eyeNudge, eyeY + 5 + eyeNudgeY);
-  ctx.lineTo(cx + eyeOffset - eyeHalfW + eyeNudge, eyeY + 1 + eyeNudgeY);
-  ctx.closePath();
-  ctx.fill();
-  // Bright inner glow on each eye.
-  ctx.fillStyle = "rgba(180, 230, 255, 0.85)";
-  ctx.fillRect(cx - eyeOffset - 4 + eyeNudge, eyeY - 1 + eyeNudgeY, 8, 2);
-  ctx.fillRect(cx + eyeOffset - 4 + eyeNudge, eyeY - 1 + eyeNudgeY, 8, 2);
+  // ---- ANGRY half-circle eyes slanted DOWN toward the nose ----
+  // Each eye is a downward-opening half-circle whose flat edge is
+  // rotated so the OUTER corner is HIGHER than the INNER corner.
+  // That's the classic angry-brow read. The fill is the dark socket
+  // (blue iris), with a bright inner glow stripe.
+  const eyeY = headTopY + headH * 0.40;
+  const eyeOffset = headHalfW * 0.34;
+  const eyeR = headHalfW * 0.24;
+  const drawEye = (sideX: number, slantSign: -1 | 1): void => {
+    const cxE = sideX;
+    const cyE = eyeY;
+    // Rotation: slantSign=-1 (left eye) tilts the diameter so the
+    // RIGHT side is lower (inner closer to nose drops). slantSign=+1
+    // (right eye) tilts so the LEFT side is lower. The angle is
+    // negative for left, positive for right.
+    const angle = slantSign * 0.45; // ~26 degrees
+    ctx.save();
+    ctx.translate(cxE, cyE);
+    ctx.rotate(angle);
+    // Half-circle with the dome on the BOTTOM and the flat edge
+    // on TOP. arc(0, 0, r, 0, π) sweeps through positive-y
+    // (canvas down), so the closed path is the bottom half of a
+    // circle — a downward dome that reads as a heavy brow above
+    // a recessed pupil. Combined with the rotation it gives the
+    // classic angry-V eye shape.
+    ctx.fillStyle = BLUE_MID;
+    ctx.beginPath();
+    ctx.arc(0, 0, eyeR, 0, Math.PI, false);
+    ctx.closePath();
+    ctx.fill();
+    // Darker shadow inside (lower half of the dome).
+    ctx.fillStyle = BLUE_DARK;
+    ctx.beginPath();
+    ctx.arc(0, 0, eyeR * 0.78, 0, Math.PI, false);
+    ctx.closePath();
+    ctx.fill();
+    // Bright glow line along the flat top edge.
+    ctx.fillStyle = "rgba(180, 230, 255, 0.95)";
+    ctx.fillRect(-eyeR + 2, -2, (eyeR - 2) * 2, 2);
+    // Small bright pupil dot below the flat edge (in the dome).
+    const pupilNudge = Math.cos(facing) * 1.4 * slantSign;
+    ctx.fillStyle = "#dff0ff";
+    ctx.beginPath();
+    ctx.arc(pupilNudge, eyeR * 0.35, eyeR * 0.18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  };
+  drawEye(cx - eyeOffset, -1);
+  drawEye(cx + eyeOffset, +1);
 
-  // ---- Snarl mouth ----
-  // Horizontal blue rectangle with jagged top edge for a grimace.
-  const mouthY = headTopY + (headBotY - headTopY) * 0.78;
-  const mouthHalfW = headHalfW * 0.55;
-  ctx.fillStyle = "#3aa0ff";
-  ctx.fillRect(cx - mouthHalfW, mouthY, mouthHalfW * 2, headHalfW * 0.18);
-  // Teeth notches (3 dark gaps along the top edge).
-  ctx.fillStyle = "#1860a0";
-  for (let i = 0; i < 3; i++) {
-    const tx = cx - mouthHalfW + (i + 0.5) * (mouthHalfW * 2 / 3) - 2;
-    ctx.fillRect(tx, mouthY - 1, 4, headHalfW * 0.06);
+  // ---- MONSTER zig-zag MOUTH ----
+  // Closed-shape jagged maw with sawtooth top + bottom edges.
+  const mouthY = headTopY + headH * 0.78;
+  const mouthHalfW = headHalfW * 0.60;
+  const mouthH = headH * 0.16;
+  const teeth = 5;
+  const stepX = (mouthHalfW * 2) / teeth;
+  // Build a closed path: zigzag top + zigzag bottom.
+  ctx.fillStyle = BLUE_MID;
+  ctx.beginPath();
+  // Top edge: start left, alternating UP (tooth tip pointing up
+  // out of the mouth = teeth top edge) and DOWN.
+  ctx.moveTo(cx - mouthHalfW, mouthY + mouthH * 0.5);
+  for (let i = 0; i <= teeth; i++) {
+    const x = cx - mouthHalfW + i * stepX;
+    const y = (i % 2 === 0)
+      ? mouthY + mouthH * 0.50  // valley
+      : mouthY - mouthH * 0.35; // peak (tooth)
+    ctx.lineTo(x, y);
   }
+  // Bottom edge — zigzag in reverse so the closed shape has
+  // sharp downward teeth on the bottom too.
+  for (let i = teeth; i >= 0; i--) {
+    const x = cx - mouthHalfW + i * stepX;
+    const y = (i % 2 === 0)
+      ? mouthY + mouthH * 0.50  // valley (same as top valley → bottom edge)
+      : mouthY + mouthH * 1.40; // spike DOWN (lower tooth)
+    ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
+  // Dark inner mouth (shadowy center).
+  ctx.fillStyle = BLUE_DARK;
+  ctx.beginPath();
+  ctx.moveTo(cx - mouthHalfW * 0.65, mouthY + mouthH * 0.45);
+  for (let i = 0; i <= teeth - 1; i++) {
+    const t = i / (teeth - 1);
+    const x = cx - mouthHalfW * 0.65 + t * mouthHalfW * 1.30;
+    const y = mouthY + mouthH * (0.45 + 0.20 * Math.sin(i * Math.PI / 2));
+    ctx.lineTo(x, y);
+  }
+  ctx.lineTo(cx + mouthHalfW * 0.65, mouthY + mouthH * 0.85);
+  for (let i = teeth - 1; i >= 0; i--) {
+    const t = i / (teeth - 1);
+    const x = cx - mouthHalfW * 0.65 + t * mouthHalfW * 1.30;
+    const y = mouthY + mouthH * (0.85 - 0.20 * Math.sin(i * Math.PI / 2));
+    ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
+  // Bright glow accent along the top edge.
+  ctx.strokeStyle = BLUE_LITE;
+  ctx.lineWidth = 1.4;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  for (let i = 0; i <= teeth; i++) {
+    const x = cx - mouthHalfW + i * stepX;
+    const y = (i % 2 === 0)
+      ? mouthY + mouthH * 0.50
+      : mouthY - mouthH * 0.35;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
 
-  // ---- Head cracks ----
-  ctx.strokeStyle = "rgba(58, 160, 255, 0.85)";
+  // ---- More HEAD cracks ----
+  ctx.strokeStyle = CRACK;
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.moveTo(cx - headHalfW + 2, headTopY + r * 0.18);
@@ -1387,6 +1618,18 @@ function drawGravemarch(
   ctx.moveTo(cx + headHalfW - 2, headTopY + r * 0.50);
   ctx.lineTo(cx + headHalfW - r * 0.4, headTopY + r * 0.62);
   ctx.lineTo(cx + headHalfW - r * 0.6, headTopY + r * 0.55);
+  ctx.stroke();
+  // New crack across the forehead (between the eyes, just above).
+  ctx.beginPath();
+  ctx.moveTo(cx - headHalfW * 0.5, headTopY + r * 0.12);
+  ctx.lineTo(cx - r * 0.05, headTopY + r * 0.22);
+  ctx.lineTo(cx + headHalfW * 0.4, headTopY + r * 0.10);
+  ctx.stroke();
+  // New crack on the chin (between mouth and head bottom).
+  ctx.beginPath();
+  ctx.moveTo(cx - headHalfW * 0.4, headTopY + headH * 0.92);
+  ctx.lineTo(cx + r * 0.05, headTopY + headH * 0.96);
+  ctx.lineTo(cx + headHalfW * 0.45, headTopY + headH * 0.90);
   ctx.stroke();
 
   // ---- Charge glow ----
