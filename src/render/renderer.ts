@@ -713,23 +713,37 @@ export class Renderer {
       ctx.ellipse(s.x, s.y - 4, 8, 4, 0, 0, Math.PI * 2);
       ctx.stroke();
     } else if (e.shape === "rock") {
-      ctx.fillStyle = "#8a8a92";
-      ctx.beginPath();
-      ctx.moveTo(s.x - 16, s.y);
-      ctx.lineTo(s.x - 6, s.y - 18);
-      ctx.lineTo(s.x + 10, s.y - 16);
-      ctx.lineTo(s.x + 18, s.y - 2);
-      ctx.lineTo(s.x + 6, s.y + 4);
-      ctx.closePath();
-      ctx.fill();
-      // shadow side
-      ctx.fillStyle = "#5e5e66";
-      ctx.beginPath();
-      ctx.moveTo(s.x + 10, s.y - 16);
-      ctx.lineTo(s.x + 18, s.y - 2);
-      ctx.lineTo(s.x + 6, s.y + 4);
-      ctx.closePath();
-      ctx.fill();
+      // Two flavors of rock:
+      //   - Gravemarch's Rock Wall: ownerId is set. Jagged, sharp,
+      //     varied per-rock — seeded by entity id so the same rock
+      //     always looks the same. Palette spans greys + blues from
+      //     Gravemarch's design so the wall reads as HIS work on
+      //     any map background. Black outline keeps it readable
+      //     against snow, dirt, conveyor steel, and cave gloom alike
+      //   - Static cave / forest decoration: ownerId is undefined.
+      //     Keep the original simple shape so existing maps look
+      //     identical to v1
+      if (e.ownerId !== undefined) {
+        this.drawJaggedWallRock(s.x, s.y, e.radius, e.id);
+      } else {
+        ctx.fillStyle = "#8a8a92";
+        ctx.beginPath();
+        ctx.moveTo(s.x - 16, s.y);
+        ctx.lineTo(s.x - 6, s.y - 18);
+        ctx.lineTo(s.x + 10, s.y - 16);
+        ctx.lineTo(s.x + 18, s.y - 2);
+        ctx.lineTo(s.x + 6, s.y + 4);
+        ctx.closePath();
+        ctx.fill();
+        // shadow side
+        ctx.fillStyle = "#5e5e66";
+        ctx.beginPath();
+        ctx.moveTo(s.x + 10, s.y - 16);
+        ctx.lineTo(s.x + 18, s.y - 2);
+        ctx.lineTo(s.x + 6, s.y + 4);
+        ctx.closePath();
+        ctx.fill();
+      }
     } else if (e.shape === "crate") {
       // Wooden warehouse crate — iso "cube" with darker right face
       // and slat lines so it reads as planking.
@@ -2130,6 +2144,136 @@ export class Renderer {
     // HP bar + name tag.
     ctx.globalAlpha = 1;
     this.drawCharacterHud(e, s.x, topY, def);
+  }
+
+  // Gravemarch Rock Wall rock — 9-vertex jagged silhouette with
+  // alternating spike + notch radii so the outline reads as SHARP
+  // rather than pebbly. Per-rock seed derived from the entity id
+  // picks the base color (mix of greys + Gravemarch's blue-stones
+  // so it reads as his work) AND randomizes the per-vertex angle
+  // jitter + radius noise so no two rocks in the same arc look
+  // alike. A heavy black outline guarantees the wall is visible
+  // on dirt, grass, snow, conveyor steel, or cave gloom alike.
+  private drawJaggedWallRock(
+    sx: number, sy: number, radius: number, entityId: number,
+  ): void {
+    const ctx = this.ctx;
+    // Deterministic per-rock RNG.
+    let seed = ((entityId * 9301 + 49297) % 233280) + 1;
+    const rand = (): number => {
+      seed = (seed * 9301 + 49297) % 233280;
+      return seed / 233280;
+    };
+    // Color palette — Gravemarch grey-blues. Index by seed so
+    // adjacent rocks pick different shades.
+    const PALETTE: { lit: string; shadow: string }[] = [
+      { lit: "#9aa3ad", shadow: "#586068" },  // light steel grey
+      { lit: "#7a828d", shadow: "#454c54" },  // mid grey
+      { lit: "#6e7681", shadow: "#3a4048" },  // dark grey
+      { lit: "#7488a8", shadow: "#3d4a64" },  // blue-grey
+      { lit: "#6a7e9e", shadow: "#34425a" },  // deeper blue-grey
+      { lit: "#5a8ec0", shadow: "#2a4e70" },  // accent blue (rare-ish)
+    ];
+    const colorIdx = Math.floor(rand() * PALETTE.length);
+    const { lit, shadow } = PALETTE[colorIdx]!;
+    // Vertex count: 8-11, more = chunkier outline. Bigger rocks
+    // get more vertices so the silhouette doesn't read as a low-
+    // poly d20.
+    const verts = 9 + Math.floor(rand() * 3);
+    // Build the jagged outline. Alternate spike (radius * 1.05–
+    // 1.18) and notch (radius * 0.55–0.78) vertices, with a
+    // small per-vertex angle jitter so spikes don't sit on a
+    // perfect polar grid. The aspect-y squash mimics the iso 2:1
+    // ground projection — rocks look squat from above, not round.
+    const points: { x: number; y: number }[] = [];
+    const aspectY = 0.72;
+    const angleOffset = rand() * Math.PI * 2;
+    for (let i = 0; i < verts; i++) {
+      const theta = angleOffset + (i / verts) * Math.PI * 2;
+      const jitter = (rand() - 0.5) * 0.18;
+      const a = theta + jitter;
+      const isSpike = i % 2 === 0;
+      const rMul = isSpike
+        ? 1.05 + rand() * 0.13
+        : 0.55 + rand() * 0.23;
+      const rr = radius * rMul;
+      points.push({
+        x: sx + Math.cos(a) * rr,
+        y: sy + Math.sin(a) * rr * aspectY,
+      });
+    }
+    // Fill — lit color.
+    ctx.fillStyle = lit;
+    ctx.beginPath();
+    ctx.moveTo(points[0]!.x, points[0]!.y);
+    for (let i = 1; i < points.length; i++) {
+      ctx.lineTo(points[i]!.x, points[i]!.y);
+    }
+    ctx.closePath();
+    ctx.fill();
+    // Shadow side — fill a triangle fan over the lower-right half
+    // of the rock to give it a clear lit/shadow split that matches
+    // the upper-left light direction used elsewhere.
+    ctx.fillStyle = shadow;
+    ctx.beginPath();
+    ctx.moveTo(sx, sy - radius * aspectY * 0.2);
+    let shadowStarted = false;
+    for (const p of points) {
+      // Right-of-center AND below-of-center vertices form the
+      // shadow region.
+      if (p.x > sx - radius * 0.1 && p.y > sy - radius * aspectY * 0.4) {
+        if (!shadowStarted) {
+          ctx.moveTo(sx, sy - radius * aspectY * 0.2);
+          ctx.lineTo(p.x, p.y);
+          shadowStarted = true;
+        } else {
+          ctx.lineTo(p.x, p.y);
+        }
+      }
+    }
+    if (shadowStarted) {
+      ctx.closePath();
+      ctx.fill();
+    }
+    // Heavy black outline — the readability guarantee.
+    ctx.strokeStyle = "#15181d";
+    ctx.lineWidth = Math.max(1.2, radius * 0.075);
+    ctx.lineJoin = "miter";
+    ctx.beginPath();
+    ctx.moveTo(points[0]!.x, points[0]!.y);
+    for (let i = 1; i < points.length; i++) {
+      ctx.lineTo(points[i]!.x, points[i]!.y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.lineJoin = "miter";
+    // Optional blue crack — show on ~half the rocks so the arc
+    // glints with Gravemarch's signature blue. One straight line
+    // from one spike vertex to a roughly-opposite one.
+    if (rand() < 0.55) {
+      const a = Math.floor(rand() * points.length);
+      const b = (a + Math.floor(verts / 2) + Math.floor(rand() * 2)) % points.length;
+      const pa = points[a]!;
+      const pb = points[b]!;
+      // Don't draw outside the silhouette — pull endpoints toward
+      // the center so the crack is contained.
+      const inset = 0.35;
+      const ax = pa.x + (sx - pa.x) * inset;
+      const ay = pa.y + (sy - pa.y) * inset;
+      const bx = pb.x + (sx - pb.x) * inset;
+      const by = pb.y + (sy - pb.y) * inset;
+      ctx.strokeStyle = "rgba(74, 158, 230, 0.85)";
+      ctx.lineWidth = Math.max(1, radius * 0.06);
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      // One dog-leg waypoint so the crack reads as a fracture
+      // rather than a ruler line.
+      const midX = (ax + bx) / 2 + (rand() - 0.5) * radius * 0.18;
+      const midY = (ay + by) / 2 + (rand() - 0.5) * radius * 0.18;
+      ctx.lineTo(midX, midY);
+      ctx.lineTo(bx, by);
+      ctx.stroke();
+    }
   }
 
   // Pair of small yellow boots sitting at the character's foot
