@@ -69,6 +69,12 @@ export interface TouchControlsHooks {
   // isTouchMode unconditionally (so the playing UI knows touch is in
   // use), but all gameplay-affecting logic gates on this.
   isPlaying: () => boolean;
+  // True when the local player owns Sprint Boots — gates whether the
+  // sprint button is rendered + hit-testable. Stays false on touch
+  // devices that haven't bought the item, so nothing changes for
+  // them. Optional for back-compat with callers that pre-date the
+  // sprint feature.
+  hasSprint?: () => boolean;
 }
 
 export class TouchControls {
@@ -82,20 +88,34 @@ export class TouchControls {
   private buttonTouches = new Map<number, number>();
   private pauseTouchId: number | null = null;
   private restartTouchId: number | null = null;
+  // Touch id holding the sprint button (null when no finger is holding it).
+  // sprintHeld in InputState is set to true while this is non-null and
+  // cleared the moment the finger releases.
+  private sprintTouchId: number | null = null;
 
   private readonly JOY_RADIUS = 80;
   private readonly JOY_DEADZONE = 0.15;
   private readonly BTN_R = 40;
   private readonly PAUSE_R = 22;
+  // Sprint button — bottom-left corner, smaller than ability buttons
+  // so it doesn't dominate the playspace.
+  private readonly SPRINT_R = 36;
 
   private abilityButtons: AbilityButton[] = [];
   private pauseButton: CircleHit = { x: 0, y: 0, r: this.PAUSE_R };
+  private sprintButton: CircleHit = { x: 0, y: 0, r: this.SPRINT_R };
+  // Stashed from bind() so draw() can ask whether to render the
+  // sprint button without taking a new arg (draw() is called from
+  // both local and net code paths and we don't want to thread a
+  // new param through both).
+  private hasSprintFn: (() => boolean) | null = null;
 
   bind(
     canvas: HTMLCanvasElement,
     getDims: () => { w: number; h: number },
     hooks: TouchControlsHooks,
   ): void {
+    this.hasSprintFn = hooks.hasSprint ?? null;
     const pointFromTouch = (t: Touch): Point => {
       const rect = canvas.getBoundingClientRect();
       return { x: t.clientX - rect.left, y: t.clientY - rect.top };
@@ -133,6 +153,17 @@ export class TouchControls {
         // (Don't fire abilities or engage joystick while paused.)
         if (hooks.isPaused()) {
           this.pauseTouchId = t.identifier;
+          continue;
+        }
+
+        // Sprint button — only live when the player owns Sprint Boots.
+        // Hit-tested before the joystick spawn so a finger on the
+        // bottom-left button doesn't accidentally engage movement.
+        // Hold = sprint, release = stop (matches Shift on PC and RT
+        // on gamepad).
+        if (this.sprintAvailable(hooks) && this.hitCircle(p, this.sprintButton)) {
+          this.sprintTouchId = t.identifier;
+          hooks.input.sprintHeld = true;
           continue;
         }
 
@@ -199,6 +230,10 @@ export class TouchControls {
             hooks.restart();
           }
         }
+        if (this.sprintTouchId === t.identifier) {
+          this.sprintTouchId = null;
+          hooks.input.sprintHeld = false;
+        }
       }
       this.writeJoystickToInput(hooks);
     };
@@ -240,6 +275,14 @@ export class TouchControls {
 
   private recomputeHitZones(dims: { w: number; h: number }, world: World): void {
     this.pauseButton = { x: dims.w - 36, y: 36, r: this.PAUSE_R };
+    // Sprint button — fixed bottom-left corner. Always recomputed
+    // regardless of whether the player has sprint; the live gate is
+    // sprintAvailable() at hit-test time.
+    this.sprintButton = {
+      x: this.SPRINT_R + 20,
+      y: dims.h - this.SPRINT_R - 24,
+      r: this.SPRINT_R,
+    };
 
     const player = world.playerCharacter();
     const abilityIds: (string | undefined)[] = player
@@ -261,6 +304,10 @@ export class TouchControls {
       });
     }
     this.abilityButtons = out;
+  }
+
+  private sprintAvailable(hooks: TouchControlsHooks): boolean {
+    return hooks.hasSprint ? hooks.hasSprint() : false;
   }
 
   draw(
@@ -287,6 +334,11 @@ export class TouchControls {
     if (player && outcome === "ongoing") {
       for (const btn of this.abilityButtons) {
         this.drawAbilityButton(ctx, btn, player, paused);
+      }
+      // Sprint button — only rendered when the player owns Sprint
+      // Boots. Stamina ring around the rim drains and refills.
+      if (this.hasSprintFn && this.hasSprintFn()) {
+        this.drawSprintButton(ctx, this.sprintButton, player, paused);
       }
     }
 
@@ -348,6 +400,63 @@ export class TouchControls {
     ctx.beginPath();
     ctx.arc(o.x + dx, o.y + dy, 26, 0, Math.PI * 2);
     ctx.fill();
+  }
+
+  // Sprint button: filled circle in the corner with a footprint /
+  // running-shoe glyph. Outer rim doubles as a stamina ring —
+  // depleted region grays out. Pressed state lights the rim yellow.
+  private drawSprintButton(
+    ctx: CanvasRenderingContext2D,
+    btn: CircleHit,
+    player: CharacterEntity,
+    paused: boolean,
+  ): void {
+    const stamina = Math.max(0, Math.min(1, player.stamina ?? 1));
+    const held = this.sprintTouchId !== null;
+    const baseAlpha = paused ? 0.4 : 0.75;
+
+    // Body fill.
+    ctx.fillStyle = held && stamina > 0
+      ? `rgba(80, 60, 18, ${baseAlpha})`
+      : `rgba(28, 28, 28, ${baseAlpha})`;
+    ctx.beginPath();
+    ctx.arc(btn.x, btn.y, btn.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Stamina ring — depleted arc rendered dark, remaining arc bright.
+    const ringR = btn.r - 4;
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
+    ctx.beginPath();
+    ctx.arc(btn.x, btn.y, ringR, 0, Math.PI * 2);
+    ctx.stroke();
+    if (stamina > 0) {
+      ctx.strokeStyle = held ? "#ffd84a" : "#7ec8ff";
+      ctx.beginPath();
+      ctx.arc(
+        btn.x, btn.y, ringR,
+        -Math.PI / 2,
+        -Math.PI / 2 + stamina * Math.PI * 2,
+      );
+      ctx.stroke();
+    }
+
+    // Lightning bolt glyph — same visual language as the shop icon.
+    const u = btn.r * 0.05;
+    ctx.fillStyle = stamina > 0 ? "#fff45e" : "rgba(255, 255, 255, 0.25)";
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.5)";
+    ctx.lineWidth = Math.max(1, u);
+    ctx.beginPath();
+    ctx.moveTo(btn.x - 2 * u, btn.y - 10 * u);
+    ctx.lineTo(btn.x - 8 * u, btn.y +  0 * u);
+    ctx.lineTo(btn.x - 2 * u, btn.y +  0 * u);
+    ctx.lineTo(btn.x - 6 * u, btn.y + 10 * u);
+    ctx.lineTo(btn.x + 6 * u, btn.y -  2 * u);
+    ctx.lineTo(btn.x +  0 * u, btn.y -  2 * u);
+    ctx.lineTo(btn.x + 4 * u, btn.y - 10 * u);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
   }
 
   private drawAbilityButton(

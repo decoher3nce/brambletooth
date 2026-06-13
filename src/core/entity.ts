@@ -162,6 +162,11 @@ export interface PropEntity extends BaseEntity {
   // (trees, crates, crystals) leave it undefined and live for
   // the whole round.
   ttl?: number;
+  // Optional caster id — when set, this prop ignores hard collision
+  // AND brush slow for the entity with that id. Used by Gravemarch's
+  // Rock Wall so the caster can walk through their own arc while
+  // every other character is blocked + brush-slowed by it.
+  ownerId?: EntityId;
 }
 
 // Iron plate placed by Magnek. Persistent (no ttl), non-blocking, navigable

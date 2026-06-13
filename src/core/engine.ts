@@ -669,6 +669,9 @@ export class Engine {
       const isPropObstacle = isProp(e) && e.blocking;
       const isAnimalObstacle = isAnimal(e) && !e.dead;
       if (!isPropObstacle && !isAnimalObstacle) continue;
+      // Owner-passable props (e.g. Gravemarch's Rock Wall) don't
+      // brush their caster — they walk through cleanly.
+      if (isPropObstacle && (e as PropEntity).ownerId === c.id) continue;
       const dx = c.pos.x - e.pos.x;
       const dy = c.pos.y - e.pos.y;
       const d = Math.hypot(dx, dy);
@@ -737,6 +740,9 @@ export class Engine {
         const isBlocker =
           (isProp(e) && e.blocking) || (isAnimal(e) && !e.dead);
         if (!isBlocker) continue;
+        // Owner-passable props (Gravemarch Rock Wall) — caster
+        // doesn't collide with their own arc.
+        if (isProp(e) && (e as PropEntity).ownerId === c.id) continue;
         const coreR = e.radius * CORE_FRAC;
         const dx = p.x - e.pos.x;
         const dy = p.y - e.pos.y;

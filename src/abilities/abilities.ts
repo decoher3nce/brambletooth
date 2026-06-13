@@ -412,10 +412,16 @@ registerAbility({
 
 export const GRAVEMARCH_SLASH_DAMAGE = 23;
 export const ROCK_WALL_TTL = 10;          // seconds the rocks persist
-export const ROCK_WALL_ROCK_COUNT = 5;    // rocks per wall
-export const ROCK_WALL_SPACING = 56;      // gap between adjacent rocks
+export const ROCK_WALL_ROCK_COUNT = 7;    // rocks per arc
+export const ROCK_WALL_START_OFFSET = 90; // pixels ahead of Gravemarch before the arc starts
+export const ROCK_WALL_HALF_WIDTH = 150;  // perpendicular half-span of the arc (pixels)
+export const ROCK_WALL_CURVE_DEPTH = 70;  // how far the arc's midpoint bows toward the survivor
+// Radii pattern across the 7 rocks (centered, symmetric, biggest in
+// the middle). Each entry is a rock's pixel radius.
+export const ROCK_WALL_RADII = [20, 26, 18, 30, 18, 26, 20] as const;
 export const ROCK_SHIELD_DURATION = 10;   // seconds of damage immunity
 export const STONE_STEP_DURATION = 0.55;  // seconds the tunnel arc takes
+export const STONE_STEP_DISTANCE = 320;   // pixels Gravemarch surfaces ahead of his start point
 
 // Heavy stone swipe — 23 dmg variant of Slagy's slash, slightly
 // longer reach to reflect Gravemarch's size + mace.
@@ -456,33 +462,77 @@ registerAbility({
   },
 });
 
-// Rock Wall — slam the ground at the aim point; rocks erupt in a
-// line PERPENDICULAR to the aim direction so the wall cuts across
-// a survivor's escape route. Rocks are real blocking props with a
-// ttl — they auto-despawn after ROCK_WALL_TTL seconds.
+// Rock Wall — slam the ground; rocks of varying size erupt in an
+// arc that starts a little ahead of Gravemarch and bows TOWARD the
+// nearest survivor. The convex side of the arc faces the survivor,
+// so the wall's edges pinch in around their escape angles.
+//
+// Each rock is owner-tagged with caster.id; the engine's brush
+// + collision paths skip props whose ownerId matches the entity
+// they're testing, so Gravemarch walks through cleanly while every
+// other character is hard-blocked at the core and brush-slowed
+// at the edges. The arc auto-despawns after ROCK_WALL_TTL.
 registerAbility({
   id: "rock_wall",
   name: "Rock Wall",
-  description: `Slam the floor; ${ROCK_WALL_ROCK_COUNT} rocks erupt as a wall at your aim. Lasts ${ROCK_WALL_TTL}s.`,
+  description: `${ROCK_WALL_ROCK_COUNT} rocks erupt in an arc curving toward the nearest survivor. You walk through; they don't. Lasts ${ROCK_WALL_TTL}s.`,
   cooldown: 14,
   chargeTime: 0.7,
   cast: () => { /* windup, no-op until charge completes */ },
   onChargeComplete: ({ world, caster, aim }) => {
-    // Direction caster aimed; wall is perpendicular to this.
-    const dir = normalize(sub(aim, caster.pos));
-    const perpX = -dir.y;
-    const perpY = dir.x;
-    for (let i = 0; i < ROCK_WALL_ROCK_COUNT; i++) {
-      const offset = (i - (ROCK_WALL_ROCK_COUNT - 1) / 2) * ROCK_WALL_SPACING;
-      const px = aim.x + perpX * offset;
-      const py = aim.y + perpY * offset;
+    // Forward direction: prefer the nearest living survivor (the
+    // intuitive "the wall arcs to cut THEM off" behavior). Fall
+    // back to the caster's aim vector when no survivor exists
+    // (e.g. FFA with no survivor team, or all already exited).
+    const survivors = world.ffaMode
+      ? world.allCharacters().filter((c) => c.id !== caster.id && !c.dead)
+      : world.charactersOnTeam("survivor").filter((c) => !c.dead);
+    let target: Vec2 = aim;
+    if (survivors.length > 0) {
+      let best = survivors[0]!;
+      let bestD = dist(caster.pos, best.pos);
+      for (let i = 1; i < survivors.length; i++) {
+        const s = survivors[i]!;
+        const d = dist(caster.pos, s.pos);
+        if (d < bestD) { best = s; bestD = d; }
+      }
+      target = best.pos;
+    }
+    let dir = sub(target, caster.pos);
+    if (dir.x * dir.x + dir.y * dir.y < 1) {
+      // Degenerate (target on top of caster) — face east as a fallback
+      // so we never spawn the arc on top of Gravemarch.
+      dir = { x: 1, y: 0 };
+    } else {
+      dir = normalize(dir);
+    }
+    const perp: Vec2 = { x: -dir.y, y: dir.x };
+    // Arc anchor: a fixed distance ahead of Gravemarch so the wall
+    // doesn't spawn ON him.
+    const anchor: Vec2 = add(caster.pos, scale(dir, ROCK_WALL_START_OFFSET));
+    // Place each rock parametrized by t in [-1, +1] across the
+    // perpendicular span, bowed forward by curve_depth * (1 - t^2)
+    // so the midpoint (t=0) reaches farthest toward the survivor.
+    const b = world.arena.bounds;
+    const n: number = ROCK_WALL_ROCK_COUNT;
+    for (let i = 0; i < n; i++) {
+      const t = n <= 1 ? 0 : (i - (n - 1) / 2) / ((n - 1) / 2); // -1..+1
+      const bow = (1 - t * t) * ROCK_WALL_CURVE_DEPTH;
+      const px = anchor.x + perp.x * t * ROCK_WALL_HALF_WIDTH + dir.x * bow;
+      const py = anchor.y + perp.y * t * ROCK_WALL_HALF_WIDTH + dir.y * bow;
+      const radius = ROCK_WALL_RADII[i] ?? 22;
+      // Clamp inside arena so a wall slammed near the edge doesn't
+      // spawn rocks outside the playable area.
+      const cx = Math.max(b.minX + radius, Math.min(b.maxX - radius, px));
+      const cy = Math.max(b.minY + radius, Math.min(b.maxY - radius, py));
       world.spawn<PropEntity>({
         kind: "prop",
-        pos: { x: px, y: py },
-        radius: 22,
+        pos: { x: cx, y: cy },
+        radius,
         shape: "rock",
         blocking: true,
         ttl: ROCK_WALL_TTL,
+        ownerId: caster.id,
         dead: false,
       });
     }
@@ -505,7 +555,16 @@ registerAbility({
   },
 });
 
-// Stone Step — tunnel underground and surface at the aim point.
+// Stone Step — tunnel underground and surface a FIXED distance
+// ahead in the aim direction. Previously surfaced at the raw aim
+// point, which produced two problems: on iPad the aim could land
+// arbitrarily close (tiny hop) or arbitrarily far (off-map surface
+// that the clamp would then snap to a wall); on PC the player
+// could fling Gravemarch into a wall by aiming near the bounds.
+// Fixed-distance semantics are identical on both input modes and
+// always produce a predictable arrival point that's clamped to
+// arena bounds.
+//
 // Uses the existing TransportState arc so the character is non-
 // interactive during the move (no input, no damage applied). The
 // "stone_step" source string lets the renderer hide the body and
@@ -513,14 +572,37 @@ registerAbility({
 registerAbility({
   id: "stone_step",
   name: "Stone Step",
-  description: "Tunnel under the ground and surface at your aim point.",
+  description: "Tunnel a fixed distance forward and surface. Aim sets the direction.",
   cooldown: 11,
   chargeTime: 0.3,
   cast: () => { /* windup */ },
-  onChargeComplete: ({ caster, aim }) => {
+  onChargeComplete: ({ world, caster, aim }) => {
+    // Direction from caster toward aim. If aim is degenerate
+    // (touch with no movement, or cursor on top of caster), fall
+    // back to the caster's last velocity, then east.
+    let dir = sub(aim, caster.pos);
+    let lenSq = dir.x * dir.x + dir.y * dir.y;
+    if (lenSq < 1) {
+      dir = { x: caster.vel.x, y: caster.vel.y };
+      lenSq = dir.x * dir.x + dir.y * dir.y;
+    }
+    if (lenSq < 0.0001) {
+      dir = { x: 1, y: 0 };
+    } else {
+      dir = normalize(dir);
+    }
+    const raw = add(caster.pos, scale(dir, STONE_STEP_DISTANCE));
+    // Clamp to arena bounds so the surface point is always on
+    // the map, even when Gravemarch is near an edge.
+    const b = world.arena.bounds;
+    const r = caster.radius;
+    const toPos: Vec2 = {
+      x: Math.max(b.minX + r, Math.min(b.maxX - r, raw.x)),
+      y: Math.max(b.minY + r, Math.min(b.maxY - r, raw.y)),
+    };
     caster.transport = {
       fromPos: { ...caster.pos },
-      toPos: { ...aim },
+      toPos,
       elapsed: 0,
       duration: STONE_STEP_DURATION,
       source: "stone_step",

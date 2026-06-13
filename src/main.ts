@@ -546,6 +546,7 @@ touchControls.bind(canvas, logicalSize, {
       : appMode === "local"
         ? scene === "playing"
         : false,
+  hasSprint: () => hasSprintBoots(),
 });
 
 // --- Title screen + back-button input ---
