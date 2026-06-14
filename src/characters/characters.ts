@@ -63,7 +63,7 @@ export const CHARACTERS: Record<string, CharacterDef> = {
       { label: "HP", value: "80" },
       { label: "Speed", value: "165" },
       { label: "Overdrive boost", value: "1.35× for 2.5s" },
-      { label: "Glitch range", value: "140 units" },
+      { label: "Glitch range", value: "60–300 units (hold to charge)" },
     ],
   },
   magnek: {

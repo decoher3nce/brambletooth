@@ -2371,6 +2371,38 @@ export class Renderer {
       ctx.stroke();
     }
 
+    // Hold-to-cast windup (Glitch). Cyan/pink charge ring that
+    // FILLS as the button is held — opposite visual semantic from
+    // the channel ring (which empties). At full charge the ring
+    // pulses white to telegraph "release now for max range."
+    if (e.holdCharging) {
+      const ability = ABILITIES[e.holdCharging.abilityId];
+      const max = ability?.holdToCharge?.maxChargeTime ?? 1;
+      const pct = Math.max(0, Math.min(1, e.holdCharging.elapsed / Math.max(0.001, max)));
+      const isFull = pct >= 0.999;
+      // Inner steady ring — always visible while held.
+      ctx.strokeStyle = "rgba(120, 180, 255, 0.45)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(s.x, centerY, e.radius + 6, 0, Math.PI * 2);
+      ctx.stroke();
+      // Progress arc — fills clockwise from the top.
+      const arcColor = isFull
+        ? `rgba(255, 255, 255, ${0.6 + 0.4 * Math.sin(performance.now() / 90)})`
+        : "rgba(180, 220, 255, 0.95)";
+      ctx.strokeStyle = arcColor;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(
+        s.x,
+        centerY,
+        e.radius + 6,
+        -Math.PI / 2,
+        -Math.PI / 2 + pct * Math.PI * 2,
+      );
+      ctx.stroke();
+    }
+
     // Status effect indicators.
     if (e.statuses["overdrive"] > 0) {
       ctx.strokeStyle = "rgba(255, 200, 80, 0.7)";

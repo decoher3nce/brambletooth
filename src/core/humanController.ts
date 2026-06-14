@@ -85,12 +85,27 @@ export class HumanController implements Controller {
     }
 
     const fired: string[] = [];
+    const held = new Set<string>();
     const def = CHARACTERS[self.characterId];
+    // Per-slot held-state lookup: gamepad + touch carry an explicit
+    // mirror in InputState; keyboard reads the live key set. The
+    // engine uses this for hold-to-cast abilities (Glitch) — see
+    // the hold-charge tick block in engine.ts.
+    const isSlotHeld = (i: number): boolean => {
+      if (input.isGamepadMode) return !!input.gamepadAbilityHeld[i];
+      if (input.isTouchMode) return !!input.touchAbilityHeld[i];
+      const k = ABILITY_KEYS[i];
+      return k ? input.keys.has(k) : false;
+    };
     for (let i = 0; i < ABILITY_KEYS.length; i++) {
       const k = ABILITY_KEYS[i];
       if (input.pressedAbilities.has(k)) {
         const aId = def.abilities[i];
         if (aId) fired.push(aId);
+      }
+      if (isSlotHeld(i)) {
+        const aId = def.abilities[i];
+        if (aId) held.add(aId);
       }
     }
     // Mouse click = first ability. Skipped in touch + gamepad
@@ -115,6 +130,6 @@ export class HumanController implements Controller {
     // requires stamina > 0 to actually apply the boost.
     const sprintHeld = input.sprintHeld && (this.canSprint?.() ?? true);
 
-    return { moveDir, aim, abilitiesToFire: fired, sprintHeld };
+    return { moveDir, aim, abilitiesToFire: fired, sprintHeld, abilitiesHeld: held };
   }
 }

@@ -249,6 +249,13 @@ export class Engine {
       if (c.statuses["overdrive"] > 0) speedMult *= 1.35;
       if (c.statuses["slowed"] > 0) speedMult *= 0.5;
       if (dangerMode && c.team === "hunter") speedMult *= 1.1;
+      // Hold-to-cast windup (Glitch) drags the caster while held.
+      // Read the ability's slowFactor directly so each hold-to-cast
+      // ability can tune its own movement penalty.
+      if (c.holdCharging) {
+        const cfg = ABILITIES[c.holdCharging.abilityId]?.holdToCharge;
+        if (cfg) speedMult *= cfg.slowFactor;
+      }
 
       // Sprint: held + has stamina → +10% speed and drain.
       // When not sprinting, regen — faster when standing still
@@ -518,11 +525,20 @@ export class Engine {
         if (!def.abilities.includes(abilityId)) continue;
         const ability = ABILITIES[abilityId];
         if (!ability) continue;
+        // Hold-to-cast abilities (Glitch): if the SAME ability is
+        // also currently held (human player), the dedicated
+        // hold-charge block below owns it — skip here so the press
+        // doesn't fire it at full power AND start a hold-charge.
+        // If NOT held (AI controller, which only ever does press),
+        // fall through and fire it at default chargeFraction = 1
+        // (full power) — matches the AI's "treat it as a one-shot"
+        // expectation.
+        if (ability.holdToCharge && intent.abilitiesHeld?.has(abilityId)) continue;
         // Cooldown check
         if ((c.cooldowns[abilityId] ?? 0) > 0) continue;
         // Don't start a new cast while already channeling something or
         // mid-transport (Magnesis arc, etc.).
-        if (c.charging || c.transport) continue;
+        if (c.charging || c.transport || c.holdCharging) continue;
         const ctx = { world, caster: c, aim: intent.aim };
         // Optional pre-condition gate. If it refuses, no cd, no channel.
         if (ability.canCast && !ability.canCast(ctx)) continue;
@@ -559,6 +575,64 @@ export class Engine {
         const ability = ABILITIES[abilityId];
         if (ability?.onChargeComplete) {
           ability.onChargeComplete({ world, caster: c, aim });
+        }
+      }
+    }
+
+    // 3c) Hold-to-cast windups (Match's Glitch). Three branches:
+    //   - HELD + already hold-charging → tick elapsed, refresh aim
+    //   - RELEASED + hold-charging → fire cast(chargeFraction),
+    //     apply cooldown, clear state
+    //   - HELD + not hold-charging + no cooldown + no other
+    //     channel/transport → start. Cooldown is checked at START
+    //     so a held button while on cooldown is a no-op (the
+    //     player has to release and re-press after cd expires)
+    // Slow is applied separately by the speedMult block in the
+    // movement loop while c.holdCharging is set.
+    for (const c of world.allCharacters()) {
+      if (c.dead || c.exited) continue;
+      const intent = intents.get(c.id);
+      if (!intent) continue;
+      const def = CHARACTERS[c.characterId];
+      const heldSet = intent.abilitiesHeld;
+      if (c.holdCharging) {
+        const ability = ABILITIES[c.holdCharging.abilityId];
+        const cfg = ability?.holdToCharge;
+        const heldNow = !!heldSet?.has(c.holdCharging.abilityId);
+        if (heldNow && cfg) {
+          // Tick — cap at maxChargeTime. Refresh aim so the
+          // teleport direction follows the player's pointer.
+          c.holdCharging.elapsed = Math.min(
+            cfg.maxChargeTime,
+            c.holdCharging.elapsed + dt,
+          );
+          c.holdCharging.aim = { ...intent.aim };
+        } else {
+          // Fire on release (or on ability being lost / config
+          // disappearing — defensive).
+          const abilityId = c.holdCharging.abilityId;
+          const aim = c.holdCharging.aim;
+          const elapsed = c.holdCharging.elapsed;
+          const max = cfg?.maxChargeTime ?? 1;
+          const chargeFraction = Math.max(0, Math.min(1, elapsed / Math.max(0.001, max)));
+          c.holdCharging = undefined;
+          if (ability) {
+            ability.cast({ world, caster: c, aim, chargeFraction });
+            let cdMult = c.invincible ? 1 / 1.5 : 1;
+            if (dangerMode && c.team === "hunter") cdMult *= 0.9;
+            c.cooldowns[abilityId] = ability.cooldown * cdMult;
+          }
+        }
+      } else if (heldSet && !c.charging && !c.transport) {
+        for (const abilityId of heldSet) {
+          if (!def.abilities.includes(abilityId)) continue;
+          const ability = ABILITIES[abilityId];
+          if (!ability?.holdToCharge) continue;
+          if ((c.cooldowns[abilityId] ?? 0) > 0) continue;
+          const ctx = { world, caster: c, aim: intent.aim };
+          if (ability.canCast && !ability.canCast(ctx)) continue;
+          c.holdCharging = { abilityId, elapsed: 0, aim: { ...intent.aim } };
+          break; // only one hold-charge at a time
         }
       }
     }

@@ -24,6 +24,12 @@ export interface AbilityContext {
   caster: CharacterEntity;
   // World-space aim point (mouse position projected to ground).
   aim: Vec2;
+  // For hold-to-cast abilities, the 0..1 fraction of maxChargeTime
+  // that elapsed before release. Press-fire abilities pass 1 by
+  // default (full power). Hold-to-cast abilities (Glitch) use this
+  // to scale their effect — e.g. teleport distance is lerped
+  // between MIN_DIST and MAX_DIST by this value.
+  chargeFraction?: number;
 }
 
 export interface AbilityDef {
@@ -41,6 +47,19 @@ export interface AbilityDef {
   // when the timer expires.
   chargeTime?: number; // seconds
   onChargeComplete?: (ctx: AbilityContext) => void;
+  // Hold-to-cast windup. When set, the engine treats this ability as
+  // press-and-hold: the player holds the ability button, the engine
+  // accumulates `elapsed` up to `maxChargeTime`, and the cast() runs
+  // on RELEASE with the resulting chargeFraction. While held, the
+  // character is slowed to `slowFactor` of base speed (e.g. 0.45 =
+  // 45% movement). Cooldown applies at release time, not press
+  // time. Hold-to-cast abilities are ignored by the press path
+  // (abilitiesToFire) — the engine processes them only via the
+  // hold-charge tick block.
+  holdToCharge?: {
+    maxChargeTime: number;  // seconds — caps the windup
+    slowFactor: number;     // 0..1 movement multiplier while held
+  };
   // Optional gate run at cast-time before any channel begins. Return
   // false to refuse the cast — engine treats it as if no press happened
   // (no cooldown applied, no channel started). Used by abilities like
@@ -200,20 +219,39 @@ registerAbility({
   },
 });
 
+// Range bounds for Glitch. A tap-and-release (chargeFraction near 0)
+// teleports the minimum distance; a fully held charge teleports the
+// max. Lerped linearly between the two by chargeFraction.
+export const GLITCH_MIN_DISTANCE = 60;
+export const GLITCH_MAX_DISTANCE = 300;
+export const GLITCH_MAX_CHARGE = 1.5;     // seconds to fully charge
+export const GLITCH_SLOW_FACTOR = 0.45;   // movement multiplier while held
+
 registerAbility({
   id: "glitch",
   name: "Glitch",
-  description: "Short-range teleport.",
+  description: `Hold to charge, release to teleport. ${GLITCH_MIN_DISTANCE}–${GLITCH_MAX_DISTANCE}px range. Slowed while charging.`,
   cooldown: 3.5,
-  cast: ({ world, caster, aim }) => {
+  holdToCharge: {
+    maxChargeTime: GLITCH_MAX_CHARGE,
+    slowFactor: GLITCH_SLOW_FACTOR,
+  },
+  // Engine fires this on RELEASE with chargeFraction populated.
+  // chargeFraction defaults to 1 for callers that don't supply it
+  // (e.g. AI controllers that route through the press path) so the
+  // ability stays usable in either firing mode.
+  cast: ({ world, caster, aim, chargeFraction }) => {
+    const f = Math.max(0, Math.min(1, chargeFraction ?? 1));
+    const distance = GLITCH_MIN_DISTANCE + (GLITCH_MAX_DISTANCE - GLITCH_MIN_DISTANCE) * f;
     const dir = normalize(sub(aim, caster.pos));
-    const distance = 140;
     const target = add(caster.pos, scale(dir, distance));
     const b = world.arena.bounds;
     target.x = Math.max(b.minX + caster.radius, Math.min(b.maxX - caster.radius, target.x));
     target.y = Math.max(b.minY + caster.radius, Math.min(b.maxY - caster.radius, target.y));
     caster.pos = target;
-    // Small i-frame: grant brief "phased" status (1.0s of damage immunity could go here)
+    // Small i-frame: brief damage immunity at the teleport endpoint
+    // so a survivor doesn't blink in and immediately eat the hunter's
+    // next swing.
     caster.statuses["phased"] = 0.25;
   },
 });

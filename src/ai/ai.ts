@@ -18,6 +18,12 @@ export interface AIIntent {
   // in v1; only HumanController does (gated on shop ownership
   // via the canSprint callback).
   sprintHeld?: boolean;
+  // Ability ids whose button is currently HELD. Used by hold-to-
+  // cast abilities (Glitch) so the engine can tick a charge timer
+  // while held and fire on release. AI controllers don't populate
+  // this — they use abilitiesToFire (one-shot press) for the
+  // same abilities, just with a fixed charge fraction.
+  abilitiesHeld?: Set<string>;
 }
 
 export interface AIController {

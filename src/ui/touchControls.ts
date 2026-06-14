@@ -175,6 +175,12 @@ export class TouchControls {
             this.buttonTouches.set(t.identifier, btn.slotIndex);
             const key = ABILITY_KEY_BY_SLOT[btn.slotIndex];
             if (key) hooks.input.pressedAbilities.add(key);
+            // Mirror as held — hold-to-cast abilities (Glitch)
+            // need to know the finger is still on the button.
+            // Cleared in touchend when the finger releases.
+            if (btn.slotIndex >= 0 && btn.slotIndex < 4) {
+              hooks.input.touchAbilityHeld[btn.slotIndex] = true;
+            }
             consumed = true;
             break;
           }
@@ -214,7 +220,18 @@ export class TouchControls {
           this.joystick.touchId = null;
         }
         if (this.buttonTouches.has(t.identifier)) {
+          const slot = this.buttonTouches.get(t.identifier)!;
           this.buttonTouches.delete(t.identifier);
+          // Clear the slot's held mirror only if no OTHER touch is
+          // still on the same button (rare on iPad but cheap to
+          // check).
+          let stillHeld = false;
+          for (const slotIdx of this.buttonTouches.values()) {
+            if (slotIdx === slot) { stillHeld = true; break; }
+          }
+          if (!stillHeld && slot >= 0 && slot < 4) {
+            hooks.input.touchAbilityHeld[slot] = false;
+          }
         }
         if (this.pauseTouchId === t.identifier) {
           this.pauseTouchId = null;

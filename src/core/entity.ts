@@ -42,6 +42,18 @@ export interface ChannelState {
   aim: Vec2; // aim at cast-start (some channels read this on completion)
 }
 
+// An active hold-to-cast windup. The player is holding the ability
+// button; the engine increments `elapsed` (capped at the ability's
+// maxChargeTime) each tick, slows the character per the ability's
+// slowFactor, and tracks the current aim so the cast direction
+// follows the player's pointer. On release, the engine fires the
+// ability with chargeFraction = elapsed / maxChargeTime.
+export interface HoldChargeState {
+  abilityId: string;
+  elapsed: number;  // seconds held so far
+  aim: Vec2;        // latest aim point (refreshed each tick)
+}
+
 // An in-flight ability-driven travel arc. While present, the engine
 // drives the character's position along the path from fromPos -> toPos
 // over `duration` seconds using a cubic ease (accelerate + decelerate),
@@ -78,6 +90,13 @@ export interface CharacterEntity extends BaseEntity {
   isPlayer: boolean;
   // Active channeled-ability state (undefined when not channeling).
   charging?: ChannelState;
+  // Active hold-to-cast windup (Match's Glitch). Distinct from
+  // ChannelState — the player holds an ability button and the
+  // engine ticks `elapsed` upward (capped at the ability's
+  // maxChargeTime). On release, the ability's cast fires with the
+  // accrued chargeFraction. Movement is slowed by the ability's
+  // slowFactor while this is set.
+  holdCharging?: HoldChargeState;
   // Active ability-driven transport (e.g. Magnesis). When set, the
   // engine steers this character along an eased arc, ignoring move
   // input + obstacle collision; damage still applies.

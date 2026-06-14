@@ -40,6 +40,15 @@ export interface InputState {
   // boost. The gate on whether sprint is even ALLOWED (shop
   // ownership) lives in HumanController, not here.
   sprintHeld: boolean;
+  // Per-slot HELD state of the four ability buttons (slots
+  // 0..3). HumanController reads this to build the
+  // abilitiesHeld set for hold-to-cast abilities (Glitch).
+  // Keyboard uses input.keys directly (q/e/r/f), so these
+  // mirrors only carry the touch + gamepad paths where the
+  // raw "is the button currently down" signal isn't otherwise
+  // available. Length always 4, padded with false.
+  gamepadAbilityHeld: boolean[];
+  touchAbilityHeld: boolean[];
 }
 
 export function createInput(): InputState {
@@ -57,6 +66,8 @@ export function createInput(): InputState {
     gamepadAim: { x: 0, y: 0 },
     gamepadStartPressed: false,
     sprintHeld: false,
+    gamepadAbilityHeld: [false, false, false, false],
+    touchAbilityHeld: [false, false, false, false],
   };
 }
 
@@ -203,11 +214,18 @@ export function pollGamepad(input: InputState): void {
 
   // ---- Buttons ----
   // Face cluster -> ability slots in the same order as q/e/r/f
-  // (south=Q, east=E, west=R, north=F). Edge-triggered.
+  // (south=Q, east=E, west=R, north=F). Edge-triggered for the
+  // press signal (abilitiesToFire) AND mirrored as held state
+  // into gamepadAbilityHeld so hold-to-cast abilities (Glitch)
+  // can read the live "is the button currently pressed" state.
   fireOnEdge(pad, BTN_SOUTH, 0, input);
   fireOnEdge(pad, BTN_EAST, 1, input);
   fireOnEdge(pad, BTN_WEST, 2, input);
   fireOnEdge(pad, BTN_NORTH, 3, input);
+  input.gamepadAbilityHeld[0] = !!pad.buttons[BTN_SOUTH]?.pressed;
+  input.gamepadAbilityHeld[1] = !!pad.buttons[BTN_EAST]?.pressed;
+  input.gamepadAbilityHeld[2] = !!pad.buttons[BTN_WEST]?.pressed;
+  input.gamepadAbilityHeld[3] = !!pad.buttons[BTN_NORTH]?.pressed;
 
   // Start button: edge-trigger a pause toggle. main.ts reads +
   // clears gamepadStartPressed.
