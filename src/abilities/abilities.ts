@@ -450,13 +450,20 @@ registerAbility({
 
 export const GRAVEMARCH_SLASH_DAMAGE = 40;
 export const ROCK_WALL_TTL = 10;          // seconds the rocks persist
-export const ROCK_WALL_ROCK_COUNT = 7;    // rocks per arc
-export const ROCK_WALL_START_OFFSET = 90; // pixels ahead of Gravemarch before the arc starts
-export const ROCK_WALL_HALF_WIDTH = 150;  // perpendicular half-span of the arc (pixels)
-export const ROCK_WALL_CURVE_DEPTH = 70;  // how far the arc's midpoint bows toward the survivor
-// Radii pattern across the 7 rocks (centered, symmetric, biggest in
-// the middle). Each entry is a rock's pixel radius.
-export const ROCK_WALL_RADII = [20, 26, 18, 30, 18, 26, 20] as const;
+// Rock Wall is HOLD-TO-CAST. A quick tap lays a compact arc directly
+// in front of Gravemarch; holding lerps every shape parameter toward
+// its MAX value so the longer you hold the more rocks, the further
+// out, and the more pronounced the curve in the direction you aim.
+export const ROCK_WALL_BASE_COUNT = 7;        // tap: rocks placed
+export const ROCK_WALL_MAX_COUNT = 12;        // full charge: rocks placed
+export const ROCK_WALL_BASE_START_OFFSET = 90;   // tap: pixels ahead of Gravemarch
+export const ROCK_WALL_MAX_START_OFFSET = 140;   // full charge: anchor further out
+export const ROCK_WALL_BASE_HALF_WIDTH = 150; // tap: perp half-span
+export const ROCK_WALL_MAX_HALF_WIDTH = 230;  // full charge: wider arc
+export const ROCK_WALL_BASE_CURVE = 70;       // tap: subtle bow
+export const ROCK_WALL_MAX_CURVE = 240;       // full charge: pronounced curve in aim direction
+export const ROCK_WALL_MAX_CHARGE = 1.0;      // seconds to fully charge
+export const ROCK_WALL_SLOW_FACTOR = 0.50;    // movement multiplier while charging
 // Per-hit damage when a non-owner character makes core contact with
 // a Rock Wall rock. Engine gates repeat hits via a per-character
 // cooldown so brushing the wall once doesn't stack 60 dmg/frame.
@@ -510,67 +517,89 @@ registerAbility({
   },
 });
 
-// Rock Wall — slam the ground; rocks of varying size erupt in an
-// arc that starts a little ahead of Gravemarch and bows TOWARD the
-// nearest survivor. The convex side of the arc faces the survivor,
-// so the wall's edges pinch in around their escape angles.
+// Per-index radius for a Rock Wall rock — bigger toward the middle of
+// the arc, smaller at the edges, with deterministic per-index variation
+// so adjacent rocks differ even though the run is reproducible.
+// Variable rock counts (7 at tap, 12 at full charge) need a function
+// rather than a fixed-length table.
+function rockWallRadius(i: number, n: number): number {
+  const t = n <= 1 ? 0.5 : i / (n - 1);
+  const base = 18 + 12 * Math.sin(t * Math.PI);
+  const variation = ((i * 37 + 11) % 7) - 3; // -3..+3, index-deterministic
+  return Math.max(14, Math.round(base + variation));
+}
+
+// Rock Wall — HOLD-TO-CAST. A quick tap drops a compact arc directly
+// in front of Gravemarch; holding (up to ROCK_WALL_MAX_CHARGE) lerps
+// every shape parameter toward its MAX value:
 //
-// Each rock is owner-tagged with caster.id; the engine's brush
-// + collision paths skip props whose ownerId matches the entity
-// they're testing, so Gravemarch walks through cleanly while every
-// other character is hard-blocked at the core and brush-slowed
-// at the edges. The arc auto-despawns after ROCK_WALL_TTL.
+//   chargeFraction 0 (tap):
+//     7 rocks · 150-wide arc · 70 bow · anchored 90px ahead
+//   chargeFraction 1 (held):
+//     12 rocks · 230-wide arc · 240 bow · anchored 140px ahead
+//
+// The forward direction comes from the caster's AIM, so holding lets
+// the player aim the curve at the survivor they want to cut off. (The
+// pre-hold version always picked the nearest survivor automatically;
+// holding hands the targeting to the player.)
+//
+// Each rock is owner-tagged with caster.id; the engine's brush + hard-
+// pushout paths skip props whose ownerId matches the entity they're
+// testing, so Gravemarch walks through cleanly while every other
+// character is blocked at the core and brush-slowed at the edges. The
+// arc auto-despawns after ROCK_WALL_TTL.
 registerAbility({
   id: "rock_wall",
   name: "Rock Wall",
-  description: `${ROCK_WALL_ROCK_COUNT} rocks erupt in an arc curving toward the nearest survivor. You walk through; they take ${ROCK_WALL_CONTACT_DAMAGE} damage on contact. Lasts ${ROCK_WALL_TTL}s.`,
+  description: `Hold to charge a bigger, more curved arc in the direction you aim. ${ROCK_WALL_BASE_COUNT}-${ROCK_WALL_MAX_COUNT} rocks · ${ROCK_WALL_CONTACT_DAMAGE} damage on contact · lasts ${ROCK_WALL_TTL}s. Slowed while charging.`,
   cooldown: 14,
-  chargeTime: 0.3,
-  cast: () => { /* windup, no-op until charge completes */ },
-  onChargeComplete: ({ world, caster, aim }) => {
-    // Forward direction: prefer the nearest living survivor (the
-    // intuitive "the wall arcs to cut THEM off" behavior). Fall
-    // back to the caster's aim vector when no survivor exists
-    // (e.g. FFA with no survivor team, or all already exited).
-    const survivors = world.ffaMode
-      ? world.allCharacters().filter((c) => c.id !== caster.id && !c.dead)
-      : world.charactersOnTeam("survivor").filter((c) => !c.dead);
-    let target: Vec2 = aim;
-    if (survivors.length > 0) {
-      let best = survivors[0]!;
-      let bestD = dist(caster.pos, best.pos);
-      for (let i = 1; i < survivors.length; i++) {
-        const s = survivors[i]!;
-        const d = dist(caster.pos, s.pos);
-        if (d < bestD) { best = s; bestD = d; }
-      }
-      target = best.pos;
+  holdToCharge: {
+    maxChargeTime: ROCK_WALL_MAX_CHARGE,
+    slowFactor: ROCK_WALL_SLOW_FACTOR,
+  },
+  // Engine fires this on RELEASE (or, for AI controllers that route
+  // through the press path, instantly at chargeFraction = 1).
+  cast: ({ world, caster, aim, chargeFraction }) => {
+    const f = Math.max(0, Math.min(1, chargeFraction ?? 1));
+    // Lerp each shape parameter between its tap value and its full-
+    // charge value. Rocks count rounds so the arc always has a whole
+    // number of rocks regardless of partial charge.
+    const lerp = (a: number, b: number) => a + (b - a) * f;
+    const n = Math.round(lerp(ROCK_WALL_BASE_COUNT, ROCK_WALL_MAX_COUNT));
+    const startOffset = lerp(ROCK_WALL_BASE_START_OFFSET, ROCK_WALL_MAX_START_OFFSET);
+    const halfWidth = lerp(ROCK_WALL_BASE_HALF_WIDTH, ROCK_WALL_MAX_HALF_WIDTH);
+    const curveDepth = lerp(ROCK_WALL_BASE_CURVE, ROCK_WALL_MAX_CURVE);
+
+    // Forward direction: directly toward the caster's aim. Falls
+    // back to facing-east when aim is degenerate (cursor on caster),
+    // and to caster.vel when aim is at the cursor's last position.
+    let dir = sub(aim, caster.pos);
+    let lenSq = dir.x * dir.x + dir.y * dir.y;
+    if (lenSq < 1) {
+      dir = { x: caster.vel.x, y: caster.vel.y };
+      lenSq = dir.x * dir.x + dir.y * dir.y;
     }
-    let dir = sub(target, caster.pos);
-    if (dir.x * dir.x + dir.y * dir.y < 1) {
-      // Degenerate (target on top of caster) — face east as a fallback
-      // so we never spawn the arc on top of Gravemarch.
+    if (lenSq < 0.0001) {
+      dir = { x: Math.cos(caster.facing), y: Math.sin(caster.facing) };
+      lenSq = dir.x * dir.x + dir.y * dir.y;
+    }
+    if (lenSq < 0.0001) {
       dir = { x: 1, y: 0 };
     } else {
       dir = normalize(dir);
     }
     const perp: Vec2 = { x: -dir.y, y: dir.x };
-    // Arc anchor: a fixed distance ahead of Gravemarch so the wall
-    // doesn't spawn ON him.
-    const anchor: Vec2 = add(caster.pos, scale(dir, ROCK_WALL_START_OFFSET));
+    const anchor: Vec2 = add(caster.pos, scale(dir, startOffset));
     // Place each rock parametrized by t in [-1, +1] across the
     // perpendicular span, bowed forward by curve_depth * (1 - t^2)
-    // so the midpoint (t=0) reaches farthest toward the survivor.
+    // so the midpoint (t=0) reaches farthest into the aim direction.
     const b = world.arena.bounds;
-    const n: number = ROCK_WALL_ROCK_COUNT;
     for (let i = 0; i < n; i++) {
       const t = n <= 1 ? 0 : (i - (n - 1) / 2) / ((n - 1) / 2); // -1..+1
-      const bow = (1 - t * t) * ROCK_WALL_CURVE_DEPTH;
-      const px = anchor.x + perp.x * t * ROCK_WALL_HALF_WIDTH + dir.x * bow;
-      const py = anchor.y + perp.y * t * ROCK_WALL_HALF_WIDTH + dir.y * bow;
-      const radius = ROCK_WALL_RADII[i] ?? 22;
-      // Clamp inside arena so a wall slammed near the edge doesn't
-      // spawn rocks outside the playable area.
+      const bow = (1 - t * t) * curveDepth;
+      const px = anchor.x + perp.x * t * halfWidth + dir.x * bow;
+      const py = anchor.y + perp.y * t * halfWidth + dir.y * bow;
+      const radius = rockWallRadius(i, n);
       const cx = Math.max(b.minX + radius, Math.min(b.maxX - radius, px));
       const cy = Math.max(b.minY + radius, Math.min(b.maxY - radius, py));
       world.spawn<PropEntity>({
