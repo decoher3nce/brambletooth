@@ -21,7 +21,9 @@ export type EntityKind =
   | "cliff"
   | "animal"
   | "conveyor"
-  | "zombie";
+  | "zombie"
+  | "track"
+  | "minecart";
 
 export interface BaseEntity {
   id: EntityId;
@@ -337,6 +339,50 @@ export interface ConveyorEntity extends BaseEntity {
 
 // Wandering NPC — the kind label is "animal" for legacy reasons but
 // it now covers both wildlife (deer, bear — Forest Map 4+) and the
+// Mine track (Cave Map 2). Static segment a→b that acts as a SPAWNER
+// for minecarts. Each track holds its own randomized timing + speed
+// envelope; when spawnTimer counts down to zero the engine emits a
+// MinecartEntity at `a` with a random speed picked between
+// [minSpeed, maxSpeed], traveling toward `b`. The spawn timer then
+// re-rolls to a new random value in [minInterval, maxInterval]. So
+// each track produces an irregular stream of carts of varying speed.
+// Tracks themselves are decorative + render-bright so the player can
+// see them under the cave's FOV and time their crossings.
+export interface TrackEntity extends BaseEntity {
+  kind: "track";
+  a: Vec2;
+  b: Vec2;
+  // Per-track timing envelope. Engine re-rolls spawnTimer inside
+  // [minInterval, maxInterval] every spawn so carts don't arrive on
+  // a metronome.
+  spawnTimer: number;
+  minInterval: number;
+  maxInterval: number;
+  // Per-track speed envelope. Each spawned cart picks one speed
+  // uniformly from this range and travels at it constantly until it
+  // reaches `b` and dies.
+  minSpeed: number;
+  maxSpeed: number;
+  // Damage applied to a character on contact with a cart spawned by
+  // this track. Per-cart hitIds guarantees one hit per cart per
+  // character so a cart can't stack damage every frame while passing
+  // over.
+  damage: number;
+}
+
+// Minecart (Cave Map 2). Spawned by TrackEntity, travels in a straight
+// line from the track's `a` toward `b` at a constant `speed`. Damages
+// any character it overlaps once per lifetime (per-character hitIds
+// Set). Dies on reaching `b` or when forced out of bounds.
+export interface MinecartEntity extends BaseEntity {
+  kind: "minecart";
+  vel: Vec2;          // unit direction * speed
+  speed: number;      // magnitude (for renderer wheel-spin)
+  endPos: Vec2;       // destination — cart dies on arrival
+  damage: number;
+  hitIds: Set<EntityId>;  // characters already damaged this lifetime
+}
+
 // Factory Map 4 robots (sweeper_bot, welder_bot). All share the
 // same AI scaffolding (wander/flee/chase mood machine + brushMeter
 // for the "I've been bumped too much" aggression trigger); per-
@@ -449,7 +495,9 @@ export type Entity =
   | CliffEntity
   | AnimalEntity
   | ConveyorEntity
-  | ZombieEntity;
+  | ZombieEntity
+  | TrackEntity
+  | MinecartEntity;
 
 // Type guards
 export function isCharacter(e: Entity): e is CharacterEntity {
@@ -484,6 +532,12 @@ export function isCliff(e: Entity): e is CliffEntity {
 }
 export function isAnimal(e: Entity): e is AnimalEntity {
   return e.kind === "animal";
+}
+export function isTrack(e: Entity): e is TrackEntity {
+  return e.kind === "track";
+}
+export function isMinecart(e: Entity): e is MinecartEntity {
+  return e.kind === "minecart";
 }
 export function isConveyor(e: Entity): e is ConveyorEntity {
   return e.kind === "conveyor";

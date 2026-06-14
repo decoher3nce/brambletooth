@@ -11,8 +11,8 @@ import type {
   Entity,
   PropEntity,
 } from "../core/entity";
-import { isCharacter, isProjectile, isTrap, isObjective, isProp, isExit, isStream, isLava, isCliff, isAnimal, isConveyor, isZombie } from "../core/entity";
-import type { AnimalEntity, ZombieEntity } from "../core/entity";
+import { isCharacter, isProjectile, isTrap, isObjective, isProp, isExit, isStream, isLava, isCliff, isAnimal, isConveyor, isZombie, isTrack, isMinecart } from "../core/entity";
+import type { AnimalEntity, ZombieEntity, MinecartEntity } from "../core/entity";
 import type { Vec2 } from "../core/math";
 import { add, scale, normalize, sub, len, dist, clamp, circlesOverlap, segmentsIntersect, distToSegment } from "../core/math";
 import { ABILITIES, STONE_STEP_HIT_DAMAGE, ROCK_WALL_HIT_COOLDOWN } from "../abilities/abilities";
@@ -770,6 +770,74 @@ export class Engine {
           // Trap consumed on trigger
           e.dead = true;
           break;
+        }
+      }
+    }
+
+    // 5b) Tracks + minecarts (Cave Map 2).
+    //   - Tracks count their per-track spawnTimer down; on zero they
+    //     emit a MinecartEntity at endpoint `a` with a random speed
+    //     in [minSpeed, maxSpeed] traveling toward `b`, then re-roll
+    //     the spawn timer inside [minInterval, maxInterval] so the
+    //     stream stays irregular
+    //   - Minecarts advance by vel*dt and die on reaching `b` (or
+    //     wandering far past it as a safety net). On overlap with a
+    //     character not in hitIds, they apply `damage` and add the
+    //     character to hitIds so a single cart hits each victim once
+    for (const e of world.entities) {
+      if (!isTrack(e)) continue;
+      e.spawnTimer -= dt;
+      if (e.spawnTimer > 0) continue;
+      // Spawn a new cart at `a`, heading toward `b`.
+      const dx = e.b.x - e.a.x;
+      const dy = e.b.y - e.a.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const speed = e.minSpeed + Math.random() * (e.maxSpeed - e.minSpeed);
+      const ux = dx / len;
+      const uy = dy / len;
+      world.spawn<MinecartEntity>({
+        kind: "minecart",
+        pos: { x: e.a.x, y: e.a.y },
+        radius: 22,
+        vel: { x: ux * speed, y: uy * speed },
+        speed,
+        endPos: { x: e.b.x, y: e.b.y },
+        damage: e.damage,
+        hitIds: new Set<number>(),
+        dead: false,
+      });
+      e.spawnTimer = e.minInterval + Math.random() * (e.maxInterval - e.minInterval);
+    }
+    for (const m of world.entities) {
+      if (!isMinecart(m)) continue;
+      m.pos.x += m.vel.x * dt;
+      m.pos.y += m.vel.y * dt;
+      // Die on reaching the endpoint (within one tick's travel) OR
+      // sliding past it (the dot product trick — once the vector from
+      // the endpoint back to the cart points the same direction as
+      // the cart's velocity, the cart is on the far side and done).
+      const ex = m.endPos.x - m.pos.x;
+      const ey = m.endPos.y - m.pos.y;
+      const distSq = ex * ex + ey * ey;
+      const dotBackVsVel = -ex * m.vel.x + -ey * m.vel.y; // (cart-end) · vel
+      if (distSq < 24 * 24 || dotBackVsVel > 0) {
+        m.dead = true;
+        continue;
+      }
+      // Damage characters on contact — one-shot per cart per victim
+      // via hitIds. FFA / hunt mode doesn't matter here — minecarts
+      // are environmental and hit anyone.
+      for (const c of world.allCharacters()) {
+        if (c.dead || c.exited) continue;
+        if (m.hitIds.has(c.id)) continue;
+        if (c.statuses["shielded"] > 0) continue;
+        if (c.statuses["phased"] > 0) continue;
+        if (c.invincible) continue;
+        if (circlesOverlap(m.pos, m.radius, c.pos, c.radius)) {
+          c.hp -= m.damage;
+          m.hitIds.add(c.id);
+          // No lastDamagerId — minecarts have no owner, so a death
+          // here doesn't mis-credit a kill to a random hunter.
         }
       }
     }

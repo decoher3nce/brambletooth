@@ -25,7 +25,7 @@ import {
   buildForest6,
 } from "../arenas/forest";
 import { FACTORY_ARENA_CONFIG, buildFactory, buildFactory2, buildFactory3, buildFactory4 } from "../arenas/factory";
-import { CAVE_ARENA_CONFIG, buildCave1 } from "../arenas/cave";
+import { CAVE_ARENA_CONFIG, buildCave1, buildCave2 } from "../arenas/cave";
 import { VOLCANO_ARENA_CONFIG, buildVolcano1 } from "../arenas/volcano";
 
 // How many maps must be completed in a world to unlock the next via
@@ -815,6 +815,90 @@ function thumbCave1(
   drawCaveBase(ctx, x, y, w, h);
 }
 
+// Cave Map 2 — crossed rail lines with a small minecart silhouette
+// sliding along one of them, plus a faint yellow safety glow on
+// every track so the danger reads at thumbnail scale.
+function thumbCave2(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+): void {
+  drawCaveBase(ctx, x, y, w, h);
+  ctx.save();
+  // Two crossed tracks: a horizontal and a vertical line. The
+  // safety glow goes first (translucent yellow) under twin rails
+  // with perpendicular sleepers, mirroring the in-world look.
+  const drawThumbTrack = (x0: number, y0: number, x1: number, y1: number) => {
+    // Glow.
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = "rgba(255, 200, 80, 0.22)";
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
+    // Sleepers — 4 small dark cross-strokes.
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len;
+    const px = -uy, py = ux;
+    ctx.strokeStyle = "#3a2510";
+    ctx.lineWidth = 2;
+    for (let i = 1; i <= 4; i++) {
+      const t = i / 5;
+      const cx = x0 + dx * t;
+      const cy = y0 + dy * t;
+      ctx.beginPath();
+      ctx.moveTo(cx + px * 5, cy + py * 5);
+      ctx.lineTo(cx - px * 5, cy - py * 5);
+      ctx.stroke();
+    }
+    // Twin rails — narrow steel-grey strokes offset perpendicular.
+    for (const sign of [-1, 1]) {
+      ctx.strokeStyle = "#8a909c";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(x0 + px * 2 * sign, y0 + py * 2 * sign);
+      ctx.lineTo(x1 + px * 2 * sign, y1 + py * 2 * sign);
+      ctx.stroke();
+    }
+    void ux; void uy;
+  };
+  // Horizontal track (middle-ish height).
+  drawThumbTrack(x + w * 0.10, y + h * 0.58, x + w * 0.90, y + h * 0.58);
+  // Vertical track.
+  drawThumbTrack(x + w * 0.42, y + h * 0.18, x + w * 0.42, y + h * 0.88);
+  // Minecart silhouette on the horizontal — small dark tub with a
+  // bright lantern dot on the leading edge.
+  const cartCx = x + w * 0.66;
+  const cartCy = y + h * 0.58;
+  const cw = w * 0.085;
+  const chgt = h * 0.075;
+  ctx.fillStyle = "#3a3036";
+  ctx.fillRect(cartCx - cw / 2, cartCy - chgt / 2, cw, chgt);
+  ctx.strokeStyle = "#0a0606";
+  ctx.lineWidth = 1.2;
+  ctx.strokeRect(cartCx - cw / 2, cartCy - chgt / 2, cw, chgt);
+  ctx.fillStyle = "#b88a32";
+  ctx.fillRect(cartCx - cw / 2, cartCy - chgt / 2, cw, 1.2);
+  // Lantern + halo.
+  ctx.fillStyle = "rgba(255, 220, 90, 0.95)";
+  ctx.beginPath();
+  ctx.arc(cartCx + cw / 2 + 2, cartCy, 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  const halo = ctx.createRadialGradient(cartCx + cw / 2 + 2, cartCy, 0, cartCx + cw / 2 + 2, cartCy, w * 0.06);
+  halo.addColorStop(0, "rgba(255, 220, 90, 0.6)");
+  halo.addColorStop(1, "rgba(255, 220, 90, 0)");
+  ctx.fillStyle = halo;
+  ctx.beginPath();
+  ctx.arc(cartCx + cw / 2 + 2, cartCy, w * 0.06, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  ctx.restore();
+}
+
 // ---- Volcano World thumbnails ----
 // Dark volcanic ground + a small iso volcano cone in the center
 // with a glowing crater + four lava arms radiating outward to the
@@ -946,6 +1030,14 @@ const CAVE_MAPS: MapDef[] = [
     arenaConfig: CAVE_ARENA_CONFIG,
     buildArena: (w, seed) => buildCave1(w, seed, 0),
     thumbnail: thumbCave1,
+  },
+  {
+    id: "cave_2",
+    name: "The Tracks",
+    worldId: "cave",
+    arenaConfig: CAVE_ARENA_CONFIG,
+    buildArena: (w, seed) => buildCave2(w, seed, 0),
+    thumbnail: thumbCave2,
   },
 ];
 

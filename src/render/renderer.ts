@@ -7,7 +7,7 @@
 
 import type { World } from "../core/world";
 import type { Entity } from "../core/entity";
-import { isCharacter, isProjectile, isTrap, isObjective, isProp, isPlate, isExit, isStream, isLava, isCliff, isAnimal, isConveyor, isZombie } from "../core/entity";
+import { isCharacter, isProjectile, isTrap, isObjective, isProp, isPlate, isExit, isStream, isLava, isCliff, isAnimal, isConveyor, isZombie, isTrack, isMinecart } from "../core/entity";
 import type { Vec2 } from "../core/math";
 import { CHARACTERS } from "../characters/characters";
 import { ABILITIES } from "../abilities/abilities";
@@ -229,6 +229,7 @@ export class Renderer {
       if (
         e.kind === "plate" || e.kind === "exit" ||
         e.kind === "stream" || e.kind === "lava" || e.kind === "cliff" ||
+        e.kind === "track" ||
         (e.kind === "conveyor" && !e.elevated)
       ) {
         return 0;
@@ -536,6 +537,8 @@ export class Renderer {
     else if (isExit(e)) this.drawExit(e, cam);
     else if (isStream(e)) this.drawStream(e, cam);
     else if (isLava(e)) this.drawLava(e, cam);
+    else if (isTrack(e)) this.drawTrack(e, cam);
+    else if (isMinecart(e)) this.drawMinecart(e, cam);
     else if (isCliff(e)) this.drawCliff(e, cam);
     else if (isConveyor(e)) this.drawConveyor(e, cam);
     else if (isAnimal(e)) this.drawAnimal(e, cam);
@@ -1554,6 +1557,193 @@ export class Renderer {
       ctx.moveTo(cx + px * crackW, cy + py * crackW);
       ctx.lineTo(cx - px * crackW, cy - py * crackW);
       ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Mine track — two parallel rails along the a→b segment with
+  // perpendicular wood sleepers, plus a faint yellow safety glow
+  // along the centerline so it pops through the cave FOV mask
+  // (the player needs to SEE the tracks to time their crossings).
+  private drawTrack(
+    e: Extract<Entity, { kind: "track" }>,
+    cam: Camera,
+  ): void {
+    const ctx = this.ctx;
+    const a = worldToScreen(e.a, cam, this.cw, this.ch);
+    const b = worldToScreen(e.b, cam, this.cw, this.ch);
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len;
+    const uy = dy / len;
+    const px = -uy;
+    const py = ux;
+    const GAUGE = 14;            // rail spacing in pixels
+    const RAIL_W = 3;            // rail thickness
+    const TIE_LEN = 28;          // sleeper length perpendicular to track
+    const TIE_W = 5;             // sleeper thickness along track
+    const TIE_SPACING = 26;      // arc-length between sleepers
+
+    ctx.save();
+    // Safety glow under the rails — bright yellow stripe so the
+    // track is visible through the cave's darkness overlay. Faint
+    // alpha so it doesn't look painted on; the glow IS the warning
+    // sign.
+    ctx.lineWidth = GAUGE + 8;
+    ctx.strokeStyle = "rgba(255, 200, 80, 0.18)";
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    // Sleepers (wooden cross-ties).
+    ctx.fillStyle = "#3a2510";
+    ctx.strokeStyle = "#1a0e06";
+    ctx.lineWidth = 0.8;
+    for (let s = TIE_SPACING * 0.5; s < len; s += TIE_SPACING) {
+      const cx = a.x + ux * s;
+      const cy = a.y + uy * s;
+      // Build the sleeper rect as four corners.
+      const halfL = TIE_LEN / 2;
+      const halfW = TIE_W / 2;
+      const x1 = cx + px * halfL - ux * halfW;
+      const y1 = cy + py * halfL - uy * halfW;
+      const x2 = cx + px * halfL + ux * halfW;
+      const y2 = cy + py * halfL + uy * halfW;
+      const x3 = cx - px * halfL + ux * halfW;
+      const y3 = cy - py * halfL + uy * halfW;
+      const x4 = cx - px * halfL - ux * halfW;
+      const y4 = cy - py * halfL - uy * halfW;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.lineTo(x3, y3);
+      ctx.lineTo(x4, y4);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+    // Twin steel rails — dark iron underline + bright highlight.
+    ctx.lineCap = "butt";
+    for (const sign of [-1, 1]) {
+      const railA = { x: a.x + px * (GAUGE / 2) * sign, y: a.y + py * (GAUGE / 2) * sign };
+      const railB = { x: b.x + px * (GAUGE / 2) * sign, y: b.y + py * (GAUGE / 2) * sign };
+      ctx.lineWidth = RAIL_W + 1.5;
+      ctx.strokeStyle = "#0a0808";
+      ctx.beginPath();
+      ctx.moveTo(railA.x, railA.y);
+      ctx.lineTo(railB.x, railB.y);
+      ctx.stroke();
+      ctx.lineWidth = RAIL_W;
+      ctx.strokeStyle = "#8a909c";
+      ctx.beginPath();
+      ctx.moveTo(railA.x, railA.y);
+      ctx.lineTo(railB.x, railB.y);
+      ctx.stroke();
+      // Highlight stripe on the upper-left side of each rail to
+      // catch the iso light.
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(220, 230, 240, 0.55)";
+      ctx.beginPath();
+      ctx.moveTo(railA.x - 0.6, railA.y - 0.6);
+      ctx.lineTo(railB.x - 0.6, railB.y - 0.6);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Minecart — dark iron tub with brass trim, four wheels, and a
+  // small loose pile of stone inside. Body rotates so the long axis
+  // tracks the velocity. A tiny lantern at the front blinks bright
+  // so the player can spot an approaching cart even in the cave
+  // darkness.
+  private drawMinecart(
+    e: Extract<Entity, { kind: "minecart" }>,
+    cam: Camera,
+  ): void {
+    const ctx = this.ctx;
+    const s = worldToScreen(e.pos, cam, this.cw, this.ch);
+    const angle = Math.atan2(e.vel.y, e.vel.x);
+    const r = e.radius;
+    ctx.save();
+    ctx.translate(s.x, s.y);
+    ctx.rotate(angle);
+    // Drop shadow on the ground.
+    ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+    ctx.beginPath();
+    ctx.ellipse(0, r * 0.35, r * 1.1, r * 0.40, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Cart body (a rounded rectangle, long axis = motion).
+    const cartW = r * 2.0;
+    const cartH = r * 1.15;
+    ctx.fillStyle = "#3a3036";
+    ctx.fillRect(-cartW / 2, -cartH / 2, cartW, cartH);
+    ctx.strokeStyle = "#0a0606";
+    ctx.lineWidth = 1.8;
+    ctx.strokeRect(-cartW / 2, -cartH / 2, cartW, cartH);
+    // Brass top trim.
+    ctx.fillStyle = "#b88a32";
+    ctx.fillRect(-cartW / 2, -cartH / 2, cartW, 3);
+    // Loose stone in the tub (simple darker fill).
+    ctx.fillStyle = "#5a5258";
+    ctx.fillRect(-cartW / 2 + 3, -cartH / 2 + 4, cartW - 6, cartH - 9);
+    // Small darker chunks suggesting boulders.
+    ctx.fillStyle = "#3e3a40";
+    ctx.fillRect(-cartW / 2 + 6, -cartH / 2 + 6, 6, 4);
+    ctx.fillRect(-cartW / 2 + 16, -cartH / 2 + 7, 5, 3);
+    ctx.fillRect(cartW / 2 - 12, -cartH / 2 + 6, 6, 4);
+    // Front lantern — bright yellow circle on the leading edge.
+    const lanternX = cartW / 2 + 4;
+    const lanternY = 0;
+    const blink = 0.7 + 0.3 * Math.sin(performance.now() / 90);
+    ctx.fillStyle = `rgba(255, 220, 90, ${blink})`;
+    ctx.beginPath();
+    ctx.arc(lanternX, lanternY, 4, 0, Math.PI * 2);
+    ctx.fill();
+    // Lantern halo (additive).
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const halo = ctx.createRadialGradient(lanternX, lanternY, 0, lanternX, lanternY, 22);
+    halo.addColorStop(0, `rgba(255, 220, 90, ${0.45 * blink})`);
+    halo.addColorStop(1, "rgba(255, 220, 90, 0)");
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(lanternX, lanternY, 22, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    // Wheels — four small black circles peeking out under the tub.
+    ctx.fillStyle = "#1a1418";
+    ctx.strokeStyle = "#7a8090";
+    ctx.lineWidth = 0.8;
+    const wheelR = 3.2;
+    // Wheel spin animation — angle by distance traveled.
+    const spinPhase = (performance.now() / 1000) * e.speed * 0.02;
+    for (const [wx, wy] of [
+      [-cartW * 0.30, -cartH / 2 + 1],
+      [ cartW * 0.30, -cartH / 2 + 1],
+      [-cartW * 0.30,  cartH / 2 - 1],
+      [ cartW * 0.30,  cartH / 2 - 1],
+    ] as const) {
+      ctx.beginPath();
+      ctx.arc(wx, wy, wheelR, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      // Spoke — tiny line rotated by spinPhase so wheels visibly turn.
+      ctx.strokeStyle = "rgba(180, 190, 200, 0.65)";
+      ctx.lineWidth = 0.7;
+      ctx.beginPath();
+      ctx.moveTo(
+        wx + Math.cos(spinPhase) * wheelR * 0.7,
+        wy + Math.sin(spinPhase) * wheelR * 0.7,
+      );
+      ctx.lineTo(
+        wx - Math.cos(spinPhase) * wheelR * 0.7,
+        wy - Math.sin(spinPhase) * wheelR * 0.7,
+      );
+      ctx.stroke();
+      ctx.strokeStyle = "#7a8090";
+      ctx.lineWidth = 0.8;
     }
     ctx.restore();
   }
