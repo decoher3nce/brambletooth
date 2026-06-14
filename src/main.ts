@@ -576,6 +576,25 @@ let topBarLogoutBtn: Rect | null = null;
 // Map select hit zones (campaign + vs-computer). Rebuilt each draw.
 let mapSelectBackBtn: Rect | null = null;
 let mapTileBtns: { mapId: string; rect: Rect; playable: boolean }[] = [];
+// Vertical scroll offset for the campaign / vs-computer map list.
+// Touch-dragged on mobile, wheel-scrolled on desktop. Clamped each
+// draw against the world-list content height so it never scrolls
+// past the last world. Reset to 0 when the scene re-opens.
+let mapSelectScrollY = 0;
+let mapSelectScrollMax = 0;     // computed each draw — content overflow
+// Viewport edges for the scrollable list — recomputed each draw,
+// read at hit-test time so tiles drawn outside the clip don't
+// register taps even when their hit rect happens to overlap the
+// header or bottom margin in screen space.
+let mapSelectListTop = 0;
+let mapSelectListBottom = 0;
+// Touch-drag scrolling state. capturedY is the screen y at touchstart;
+// scrolledPx accumulates the absolute scroll distance since touchstart.
+// On touchend, if scrolledPx exceeds DRAG_THRESHOLD, the tap handler
+// is suppressed so a flick doesn't accidentally launch a map.
+const MAP_SCROLL_DRAG_THRESHOLD = 8;
+let mapSelectTouchY: number | null = null;
+let mapSelectTouchScrolled = 0;
 // Last map a campaign/vs-computer flow committed to, threaded through
 // character select to startRound. Defaults to the first map id so the
 // title's quick play paths still work.
@@ -615,6 +634,11 @@ function handleTitleTap(p: { x: number; y: number }): void {
   // Campaign / Vs Computer map-select sub-scenes: per-tile
   // selection. BACK is on the top bar.
   if (titleSubScene === "campaign" || titleSubScene === "vsMapSelect") {
+    // Reject taps that fell outside the scrollable list viewport —
+    // a tile drawn off the top or bottom of the clip can still
+    // have a stored hit rect at the corresponding screen Y, which
+    // would otherwise misfire on header taps.
+    if (p.y < mapSelectListTop || p.y > mapSelectListBottom) return;
     for (const tile of mapTileBtns) {
       if (!inRect(p, tile.rect)) continue;
       if (!tile.playable) {
@@ -721,9 +745,11 @@ function handleTitleTap(p: { x: number; y: number }): void {
   if (inRect(p, titleButtons.campaign)) {
     playSound("ui_click");
     titleSubScene = "campaign";
+    mapSelectScrollY = 0;
   } else if (inRect(p, titleButtons.vs)) {
     playSound("ui_click");
     titleSubScene = "vsMapSelect";
+    mapSelectScrollY = 0;
   } else if (inRect(p, titleButtons.two)) {
     playSound("ui_click");
     chooseMode("net");
@@ -889,6 +915,24 @@ canvas.addEventListener("mousedown", (ev) => {
     handleTitleTap(p);
   }
 });
+
+// Wheel scrolling on the campaign / vs-computer map list. The list
+// is rendered on the canvas (not in a scrollable DOM element), so
+// the wheel event has to drive mapSelectScrollY ourselves. preventDefault
+// keeps the page from scrolling along with the canvas.
+canvas.addEventListener(
+  "wheel",
+  (ev) => {
+    if (started) return;
+    if (titleSubScene !== "campaign" && titleSubScene !== "vsMapSelect") return;
+    mapSelectScrollY += ev.deltaY;
+    if (mapSelectScrollY < 0) mapSelectScrollY = 0;
+    if (mapSelectScrollY > mapSelectScrollMax) mapSelectScrollY = mapSelectScrollMax;
+    ev.preventDefault();
+  },
+  { passive: false },
+);
+
 canvas.addEventListener(
   "touchstart",
   (ev) => {
@@ -902,8 +946,65 @@ canvas.addEventListener(
       if (handleLeaveGameTap(p)) { ev.preventDefault(); return; }
     } else {
       ev.preventDefault();
+      // On the campaign / vs-computer map list, remember the starting
+      // Y so a vertical drag scrolls instead of firing the tap on
+      // touchend. The tap fires from touchend only when no drag
+      // happened — see canvas.addEventListener("touchend") below.
+      if (titleSubScene === "campaign" || titleSubScene === "vsMapSelect") {
+        mapSelectTouchY = p.y;
+        mapSelectTouchScrolled = 0;
+        return;
+      }
       handleTitleTap(p);
     }
+  },
+  { passive: false },
+);
+
+canvas.addEventListener(
+  "touchmove",
+  (ev) => {
+    if (started) return;
+    if (titleSubScene !== "campaign" && titleSubScene !== "vsMapSelect") return;
+    if (mapSelectTouchY === null) return;
+    const t = ev.changedTouches[0];
+    if (!t) return;
+    const r = canvas.getBoundingClientRect();
+    const y = t.clientY - r.top;
+    const dy = mapSelectTouchY - y;
+    mapSelectScrollY += dy;
+    if (mapSelectScrollY < 0) mapSelectScrollY = 0;
+    if (mapSelectScrollY > mapSelectScrollMax) mapSelectScrollY = mapSelectScrollMax;
+    mapSelectTouchScrolled += Math.abs(dy);
+    mapSelectTouchY = y;
+    ev.preventDefault();
+  },
+  { passive: false },
+);
+
+canvas.addEventListener(
+  "touchend",
+  (ev) => {
+    if (started) return;
+    if (titleSubScene !== "campaign" && titleSubScene !== "vsMapSelect") return;
+    if (mapSelectTouchY === null) {
+      // We never saw the matching touchstart in this scene — bail
+      // so we don't fire a stray tap.
+      return;
+    }
+    const wasScrolling = mapSelectTouchScrolled > MAP_SCROLL_DRAG_THRESHOLD;
+    const t = ev.changedTouches[0];
+    mapSelectTouchY = null;
+    mapSelectTouchScrolled = 0;
+    if (wasScrolling) {
+      ev.preventDefault();
+      return; // suppress tap — it was a flick scroll
+    }
+    if (!t) return;
+    const r = canvas.getBoundingClientRect();
+    const p = { x: t.clientX - r.left, y: t.clientY - r.top };
+    ev.preventDefault();
+    handleTitleTap(p);
   },
   { passive: false },
 );
@@ -2196,19 +2297,60 @@ function drawMapSelectScreen(
     ch * 0.08 + 22,
   );
 
-  // World list
+  // World list — laid out inside a vertically-scrollable region so
+  // the screen survives as more worlds ship beyond what fits in
+  // the viewport (e.g. iPad portrait clipping Volcano World today).
   const progress = localProgress();
   const panelW = Math.min(720, cw - 80);
   const panelX = (cw - panelW) / 2;
-  let y = ch * 0.18;
-  const worldH = 140;
+  const listTop = ch * 0.18;
+  const listBottom = ch - 24;   // leave bottom margin
+  mapSelectListTop = listTop;
+  mapSelectListBottom = listBottom;
+  const worldH = 160;            // includes 16px breathing room below tiles
   const tileSize = 84;
   const tileGap = 12;
+  const worldGap = 14;
 
+  // Total content height — used to clamp mapSelectScrollY and to
+  // decide whether the scrollbar renders.
+  const contentH = WORLDS.length * worldH + (WORLDS.length - 1) * worldGap;
+  const viewportH = listBottom - listTop;
+  mapSelectScrollMax = Math.max(0, contentH - viewportH);
+  if (mapSelectScrollY < 0) mapSelectScrollY = 0;
+  if (mapSelectScrollY > mapSelectScrollMax) mapSelectScrollY = mapSelectScrollMax;
+
+  // Clip drawing to the list viewport so scrolled-off bands don't
+  // bleed under the header or below the bottom edge.
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, listTop, cw, viewportH);
+  ctx.clip();
+
+  let y = listTop - mapSelectScrollY;
   for (const world of WORLDS) {
     const unlocked = isWorldUnlocked(world.id, progress);
     drawWorldBand(panelX, y, panelW, worldH, world, unlocked, tileSize, tileGap, mode, progress);
-    y += worldH + 14;
+    y += worldH + worldGap;
+  }
+
+  ctx.restore();
+
+  // Vertical scrollbar — only render when content actually overflows.
+  // Track sits inside the right margin of the panel; thumb height
+  // scales with the viewport / content ratio. Indicator-only;
+  // dragging the thumb is supported via the same touch + wheel
+  // handlers that scroll the body.
+  if (mapSelectScrollMax > 0) {
+    const trackX = panelX + panelW + 6;
+    const trackW = 6;
+    const trackH = viewportH;
+    ctx.fillStyle = "rgba(255,255,255,0.06)";
+    ctx.fillRect(trackX, listTop, trackW, trackH);
+    const thumbH = Math.max(28, trackH * (viewportH / contentH));
+    const thumbY = listTop + (trackH - thumbH) * (mapSelectScrollY / mapSelectScrollMax);
+    ctx.fillStyle = "rgba(255,255,255,0.30)";
+    ctx.fillRect(trackX, thumbY, trackW, thumbH);
   }
 
   // BACK lives on the shared top bar now.
@@ -2293,11 +2435,14 @@ function drawMapTile(
   ctx.fillStyle = playable ? "rgba(40, 52, 48, 0.9)" : "rgba(20, 26, 24, 0.7)";
   roundRect({ x, y, w: size, h: size }, 8);
   ctx.fill();
-  ctx.strokeStyle = completed
-    ? "#ffd84a"
-    : playable
-      ? (accent ?? "rgba(255,255,255,0.25)")
-      : "rgba(255,255,255,0.08)";
+  // Outline color tracks the WORLD's accent regardless of completion
+  // status so forest tiles read as green, factory as steel, cave as
+  // purple, volcano as red — matching the world band that wraps
+  // them. Completion is signalled by a thicker outline + the
+  // checkmark badge in the corner; locked tiles fade to a dim grey.
+  ctx.strokeStyle = playable
+    ? (accent ?? "rgba(255,255,255,0.25)")
+    : "rgba(255,255,255,0.08)";
   ctx.lineWidth = completed ? 2.5 : 1.5;
   roundRect({ x, y, w: size, h: size }, 8);
   ctx.stroke();
