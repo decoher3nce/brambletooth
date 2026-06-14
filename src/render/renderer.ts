@@ -2063,6 +2063,139 @@ export class Renderer {
         ctx.ellipse(s.x, s.y - r * 0.5 + bob, r * 1.05, r * 0.85, 0, 0, Math.PI * 2);
         ctx.fill();
       }
+    } else if (e.species === "boar") {
+      // Boar — squat dark-bristled body lower to the ground than
+      // a bear, with a heavy snout extending forward and a pair
+      // of short curved tusks. Tinted red in chase mood.
+      const bodyW = r * 1.05;
+      const bodyH = r * 0.62;
+      const bodyY = s.y - r * 0.40 + bob;
+      ctx.fillStyle = "#3d2a1c";
+      ctx.beginPath();
+      ctx.ellipse(s.x, bodyY, bodyW, bodyH, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#1a0f08";
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+      // Bristle stripe along the back.
+      ctx.strokeStyle = "#181008";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      for (let i = -3; i <= 3; i++) {
+        const bx = s.x + i * (bodyW * 0.20);
+        ctx.moveTo(bx, bodyY - bodyH * 0.6);
+        ctx.lineTo(bx + 1, bodyY - bodyH * 1.0);
+      }
+      ctx.stroke();
+      // Head + heavy snout.
+      const headX = s.x + facingX * r * 0.55;
+      const headY = s.y - r * 0.7 + bob;
+      ctx.fillStyle = "#2a1c12";
+      ctx.beginPath();
+      ctx.ellipse(headX, headY, r * 0.36, r * 0.30, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#100804";
+      ctx.lineWidth = 1.3;
+      ctx.stroke();
+      // Snout — short cylinder protruding forward.
+      const snoutX = headX + facingX * r * 0.36;
+      const snoutY = headY + r * 0.12;
+      ctx.fillStyle = "#5e3a22";
+      ctx.beginPath();
+      ctx.ellipse(snoutX, snoutY, r * 0.22, r * 0.16, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#1a0e08";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+      // Two short curved tusks pointing up from the snout.
+      ctx.strokeStyle = "#f0e2b0";
+      ctx.lineWidth = 1.6;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(snoutX - r * 0.10, snoutY - r * 0.02);
+      ctx.lineTo(snoutX - r * 0.16, snoutY - r * 0.20);
+      ctx.moveTo(snoutX + r * 0.10, snoutY - r * 0.02);
+      ctx.lineTo(snoutX + r * 0.16, snoutY - r * 0.20);
+      ctx.stroke();
+      // Tiny angry eyes.
+      ctx.fillStyle = aggressive ? "#ffd84a" : "#1a1a1a";
+      ctx.beginPath();
+      ctx.arc(headX - r * 0.12, headY - r * 0.10, 1.6, 0, Math.PI * 2);
+      ctx.arc(headX + r * 0.12, headY - r * 0.10, 1.6, 0, Math.PI * 2);
+      ctx.fill();
+      if (aggressive) {
+        ctx.fillStyle = tint("");
+        ctx.beginPath();
+        ctx.ellipse(s.x, bodyY, bodyW, bodyH, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (e.species === "moose") {
+      // Moose — tall, lanky brown body with broad palmate antlers
+      // and a long drooping snout. Reads big and slow on the map.
+      ctx.fillStyle = "#3a2616";
+      ctx.beginPath();
+      ctx.ellipse(s.x, s.y - r * 0.55 + bob, r * 1.0, r * 0.78, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#1a0f08";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // Tall slim neck rising into the head.
+      const neckTopX = s.x + facingX * r * 0.5;
+      const neckTopY = s.y - r * 1.05 + bob;
+      ctx.fillStyle = "#3a2616";
+      ctx.beginPath();
+      ctx.moveTo(s.x + facingX * r * 0.30, s.y - r * 0.70 + bob);
+      ctx.lineTo(s.x + facingX * r * 0.60, s.y - r * 0.70 + bob);
+      ctx.lineTo(neckTopX + r * 0.20, neckTopY);
+      ctx.lineTo(neckTopX - r * 0.10, neckTopY);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "#1a0f08";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      // Head — long oval with droopy snout.
+      const headX = neckTopX + facingX * r * 0.15;
+      const headY = neckTopY - r * 0.10;
+      ctx.fillStyle = "#3a2616";
+      ctx.beginPath();
+      ctx.ellipse(headX, headY, r * 0.38, r * 0.24, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#1a0f08";
+      ctx.lineWidth = 1.3;
+      ctx.stroke();
+      // Drooping snout under the head.
+      ctx.fillStyle = "#2a1810";
+      ctx.beginPath();
+      ctx.ellipse(headX + facingX * r * 0.22, headY + r * 0.15, r * 0.18, r * 0.12, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Palmate antlers — broad fans on both sides.
+      ctx.fillStyle = "#b89867";
+      ctx.strokeStyle = "#5a4020";
+      ctx.lineWidth = 1.2;
+      for (const sign of [-1, 1]) {
+        const ax = headX + sign * r * 0.15;
+        const ay = headY - r * 0.32;
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(ax + sign * r * 0.45, ay - r * 0.10);
+        ctx.lineTo(ax + sign * r * 0.55, ay - r * 0.32);
+        ctx.lineTo(ax + sign * r * 0.35, ay - r * 0.45);
+        ctx.lineTo(ax + sign * r * 0.15, ay - r * 0.35);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+      // Eye.
+      ctx.fillStyle = aggressive ? "#ffd84a" : "#1a1a1a";
+      ctx.beginPath();
+      ctx.arc(headX + facingX * r * 0.10, headY - r * 0.05, 2, 0, Math.PI * 2);
+      ctx.fill();
+      if (aggressive) {
+        ctx.fillStyle = tint("");
+        ctx.beginPath();
+        ctx.ellipse(s.x, s.y - r * 0.55 + bob, r * 1.0, r * 0.78, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
     } else if (e.species === "sweeper_bot") {
       // Small round trash-can shape on a wheeled base. Two LED
       // eyes face the direction of facing; eyes turn red when

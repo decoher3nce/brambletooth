@@ -3355,9 +3355,12 @@ function brushSoundFor(kind: BrushKind): SoundId | null {
     switch (kind.species) {
       case "bear":         return "brush_growl";
       case "deer":         return "brush_bleat";
+      case "boar":         return "brush_growl";  // reuse growl until a snort sample exists
+      case "moose":        return "brush_growl";
       case "sweeper_bot":  return "brush_beep";
       case "welder_bot":   return "brush_buzz";
     }
+    return null;
   }
   // prop
   switch (kind.shape) {
@@ -3370,6 +3373,8 @@ function brushSoundFor(kind: BrushKind): SoundId | null {
     case "crate":    return "brush_thud";
     case "pallet":   return "brush_thud";
     case "oildrum":  return "brush_boom";
+    case "volcano":  return "brush_crunch";       // walking the basalt slope
+    case "obsidian": return "brush_crunch";       // sharp glass
     default:         return null;
   }
 }

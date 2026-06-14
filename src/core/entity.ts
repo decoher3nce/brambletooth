@@ -343,7 +343,15 @@ export interface ConveyorEntity extends BaseEntity {
 // species branching in tickAnimal handles their behavioral
 // differences (deer flee, bears charge, sweeper bots spin angrily,
 // welder bots zap nearby characters).
-export type AnimalSpecies = "deer" | "bear" | "sweeper_bot" | "welder_bot";
+export type AnimalSpecies =
+  | "deer" | "bear"
+  // Forest stampede additions: boar (small, fast, aggressive chargers
+  // — often in groups) and moose (big, slow, tankier than a bear with
+  // a heavier hit).
+  | "boar" | "moose"
+  // Factory robots — same AI scaffolding (mood machine + brush meter)
+  // even though they're metal, not flesh.
+  | "sweeper_bot" | "welder_bot";
 export type AnimalMood = "wander" | "flee" | "chase";
 export interface AnimalEntity extends BaseEntity {
   kind: "animal";

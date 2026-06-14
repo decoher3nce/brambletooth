@@ -61,6 +61,11 @@ export const WALL_BRUSH_BAND = 10;
 export const BEAR_BRUSH_BUILD = 4.0;
 export const BEAR_BRUSH_DECAY = 0.5;
 export const BEAR_BRUSH_ANGER = 3.0;
+// Herd-broadcast radius (pixels). When a herd-species animal (deer)
+// changes mood to flee or chase, every other animal of the same
+// species within this distance joins the same mood with the same
+// target — "one deer spooked, the whole herd bolts."
+export const HERD_BROADCAST_RADIUS = 240;
 
 // ---- Lava ----
 // Per-character cooldown (seconds) between successive lava damage
@@ -417,23 +422,35 @@ export class Engine {
         if (!an || an.kind !== "animal" || an.dead) continue;
         an.brushMeter += touch.depth * dt * BEAR_BRUSH_BUILD;
         an.lastBrusherId = c.id;
-        // Charge species — bear, welder_bot, sweeper_bot all
-        // transition to chase on brush threshold. Deer
-        // accumulate the meter (for the brush sound + flee
-        // reaction) but never charge.
-        if (
-          an.brushMeter >= BEAR_BRUSH_ANGER &&
-          (an.species === "bear" ||
-           an.species === "welder_bot" ||
-           an.species === "sweeper_bot")
-        ) {
-          an.mood = "chase";
-          // Sweeper bots spin for a shorter window — they're
-          // grumpy, not dangerous. Welders zap for longer.
-          an.moodTimer = an.species === "sweeper_bot" ? 3 : 6;
-          an.targetId = c.id;
-          an.reactionDecided = true;
-          an.brushMeter = 0;
+        // Charge species — bear, boar, moose, welder_bot, sweeper_bot
+        // all transition to chase on brush threshold. Deer brushed
+        // past the threshold FLEE (then broadcast to the herd) — a
+        // single agitated deer spooks the whole group.
+        if (an.brushMeter >= BEAR_BRUSH_ANGER) {
+          const chargeSpecies =
+            an.species === "bear" ||
+            an.species === "boar" ||
+            an.species === "moose" ||
+            an.species === "welder_bot" ||
+            an.species === "sweeper_bot";
+          if (chargeSpecies) {
+            an.mood = "chase";
+            // Sweeper bots spin for a shorter window — they're
+            // grumpy, not dangerous. Welders + heavies chase for
+            // longer.
+            an.moodTimer = an.species === "sweeper_bot" ? 3 : 6;
+            an.targetId = c.id;
+            an.reactionDecided = true;
+            an.brushMeter = 0;
+          } else if (an.species === "deer") {
+            // Spooked — flee + broadcast.
+            an.mood = "flee";
+            an.moodTimer = 5;
+            an.targetId = c.id;
+            an.reactionDecided = true;
+            an.brushMeter = 0;
+            this.broadcastHerdMood(an, world);
+          }
         }
       }
 
@@ -964,22 +981,57 @@ export class Engine {
   }
 
   // Roll the animal's reaction to taking damage from a character.
-  // Once per "wounded episode": 60% flee, 40% chase. Subsequent hits
-  // during the same episode keep the existing mood. The episode
+  // Once per "wounded episode": species-tuned chase chance. Subsequent
+  // hits during the same episode keep the existing mood. The episode
   // resets when the mood timer expires and the animal returns to
-  // wander.
+  // wander. After the mood is set, deer broadcast it to nearby
+  // herd-mates so a single attack agitates the whole herd.
   private reactAnimalToAttack(a: AnimalEntity, attackerId: number, world: World): void {
     a.targetId = attackerId;
     if (a.reactionDecided) return;
     a.reactionDecided = true;
-    // Bears chase more readily than deer (50/50 vs 30/70).
-    const chaseChance = a.species === "bear" ? 0.5 : 0.3;
+    // Per-species chase chance:
+    //   boar  — most aggressive (charges in groups)
+    //   moose — heavy, slow, but commits to a chase
+    //   bear  — middling
+    //   deer  — usually flee, rare angry stag
+    //   robots — don't take projectile damage paths, default low
+    let chaseChance = 0.3;
+    if (a.species === "boar") chaseChance = 0.75;
+    else if (a.species === "moose") chaseChance = 0.6;
+    else if (a.species === "bear") chaseChance = 0.5;
     if (Math.random() < chaseChance) {
       a.mood = "chase";
-      a.moodTimer = 6;
+      a.moodTimer = a.species === "moose" ? 7 : 6;
     } else {
       a.mood = "flee";
       a.moodTimer = 5;
+    }
+    this.broadcastHerdMood(a, world);
+  }
+
+  // Herd mood broadcast (deer only). When one deer's mood changes to
+  // flee or chase, every other deer within HERD_BROADCAST_RADIUS joins
+  // the same mood with the same target — "one spooked, all bolt."
+  // Only overrides peers that are calm (wander) or already fleeing —
+  // a deer already locked into chase keeps its own target.
+  private broadcastHerdMood(leader: AnimalEntity, world: World): void {
+    if (leader.species !== "deer") return;
+    if (leader.mood !== "flee" && leader.mood !== "chase") return;
+    const r2 = HERD_BROADCAST_RADIUS * HERD_BROADCAST_RADIUS;
+    for (const e of world.entities) {
+      if (!isAnimal(e)) continue;
+      if (e === leader || e.dead) continue;
+      if (e.species !== leader.species) continue;
+      // Don't downgrade a peer already committed to chase.
+      if (e.mood === "chase") continue;
+      const dx = e.pos.x - leader.pos.x;
+      const dy = e.pos.y - leader.pos.y;
+      if (dx * dx + dy * dy > r2) continue;
+      e.mood = leader.mood;
+      e.moodTimer = leader.moodTimer;
+      e.targetId = leader.targetId;
+      e.reactionDecided = true;
     }
   }
 
@@ -1062,17 +1114,30 @@ export class Engine {
           a.biteCooldown = 1.2;
         }
       } else {
-        // Default chase (bears + future creatures): close the
-        // distance and bite on contact.
+        // Default chase (bears + boars + moose + future creatures):
+        // close the distance and bite on contact. Per-species speed
+        // multiplier on top of the base wander speed.
         desiredX = dx / d;
         desiredY = dy / d;
-        desiredSpeed = a.speed * 1.3;
-        // Contact bite — short cooldown so big bears can't shred
-        // through invincibility status.
+        const chaseMult =
+          a.species === "boar"  ? 1.5 :   // fast charger
+          a.species === "moose" ? 1.15 :  // heavy, doesn't sprint
+                                  1.3;    // bear / default
+        desiredSpeed = a.speed * chaseMult;
+        // Contact bite — short cooldown so big animals can't shred
+        // through a player every frame.
         if (d < a.radius + 18 && a.biteCooldown <= 0) {
           const targetEntity = world.allCharacters().find((c) => c.id === a.targetId) ?? null;
           if (targetEntity && !targetEntity.invincible) {
-            targetEntity.hp -= a.species === "bear" ? 18 : 8;
+            // Damage by species — moose gores hardest, bear hits
+            // hard, boar tusks for moderate damage, generic bite
+            // is the cheap fallback.
+            const dmg =
+              a.species === "moose" ? 22 :
+              a.species === "bear"  ? 18 :
+              a.species === "boar"  ? 14 :
+                                       8;
+            targetEntity.hp -= dmg;
           }
           a.biteCooldown = 0.7;
         }

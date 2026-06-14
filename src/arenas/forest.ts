@@ -229,25 +229,48 @@ export function buildForest2(world: World, seed: number, objectiveCount: number)
   clearVegetationFromStream(world, points, 65);
 }
 
+// Per-species spawn stats. Centralized so the arena builders
+// (and any future spawner) share one source of truth. Tuned so
+// each animal reads distinctly:
+//   deer   — small, fast, fragile (skittish)
+//   bear   — big, slow, tanky (charges on agitation)
+//   boar   — small, very fast, low HP, aggressive (charges hard)
+//   moose  — biggest, slowest, biggest HP pool (slow tank)
+function animalStats(species: AnimalSpecies): {
+  radius: number; hp: number; speed: number;
+} {
+  switch (species) {
+    case "deer":  return { radius: 16, hp: 25, speed: 80 };
+    case "bear":  return { radius: 22, hp: 60, speed: 60 };
+    case "boar":  return { radius: 17, hp: 35, speed: 95 };
+    case "moose": return { radius: 26, hp: 90, speed: 50 };
+    // Factory bots aren't placed by the forest arenas, but include
+    // a default so the switch is exhaustive and future call sites
+    // don't crash if a robot leaks in.
+    case "sweeper_bot":
+    case "welder_bot":
+    default:      return { radius: 18, hp: 40, speed: 70 };
+  }
+}
+
 // Spawn an animal NPC at a given world position. Wander radius
-// defines how far it strays from spawn. Bears are tankier + slower;
-// deer are nimbler.
+// defines how far it strays from spawn.
 function spawnAnimal(
   world: World,
   pos: { x: number; y: number },
   species: AnimalSpecies,
   wanderRadius: number,
 ): void {
-  const isBear = species === "bear";
+  const stats = animalStats(species);
   world.spawn<AnimalEntity>({
     kind: "animal",
     species,
     pos: { ...pos },
-    radius: isBear ? 22 : 16,
+    radius: stats.radius,
     dead: false,
-    hp: isBear ? 60 : 25,
-    maxHp: isBear ? 60 : 25,
-    speed: isBear ? 60 : 80,
+    hp: stats.hp,
+    maxHp: stats.hp,
+    speed: stats.speed,
     facing: Math.random() * Math.PI * 2,
     vel: { x: 0, y: 0 },
     mood: "wander",
@@ -373,4 +396,73 @@ export function buildForest3(world: World, seed: number, objectiveCount: number)
     fallDamage: 25,
     dead: false,
   });
+}
+
+// Spawn a herd of the same species clustered around a center point.
+// Each member lands within ±herdRadius of the center; an individual
+// wander radius is generous (160-220) so the herd visibly browses
+// the area without packing on top of each other. Engine herd-
+// broadcast (HERD_BROADCAST_RADIUS = 240, deer-only) means brushing
+// one deer typically spooks the whole local cluster.
+function spawnHerd(
+  world: World,
+  rng: () => number,
+  bounds: World["arena"]["bounds"],
+  species: AnimalSpecies,
+  center: { x: number; y: number },
+  herdRadius: number,
+  count: number,
+): void {
+  for (let i = 0; i < count; i++) {
+    let placed = false;
+    for (let attempt = 0; attempt < 20 && !placed; attempt++) {
+      const ang = rng() * Math.PI * 2;
+      const r = rng() * herdRadius;
+      const x = center.x + Math.cos(ang) * r;
+      const y = center.y + Math.sin(ang) * r;
+      // Keep inside arena + away from spawn zones (north + south
+      // midline, 130-radius each).
+      const margin = 50;
+      if (x < bounds.minX + margin || x > bounds.maxX - margin) continue;
+      if (y < bounds.minY + margin || y > bounds.maxY - margin) continue;
+      const cx = (bounds.minX + bounds.maxX) / 2;
+      if (Math.hypot(x - cx, y - (bounds.maxY - 80)) < 130) continue;
+      if (Math.hypot(x - cx, y - (bounds.minY + 80)) < 130) continue;
+      // Don't overlap existing animals / objectives.
+      let ok = true;
+      for (const e of world.entities) {
+        if (e.kind === "animal") {
+          if (Math.hypot(x - e.pos.x, y - e.pos.y) < 60) { ok = false; break; }
+        } else if (e.kind === "objective") {
+          if (Math.hypot(x - e.pos.x, y - e.pos.y) < 60) { ok = false; break; }
+        }
+      }
+      if (!ok) continue;
+      spawnAnimal(world, { x, y }, species, 180 + Math.floor(rng() * 40));
+      placed = true;
+    }
+  }
+}
+
+// Forest Map 6 — "Stampede". Many animals, many species, herding.
+// Two deer herds (4 each) wander the north + south halves; brushing
+// any deer spooks the entire herd (HERD_BROADCAST_RADIUS), so the
+// player gets a hair-trigger crowd of skittish targets. Two boar
+// groups (2 each) charge fast and aggressive on contact. Three lone
+// bears and two lone moose round it out — the heavy hitters that
+// punish a mis-step. No streams or cliffs; the encounter is the
+// terrain.
+export function buildForest6(world: World, seed: number, objectiveCount: number): void {
+  buildForest(world, seed, objectiveCount);
+  const rng = mulberry32(seed + 6066);
+  const b = world.arena.bounds;
+  // Two deer herds — one in the NW, one in the SE.
+  spawnHerd(world, rng, b, "deer", { x: b.minX + 300, y: b.minY + 220 }, 130, 4);
+  spawnHerd(world, rng, b, "deer", { x: b.maxX - 300, y: b.maxY - 240 }, 130, 4);
+  // Two boar groups — flanking the east and west midlines.
+  spawnHerd(world, rng, b, "boar", { x: b.minX + 240, y: 60 }, 90, 2);
+  spawnHerd(world, rng, b, "boar", { x: b.maxX - 240, y: -40 }, 90, 2);
+  // Solo bears + moose scattered across the middle band.
+  for (let i = 0; i < 3; i++) tryPlaceAnimal(world, rng, b, "bear", 200, 60);
+  for (let i = 0; i < 2; i++) tryPlaceAnimal(world, rng, b, "moose", 180, 60);
 }

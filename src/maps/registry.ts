@@ -22,6 +22,7 @@ import {
   buildForest3,
   buildForest4,
   buildForest5,
+  buildForest6,
 } from "../arenas/forest";
 import { FACTORY_ARENA_CONFIG, buildFactory, buildFactory2, buildFactory3, buildFactory4 } from "../arenas/factory";
 import { CAVE_ARENA_CONFIG, buildCave1 } from "../arenas/cave";
@@ -219,6 +220,83 @@ function thumbForest4(
   // Small bear (foreground) + small deer (mid-back).
   drawThumbBear(ctx, x + w * 0.42, y + h * 0.72, w * 0.09);
   drawThumbDeer(ctx, x + w * 0.7, y + h * 0.5, w * 0.07);
+}
+// Stampede tile — chaotic spread of small animal silhouettes
+// across the forest base, with a couple boar tusks + moose antlers
+// poking up so the new species read from the thumbnail.
+function thumbForest6(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+): void {
+  drawForestBase(ctx, x, y, w, h);
+  // Cluster of small deer silhouettes (NW herd).
+  drawThumbDeer(ctx, x + w * 0.18, y + h * 0.36, w * 0.045);
+  drawThumbDeer(ctx, x + w * 0.26, y + h * 0.40, w * 0.045);
+  drawThumbDeer(ctx, x + w * 0.20, y + h * 0.46, w * 0.045);
+  drawThumbDeer(ctx, x + w * 0.30, y + h * 0.48, w * 0.045);
+  // Second deer herd (SE).
+  drawThumbDeer(ctx, x + w * 0.66, y + h * 0.68, w * 0.045);
+  drawThumbDeer(ctx, x + w * 0.74, y + h * 0.66, w * 0.045);
+  drawThumbDeer(ctx, x + w * 0.70, y + h * 0.74, w * 0.045);
+  // A boar (dark squat oval with tusks) on the west.
+  drawThumbBoar(ctx, x + w * 0.38, y + h * 0.58, w * 0.055);
+  drawThumbBoar(ctx, x + w * 0.46, y + h * 0.60, w * 0.055);
+  // A moose with antlers in the center.
+  drawThumbMoose(ctx, x + w * 0.54, y + h * 0.50, w * 0.075);
+  // A bear in the SW.
+  drawThumbBear(ctx, x + w * 0.30, y + h * 0.72, w * 0.07);
+}
+function drawThumbBoar(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number, scale: number,
+): void {
+  // Squat dark body.
+  ctx.fillStyle = "#3d2a1c";
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, scale * 1.15, scale * 0.7, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Snout.
+  ctx.fillStyle = "#5e3a22";
+  ctx.beginPath();
+  ctx.ellipse(cx + scale * 0.95, cy + scale * 0.10, scale * 0.30, scale * 0.18, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Tusks (two short cream strokes).
+  ctx.strokeStyle = "#f0e2b0";
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(cx + scale * 0.85, cy);
+  ctx.lineTo(cx + scale * 0.95, cy - scale * 0.30);
+  ctx.moveTo(cx + scale * 1.05, cy);
+  ctx.lineTo(cx + scale * 1.15, cy - scale * 0.30);
+  ctx.stroke();
+}
+function drawThumbMoose(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number, scale: number,
+): void {
+  // Body.
+  ctx.fillStyle = "#3a2616";
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, scale * 1.1, scale * 0.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Head + droopy snout.
+  ctx.fillStyle = "#3a2616";
+  ctx.beginPath();
+  ctx.ellipse(cx + scale * 0.7, cy - scale * 0.7, scale * 0.45, scale * 0.30, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Palmate antlers — two fan-shaped strokes.
+  ctx.fillStyle = "#b89867";
+  for (const sign of [-1, 1]) {
+    const ax = cx + scale * 0.7 + sign * scale * 0.15;
+    const ay = cy - scale * 1.0;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(ax + sign * scale * 0.45, ay - scale * 0.10);
+    ctx.lineTo(ax + sign * scale * 0.5, ay - scale * 0.40);
+    ctx.lineTo(ax + sign * scale * 0.2, ay - scale * 0.45);
+    ctx.closePath();
+    ctx.fill();
+  }
 }
 function thumbForest5(
   ctx: CanvasRenderingContext2D,
@@ -627,6 +705,14 @@ const FOREST_MAPS: MapDef[] = [
     arenaConfig: FOREST_ARENA_CONFIG,
     buildArena: (w, seed) => buildForest5(w, seed, 0),
     thumbnail: thumbForest5,
+  },
+  {
+    id: "forest_6",
+    name: "Stampede",
+    worldId: "forest",
+    arenaConfig: FOREST_ARENA_CONFIG,
+    buildArena: (w, seed) => buildForest6(w, seed, 0),
+    thumbnail: thumbForest6,
   },
 ];
 
