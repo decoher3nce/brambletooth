@@ -186,12 +186,60 @@ export class SelectScreen {
   // layout math used in draw() — including the dual-pick widening
   // when two detail cards are shown.
   getGridCenterX(cw: number): number {
-    const DUAL_DETAIL_GAP = 20;
-    const dual = this.isDualPickMode() && !this.lobbyView;
-    const detailsW = dual ? DETAIL_W * 2 + DUAL_DETAIL_GAP : DETAIL_W;
-    const layoutW = ROW_WIDTH + DETAIL_GAP + detailsW;
-    const layoutX = Math.max(20, (cw - layoutW) / 2);
+    const { layoutX } = this.computeLayout(cw);
     return layoutX + ROW_WIDTH / 2;
+  }
+
+  // Adaptive layout math, shared by draw() and getGridCenterX.
+  // Decides whether two detail cards fit side-by-side at full
+  // width, side-by-side at a shrunk-but-readable width, or
+  // collapses to a single card (the dualSideBySide flag goes
+  // false in that case). Keeping this in one place ensures the
+  // pill row above START stays centered on whatever layout draw()
+  // actually rendered.
+  private computeLayout(cw: number): {
+    layoutX: number;
+    detailW: number;
+    dualSideBySide: boolean;
+    dualDetailGap: number;
+  } {
+    const margin = 20;
+    const DUAL_DETAIL_GAP = 20;
+    const MIN_DUAL_CARD_W = 200;
+    const dual = this.isDualPickMode() && !this.lobbyView;
+    if (!dual) {
+      const layoutW = ROW_WIDTH + DETAIL_GAP + DETAIL_W;
+      return {
+        layoutX: Math.max(margin, (cw - layoutW) / 2),
+        detailW: DETAIL_W,
+        dualSideBySide: false,
+        dualDetailGap: DUAL_DETAIL_GAP,
+      };
+    }
+    // Available width for two cards after grid + gaps + margins.
+    const availableForCards =
+      cw - margin * 2 - ROW_WIDTH - DETAIL_GAP - DUAL_DETAIL_GAP;
+    const cardW = Math.min(DETAIL_W, availableForCards / 2);
+    if (cardW < MIN_DUAL_CARD_W) {
+      // Viewport too narrow to show both cards side-by-side at a
+      // readable width — collapse to single. Player still gets the
+      // YOU detail; the AI mini-card is dropped on this layout.
+      // (A future iteration could stack the two cards vertically.)
+      const layoutW = ROW_WIDTH + DETAIL_GAP + DETAIL_W;
+      return {
+        layoutX: Math.max(margin, (cw - layoutW) / 2),
+        detailW: DETAIL_W,
+        dualSideBySide: false,
+        dualDetailGap: DUAL_DETAIL_GAP,
+      };
+    }
+    const layoutW = ROW_WIDTH + DETAIL_GAP + cardW * 2 + DUAL_DETAIL_GAP;
+    return {
+      layoutX: Math.max(margin, (cw - layoutW) / 2),
+      detailW: cardW,
+      dualSideBySide: true,
+      dualDetailGap: DUAL_DETAIL_GAP,
+    };
   }
 
   constructor() {
@@ -519,16 +567,16 @@ export class SelectScreen {
 
     // Dual-pick layout? In VS Computer hunt rounds (not network,
     // not FFA) we show TWO detail cards side-by-side — "YOU" and
-    // "VS COMPUTER". A small SWAP button sits between them.
-    const dual = this.isDualPickMode() && !this.lobbyView;
-    if (dual) this.ensureAiPick();
-    // Inter-card gap when dual.
-    const DUAL_DETAIL_GAP = 20;
-    // Layout block: grid on left, detail card(s) on right, centered
-    // as a unit.
-    const detailsW = dual ? DETAIL_W * 2 + DUAL_DETAIL_GAP : DETAIL_W;
-    const layoutW = ROW_WIDTH + DETAIL_GAP + detailsW;
-    const layoutX = Math.max(20, (cw - layoutW) / 2);
+    // "VS COMPUTER". computeLayout returns a per-frame
+    // (layoutX, detailW, dualSideBySide) tuple — on narrow
+    // viewports detailW shrinks below 380 so both cards still
+    // fit; if even at the minimum readable width they don't fit,
+    // dualSideBySide falls false and we draw the legacy single
+    // card only.
+    if (this.isDualPickMode()) this.ensureAiPick();
+    const layout = this.computeLayout(cw);
+    const { layoutX, detailW, dualDetailGap } = layout;
+    const dual = layout.dualSideBySide;
     const gridX = layoutX;
     const detailX = layoutX + ROW_WIDTH + DETAIL_GAP;
 
@@ -567,19 +615,19 @@ export class SelectScreen {
       const playerColor = "#ffd84a"; // yellow accent — matches the
       const aiColor = "#d05050";     // detail-card pill + tile border
       this.drawDetailCard(
-        ctx, detailX, gridTop, DETAIL_W, DETAIL_H,
+        ctx, detailX, gridTop, detailW, DETAIL_H,
         this.selectedId, "YOU", playerColor,
       );
-      const aiX = detailX + DETAIL_W + DUAL_DETAIL_GAP;
+      const aiX = detailX + detailW + dualDetailGap;
       this.drawDetailCard(
-        ctx, aiX, gridTop, DETAIL_W, DETAIL_H,
+        ctx, aiX, gridTop, detailW, DETAIL_H,
         this.aiSelectedId, "VS COMPUTER", aiColor,
       );
       // SWAP button vertically centered between the cards. Small,
       // dark, with a ⇄ glyph — tapping swaps player ↔ AI.
       const swapW = 36;
       const swapH = 36;
-      const swapX = aiX - DUAL_DETAIL_GAP / 2 - swapW / 2;
+      const swapX = aiX - dualDetailGap / 2 - swapW / 2;
       const swapY = gridTop + DETAIL_H / 2 - swapH / 2;
       this.swapBtn = { x: swapX, y: swapY, w: swapW, h: swapH };
       ctx.fillStyle = "rgba(30, 36, 34, 0.95)";
