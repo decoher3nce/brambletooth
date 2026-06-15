@@ -171,8 +171,21 @@ export class SelectScreen {
   // Auto-defaulted to a sensible opposing-role character when the
   // player's pick changes.
   private aiSelectedId: string | null = null;
-  // SWAP-button hit rect (rebuilt each draw, dual-mode only).
+  // Hit rects for the three between-card buttons (rebuilt each
+  // draw, dual-mode only).
   private swapBtn: { x: number; y: number; w: number; h: number } | null = null;
+  private randomizeBtn: { x: number; y: number; w: number; h: number } | null = null;
+  private surpriseBtn: { x: number; y: number; w: number; h: number } | null = null;
+  // Active RANDOMIZE roulette animation. When set, draw() cycles
+  // the VS COMPUTER card's displayed character at a tick rate that
+  // eases out over `duration` seconds, then snaps to `targetId`.
+  private rouletteAnim: { startTime: number; duration: number; targetId: string } | null = null;
+  // SURPRISE mode: the AI's pick is committed but hidden in the UI
+  // (the VS COMPUTER card renders a "?" placeholder and the tile
+  // grid suppresses the ai-pick red border) until the round starts.
+  // Cleared the moment the player manually picks an AI character or
+  // taps SWAP — any deliberate action reveals.
+  private aiSurprise: boolean = false;
 
   // Toggle networked-lobby chrome. Pass null to render the local picker.
   setLobbyView(view: LobbyView | null): void {
@@ -421,15 +434,37 @@ export class SelectScreen {
     // Tap outside any pinned row clears the pin (silently — no sound).
     if (this.pinnedPlayer) this.pinnedPlayer = null;
 
-    // SWAP-button hit in dual-pick mode: swap who plays which character.
-    if (this.swapBtn && this.isDualPickMode()) {
-      const b = this.swapBtn;
-      if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
-        playSound("ui_pick");
-        this.swapPicks();
-        this.hoverId = null;
-        if (this.selectedId) hooks.onSelect?.(this.selectedId);
-        return;
+    // RANDOMIZE / SWAP / SURPRISE hits in dual-pick mode — each
+    // rebuilds the AI pick or its presentation. Order matches the
+    // vertical stack so a vertically-near tap routes deterministically.
+    if (this.isDualPickMode()) {
+      if (this.randomizeBtn) {
+        const b = this.randomizeBtn;
+        if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
+          playSound("ui_pick");
+          this.startRoulette();
+          this.hoverId = null;
+          return;
+        }
+      }
+      if (this.swapBtn) {
+        const b = this.swapBtn;
+        if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
+          playSound("ui_pick");
+          this.swapPicks();
+          this.hoverId = null;
+          if (this.selectedId) hooks.onSelect?.(this.selectedId);
+          return;
+        }
+      }
+      if (this.surpriseBtn) {
+        const b = this.surpriseBtn;
+        if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
+          playSound("ui_pick");
+          this.setSurprise();
+          this.hoverId = null;
+          return;
+        }
       }
     }
     for (const tile of this.tiles) {
@@ -444,7 +479,11 @@ export class SelectScreen {
         if (this.isDualPickMode() && this.selectedId) {
           const playerDef = CHARACTERS[this.selectedId];
           if (playerDef && tile.role !== playerDef.role) {
-            // Opposing role — set as AI's character.
+            // Opposing role — set as AI's character. A deliberate
+            // manual pick cancels SURPRISE + roulette so the player
+            // sees what they just chose.
+            this.rouletteAnim = null;
+            this.aiSurprise = false;
             if (tile.characterId === this.aiSelectedId) return;
             this.aiSelectedId = tile.characterId;
             this.hoverId = null;
@@ -532,10 +571,14 @@ export class SelectScreen {
     }
     // Keep the existing AI pick if it's still a valid opposing-role
     // character (preserves the player's explicit choice across
-    // re-renders); otherwise default to the first allowed.
+    // re-renders); otherwise default to the first allowed AND
+    // cancel any active SURPRISE / roulette state (the player
+    // changed roles so the old hidden pick is stale).
     const current = this.aiSelectedId ? CHARACTERS[this.aiSelectedId] : null;
     if (!current || current.role !== opposing || !this.isCharacterAllowed(this.aiSelectedId!)) {
       this.aiSelectedId = pool[0]!.id;
+      this.aiSurprise = false;
+      this.rouletteAnim = null;
     }
   }
 
@@ -548,6 +591,79 @@ export class SelectScreen {
     const tmp = this.selectedId;
     this.selectedId = this.aiSelectedId;
     this.aiSelectedId = tmp;
+    // Any deliberate user action cancels surprise + roulette so
+    // the player isn't blindsided by stale obfuscation.
+    this.aiSurprise = false;
+    this.rouletteAnim = null;
+  }
+
+  // All allowed characters from the OPPOSING role relative to the
+  // player's current pick. Used by RANDOMIZE + SURPRISE to source
+  // an AI candidate pool. Falls back to ALL allowed characters if
+  // the player hasn't picked yet (defensive).
+  private opposingCharacters(): CharacterDef[] {
+    if (!this.selectedId) {
+      return Object.values(CHARACTERS).filter((c) => this.isCharacterAllowed(c.id));
+    }
+    const playerDef = CHARACTERS[this.selectedId];
+    if (!playerDef) return [];
+    const opposing: CharacterRole = playerDef.role === "hunter" ? "survivor" : "hunter";
+    return this.charactersByRole(opposing);
+  }
+
+  // Kick off the roulette animation. Pre-picks the landing character
+  // so the easing logic only has to drive the visible cycle. Clears
+  // surprise mode (visible cycle would defeat the secrecy anyway).
+  private startRoulette(): void {
+    const pool = this.opposingCharacters();
+    if (pool.length === 0) return;
+    const target = pool[Math.floor(Math.random() * pool.length)]!;
+    this.rouletteAnim = {
+      startTime: performance.now(),
+      duration: 1800,
+      targetId: target.id,
+    };
+    this.aiSurprise = false;
+  }
+
+  // Commit a random AI pick AND hide it from the UI. Clears any
+  // active roulette so the two states don't conflict.
+  private setSurprise(): void {
+    const pool = this.opposingCharacters();
+    if (pool.length === 0) return;
+    const pick = pool[Math.floor(Math.random() * pool.length)]!;
+    this.aiSelectedId = pick.id;
+    this.aiSurprise = true;
+    this.rouletteAnim = null;
+  }
+
+  // Public — main.ts checks this when starting the round so it can
+  // clear surprise state for the next round's select-screen visit.
+  clearAiSurprise(): void {
+    this.aiSurprise = false;
+  }
+
+  // Advance the roulette animation each frame. Cycles the AI's
+  // visible pick at a rate that eases out (fast at first, slowing
+  // toward the end), then snaps to the pre-picked targetId when
+  // elapsed >= duration. No-op when no animation is active.
+  private tickRoulette(): void {
+    if (!this.rouletteAnim) return;
+    const elapsed = performance.now() - this.rouletteAnim.startTime;
+    if (elapsed >= this.rouletteAnim.duration) {
+      this.aiSelectedId = this.rouletteAnim.targetId;
+      this.rouletteAnim = null;
+      return;
+    }
+    const pool = this.opposingCharacters();
+    if (pool.length === 0) return;
+    const t = elapsed / this.rouletteAnim.duration;
+    // easeOutQuart for the cumulative-tick curve — fast cycle at
+    // first, slowing to a halt.
+    const eased = 1 - Math.pow(1 - t, 4);
+    const TOTAL_TICKS = 24;
+    const tickIdx = Math.floor(eased * TOTAL_TICKS);
+    this.aiSelectedId = pool[tickIdx % pool.length]!.id;
   }
 
   draw(ctx: CanvasRenderingContext2D, dims: { w: number; h: number }): void {
@@ -612,6 +728,9 @@ export class SelectScreen {
 
     // Detail card(s).
     if (dual) {
+      // Roulette animation ticks BEFORE we render the cards so
+      // the displayed AI character matches the cycle frame.
+      this.tickRoulette();
       const playerColor = "#ffd84a"; // yellow accent — matches the
       const aiColor = "#d05050";     // detail-card pill + tile border
       this.drawDetailCard(
@@ -622,29 +741,53 @@ export class SelectScreen {
       this.drawDetailCard(
         ctx, aiX, gridTop, detailW, DETAIL_H,
         this.aiSelectedId, "VS COMPUTER", aiColor,
+        this.aiSurprise,
       );
-      // SWAP button vertically centered between the cards. Small,
-      // dark, with a ⇄ glyph — tapping swaps player ↔ AI.
-      const swapW = 36;
-      const swapH = 36;
-      const swapX = aiX - dualDetailGap / 2 - swapW / 2;
-      const swapY = gridTop + DETAIL_H / 2 - swapH / 2;
-      this.swapBtn = { x: swapX, y: swapY, w: swapW, h: swapH };
-      ctx.fillStyle = "rgba(30, 36, 34, 0.95)";
-      this.roundedRect(ctx, swapX, swapY, swapW, swapH, swapW / 2);
-      ctx.fill();
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
-      ctx.lineWidth = 1.5;
-      this.roundedRect(ctx, swapX, swapY, swapW, swapH, swapW / 2);
-      ctx.stroke();
-      ctx.fillStyle = "#fff";
-      ctx.font = "bold 18px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText("⇄", swapX + swapW / 2, swapY + swapH / 2 + 1);
-      ctx.textBaseline = "alphabetic";
+      // Three stacked action buttons vertically centered between
+      // the cards: RANDOMIZE (top) — ↻ roulette, SWAP (middle) —
+      // ⇄ swap, SURPRISE (bottom) — ? hidden pick.
+      const btnW = 32;
+      const btnH = 32;
+      const btnGap = 8;
+      const stackH = btnH * 3 + btnGap * 2;
+      const stackCenterY = gridTop + DETAIL_H / 2;
+      const btnX = aiX - dualDetailGap / 2 - btnW / 2;
+      const randY = stackCenterY - stackH / 2;
+      const swapY = randY + btnH + btnGap;
+      const surpY = swapY + btnH + btnGap;
+      this.randomizeBtn = { x: btnX, y: randY, w: btnW, h: btnH };
+      this.swapBtn = { x: btnX, y: swapY, w: btnW, h: btnH };
+      this.surpriseBtn = { x: btnX, y: surpY, w: btnW, h: btnH };
+      const drawCircleBtn = (
+        x: number, y: number, w: number, h: number,
+        glyph: string, glyphSize: number,
+        highlight: boolean,
+      ) => {
+        ctx.fillStyle = highlight
+          ? "rgba(80, 60, 18, 0.95)"
+          : "rgba(30, 36, 34, 0.95)";
+        this.roundedRect(ctx, x, y, w, h, w / 2);
+        ctx.fill();
+        ctx.strokeStyle = highlight
+          ? "#ffd84a"
+          : "rgba(255, 255, 255, 0.25)";
+        ctx.lineWidth = highlight ? 2 : 1.5;
+        this.roundedRect(ctx, x, y, w, h, w / 2);
+        ctx.stroke();
+        ctx.fillStyle = "#fff";
+        ctx.font = `bold ${glyphSize}px system-ui, sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(glyph, x + w / 2, y + h / 2 + 1);
+        ctx.textBaseline = "alphabetic";
+      };
+      drawCircleBtn(btnX, randY, btnW, btnH, "↻", 18, this.rouletteAnim !== null);
+      drawCircleBtn(btnX, swapY, btnW, btnH, "⇄", 16, false);
+      drawCircleBtn(btnX, surpY, btnW, btnH, "?", 18, this.aiSurprise);
     } else {
       this.swapBtn = null;
+      this.randomizeBtn = null;
+      this.surpriseBtn = null;
       this.drawDetailCard(ctx, detailX, gridTop, DETAIL_W, DETAIL_H);
     }
 
@@ -784,7 +927,11 @@ export class SelectScreen {
   ): void {
     const locked = def === null;
     const selected = def !== null && def.id === this.selectedId;
-    const aiSelected = def !== null && def.id === this.aiSelectedId && this.isDualPickMode();
+    // SURPRISE hides the AI's pick — including the red tile border
+    // that would otherwise leak which character the computer
+    // committed to.
+    const aiSelected = def !== null && def.id === this.aiSelectedId
+      && this.isDualPickMode() && !this.aiSurprise;
     const hovered = def !== null && def.id === this.hoverId;
 
     // Players (in the networked lobby) who picked this character. Includes
@@ -938,6 +1085,10 @@ export class SelectScreen {
     label: string | null = null,
     // Tint applied to the card border (player vs AI distinction).
     borderColor: string | null = null,
+    // SURPRISE mode — render the AI's pick as a "?" placeholder
+    // instead of revealing the actual character. Used by the
+    // dual-pick VS COMPUTER card when aiSurprise is set.
+    hidden: boolean = false,
   ): void {
     ctx.fillStyle = PANEL_BG;
     this.roundedRect(ctx, x, y, w, h, 12);
@@ -970,6 +1121,33 @@ export class SelectScreen {
       ctx.textBaseline = "alphabetic";
     }
 
+    // SURPRISE: render a hidden "???" placeholder regardless of
+    // what character is committed under the hood. The player only
+    // learns the matchup when the round starts.
+    if (hidden) {
+      const cx = x + w / 2;
+      const cy = y + h * 0.45;
+      // Big spotlight-style "?" mark.
+      ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
+      ctx.beginPath();
+      ctx.arc(cx, cy, Math.min(w, h) * 0.28, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#d05050";
+      ctx.font = "bold 140px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("?", cx, cy);
+      ctx.fillStyle = TEXT;
+      ctx.font = "bold 22px system-ui, sans-serif";
+      ctx.fillText("SURPRISE", cx, y + h * 0.72);
+      ctx.fillStyle = TEXT_DIM;
+      ctx.font = "italic 12px system-ui, sans-serif";
+      ctx.fillText("The computer's pick is hidden", cx, y + h * 0.78);
+      ctx.fillText("until the round starts.", cx, y + h * 0.78 + 16);
+      ctx.textBaseline = "alphabetic";
+      ctx.textAlign = "left";
+      return;
+    }
     const id = overrideId ?? this.displayedId();
     if (!id) {
       ctx.fillStyle = TEXT_DIM;

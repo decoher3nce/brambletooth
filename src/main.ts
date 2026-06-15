@@ -1161,6 +1161,11 @@ function startRound(
   // screen).
   const aiPick = selectScreen.getAiSelected();
   const aiPickDef = aiPick ? CHARACTERS[aiPick] : null;
+  // Round is starting — drop the SURPRISE veil so when the player
+  // bounces back to the select screen after the round, the AI's
+  // last pick is visible again. The actual hidden character was
+  // already committed via aiPick above.
+  selectScreen.clearAiSurprise();
   if (def.role === "hunter") {
     hunterId = chosenId;
     survivorId = aiPickDef && aiPickDef.role === "survivor"
