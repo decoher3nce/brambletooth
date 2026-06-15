@@ -95,6 +95,11 @@ interface ButtonRect {
 // SLOTS_PER_ROLE tiles; filled ones come first (in CHARACTERS insertion
 // order), the rest render as locked "?".
 const SLOTS_PER_ROLE = 6;
+// Compact slot count used in dual-pick mode — freeing horizontal
+// space so two detail cards fit on iPad-class viewports (820-1180
+// CSS px). 3 covers every currently-shipped role (2 hunters,
+// 3 survivors). Bump to 4+ when a role exceeds 3 characters.
+const DUAL_SLOTS_PER_ROLE = 3;
 
 const TILE_W = 96;
 const TILE_H = 96;
@@ -208,6 +213,21 @@ export class SelectScreen {
     return layoutX + ROW_WIDTH / 2;
   }
 
+  // Effective slot count for the role-tile rows. Dual-pick mode
+  // uses the compact 3-slot grid to free horizontal space for two
+  // detail cards; everything else uses the full 6-slot grid.
+  private slotsPerRole(): number {
+    return (this.isDualPickMode() && !this.lobbyView)
+      ? DUAL_SLOTS_PER_ROLE
+      : SLOTS_PER_ROLE;
+  }
+  // Pixel width of one role row at the current slot count. Mirrors
+  // the ROW_WIDTH constant calculation.
+  private rowWidth(): number {
+    const slots = this.slotsPerRole();
+    return slots * TILE_W + (slots - 1) * TILE_GAP;
+  }
+
   // Adaptive layout math, shared by draw() and getGridCenterX.
   // Decides whether two detail cards fit side-by-side at full
   // width, side-by-side at a shrunk-but-readable width, or
@@ -218,43 +238,51 @@ export class SelectScreen {
   private computeLayout(cw: number): {
     layoutX: number;
     detailW: number;
+    rowW: number;
     dualSideBySide: boolean;
     dualDetailGap: number;
   } {
     const margin = 20;
     const DUAL_DETAIL_GAP = 20;
-    const MIN_DUAL_CARD_W = 200;
+    // Slightly lower minimum than before: combined with the
+    // 3-slot dual grid this lets every iPad-class viewport
+    // (820 px and up in landscape) show both cards. Below ~180
+    // the stats list starts wrapping awkwardly.
+    const MIN_DUAL_CARD_W = 180;
     const dual = this.isDualPickMode() && !this.lobbyView;
+    const rowW = this.rowWidth();
     if (!dual) {
-      const layoutW = ROW_WIDTH + DETAIL_GAP + DETAIL_W;
+      const layoutW = rowW + DETAIL_GAP + DETAIL_W;
       return {
         layoutX: Math.max(margin, (cw - layoutW) / 2),
         detailW: DETAIL_W,
+        rowW,
         dualSideBySide: false,
         dualDetailGap: DUAL_DETAIL_GAP,
       };
     }
     // Available width for two cards after grid + gaps + margins.
     const availableForCards =
-      cw - margin * 2 - ROW_WIDTH - DETAIL_GAP - DUAL_DETAIL_GAP;
+      cw - margin * 2 - rowW - DETAIL_GAP - DUAL_DETAIL_GAP;
     const cardW = Math.min(DETAIL_W, availableForCards / 2);
     if (cardW < MIN_DUAL_CARD_W) {
-      // Viewport too narrow to show both cards side-by-side at a
-      // readable width — collapse to single. Player still gets the
-      // YOU detail; the AI mini-card is dropped on this layout.
-      // (A future iteration could stack the two cards vertically.)
-      const layoutW = ROW_WIDTH + DETAIL_GAP + DETAIL_W;
+      // Viewport too narrow even with the compact 3-slot grid —
+      // collapse to single. Player still gets the YOU detail; the
+      // AI mini-card is dropped on this layout.
+      const layoutW = rowW + DETAIL_GAP + DETAIL_W;
       return {
         layoutX: Math.max(margin, (cw - layoutW) / 2),
         detailW: DETAIL_W,
+        rowW,
         dualSideBySide: false,
         dualDetailGap: DUAL_DETAIL_GAP,
       };
     }
-    const layoutW = ROW_WIDTH + DETAIL_GAP + cardW * 2 + DUAL_DETAIL_GAP;
+    const layoutW = rowW + DETAIL_GAP + cardW * 2 + DUAL_DETAIL_GAP;
     return {
       layoutX: Math.max(margin, (cw - layoutW) / 2),
       detailW: cardW,
+      rowW,
       dualSideBySide: true,
       dualDetailGap: DUAL_DETAIL_GAP,
     };
@@ -709,10 +737,10 @@ export class SelectScreen {
     // card only.
     if (this.isDualPickMode()) this.ensureAiPick();
     const layout = this.computeLayout(cw);
-    const { layoutX, detailW, dualDetailGap } = layout;
+    const { layoutX, detailW, rowW, dualDetailGap } = layout;
     const dual = layout.dualSideBySide;
     const gridX = layoutX;
-    const detailX = layoutX + ROW_WIDTH + DETAIL_GAP;
+    const detailX = layoutX + rowW + DETAIL_GAP;
 
     // Vertical anchor: try to start sections below the title, leave room
     // for the START button at the bottom.
@@ -727,6 +755,7 @@ export class SelectScreen {
 
     // Recompute hit zones for the grid.
     this.tiles = [];
+    const slotsToDraw = this.slotsPerRole();
     this.drawRoleSection(
       ctx,
       "HUNTERS",
@@ -734,6 +763,7 @@ export class SelectScreen {
       gridX,
       huntersLabelY,
       huntersRowY,
+      slotsToDraw,
     );
     this.drawRoleSection(
       ctx,
@@ -742,6 +772,7 @@ export class SelectScreen {
       gridX,
       survivorsLabelY,
       survivorsRowY,
+      slotsToDraw,
     );
 
     // Detail card(s).
@@ -811,7 +842,7 @@ export class SelectScreen {
 
     // Networked lobby panel (both players' picks + ready) below the grid.
     if (this.lobbyView) {
-      this.drawLobbyPanel(ctx, gridX, gridBottom + 28, ROW_WIDTH, this.lobbyView);
+      this.drawLobbyPanel(ctx, gridX, gridBottom + 28, rowW, this.lobbyView);
     }
 
     // Primary button: under the grid, centered on grid column. Label and
@@ -828,7 +859,7 @@ export class SelectScreen {
     ctx.restore();
     const startW = Math.max(240, Math.ceil(measured) + 56);
     const startH = 56;
-    const startX = gridX + (ROW_WIDTH - startW) / 2;
+    const startX = gridX + (rowW - startW) / 2;
     const startY = Math.max(gridBottom + 36, ch - 100);
     this.startBtn = { x: startX, y: startY, w: startW, h: startH };
     this.drawStartButton(ctx, this.startBtn, enabled, label);
@@ -915,6 +946,7 @@ export class SelectScreen {
     x: number,
     labelY: number,
     rowY: number,
+    slotCount: number = SLOTS_PER_ROLE,
   ): void {
     ctx.fillStyle = TEXT_DIM;
     ctx.font = "bold 12px system-ui, sans-serif";
@@ -922,7 +954,7 @@ export class SelectScreen {
     ctx.fillText(label, x, labelY + 12);
 
     const filled = this.charactersByRole(role);
-    for (let i = 0; i < SLOTS_PER_ROLE; i++) {
+    for (let i = 0; i < slotCount; i++) {
       const tileX = x + i * (TILE_W + TILE_GAP);
       const def = filled[i] ?? null;
       const tile: TileRect = {
