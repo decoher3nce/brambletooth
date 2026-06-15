@@ -542,6 +542,12 @@ selectScreen.xpForLevel = (lv) => xpForLevel(lv);
 // off for FFA (no single AI to pick) and off whenever a network
 // lobby is driving the screen.
 selectScreen.isDualPickMode = () => appMode === "local" && !pendingFFA;
+// VS COMPUTER card reads the current AI difficulty tier to compute
+// its displayed level + colored stat / damage deltas. null in non-VS
+// flows (network lobby, FFA) — the AI card then falls back to plain
+// per-level deltas.
+selectScreen.getAiDifficulty = () =>
+  appMode === "local" && !pendingFFA ? getAiDifficulty() : null;
 selectScreen.bind(canvas, logicalSize, {
   onStart: (chosenId) => {
     if (appMode === "net" && net) {

@@ -23,7 +23,10 @@ import {
   hpMultForLevel,
   speedMultForLevel,
   damageMultForLevel,
+  aiLevelOffset,
+  AI_DIFFICULTY_STAT_MULTS,
 } from "../core/leveling";
+import type { AiDifficulty } from "../core/leveling";
 
 export interface SelectHooks {
   // Fired when the primary button is pressed (START locally; READY toggle
@@ -180,6 +183,14 @@ export class SelectScreen {
   // between the two cards toggles which character is yours. Off in
   // network lobby + FFA flows.
   isDualPickMode: () => boolean = () => false;
+  // Currently-selected AI difficulty tier (VS Computer flow). Drives
+  // the VS COMPUTER detail card's level + stat-mult deltas — the
+  // displayed AI level = playerLevel + aiLevelOffset(diff), and the
+  // tier's flat stat multipliers (HP/speed/damage) stack on top of
+  // the per-level scaling. Returns null when no AI tier is active
+  // (network lobby, FFA) — the AI card then falls back to plain
+  // per-level deltas.
+  getAiDifficulty: () => AiDifficulty | null = () => null;
   // The AI's currently-selected character in dual-pick mode. main.ts
   // reads this via getAiSelected() when starting a VS Computer round.
   // Auto-defaulted to a sensible opposing-role character when the
@@ -794,12 +805,13 @@ export class SelectScreen {
       this.drawDetailCard(
         ctx, detailX, gridTop, detailW, DETAIL_H,
         this.selectedId, "YOU", playerColor,
+        false, false,
       );
       const aiX = detailX + detailW + dualDetailGap;
       this.drawDetailCard(
         ctx, aiX, gridTop, detailW, DETAIL_H,
         this.aiSelectedId, "VS COMPUTER", aiColor,
-        this.aiSurprise,
+        this.aiSurprise, true,
       );
       // Three stacked action buttons vertically centered between
       // the cards: RANDOMIZE (top) — ↻ roulette, SWAP (middle) —
@@ -1148,6 +1160,12 @@ export class SelectScreen {
     // instead of revealing the actual character. Used by the
     // dual-pick VS COMPUTER card when aiSurprise is set.
     hidden: boolean = false,
+    // When true, this card represents the AI side in dual-pick
+    // mode. The displayed level becomes playerLevel +
+    // aiLevelOffset(diff), and the AI difficulty tier's flat
+    // stat-mult is layered on top of per-level scaling when
+    // computing stat / ability deltas.
+    isAi: boolean = false,
   ): void {
     ctx.fillStyle = PANEL_BG;
     this.roundedRect(ctx, x, y, w, h, 12);
@@ -1263,10 +1281,29 @@ export class SelectScreen {
 
     // Stats list (label : value).
     ctx.font = "12px system-ui, sans-serif";
-    // Level row first — calls out the player's current level for
-    // this character with a yellow accent so it doesn't get lost
-    // in the stat list.
-    const level = this.getCharacterLevel(def.id);
+    // Level row first — calls out the level being used for the
+    // delta math with a yellow accent so it doesn't get lost in
+    // the stat list. For the YOU card this is the local profile's
+    // level for this character. For the VS COMPUTER card it's the
+    // player's level (for THEIR pick) + the current difficulty's
+    // level offset, clamped at 0 — mirrors what applyLevelsToWorld
+    // does at round start (pre-jitter).
+    //
+    // diffMult is the AI difficulty tier's flat stat multiplier,
+    // null on the YOU card. statLevel + diffMult get threaded
+    // into every delta calc below.
+    const playerLevel = this.selectedId
+      ? this.getCharacterLevel(this.selectedId)
+      : 0;
+    const aiDiff = isAi ? this.getAiDifficulty() : null;
+    const statLevel = isAi
+      ? Math.max(0, playerLevel + (aiDiff ? aiLevelOffset(aiDiff) : 0))
+      : this.getCharacterLevel(def.id);
+    const diffMult = aiDiff ? AI_DIFFICULTY_STAT_MULTS[aiDiff] : null;
+    // XP track / progress bar still references the per-character
+    // level for the YOU card; the AI card hides the XP row since
+    // its level is derived, not earned.
+    const level = isAi ? statLevel : this.getCharacterLevel(def.id);
     ctx.fillStyle = TEXT_DIM;
     ctx.textAlign = "left";
     ctx.fillText("Level", x + pad, cy);
@@ -1280,7 +1317,9 @@ export class SelectScreen {
     // "XP: nIn / nNeeded" on the left/right pair, plus a thin
     // horizontal progress bar underneath. At MAX_LEVEL the row
     // collapses to "XP: MAX" and the bar fills solid yellow.
-    {
+    // Hidden on the AI card: the AI's level is derived from the
+    // player's level + difficulty offset, not earned XP.
+    if (!isAi) {
       const xp = this.getCharacterXp(def.id);
       const isMax = level >= this.maxLevel;
       const xpForCurrent = this.xpForLevel(level);
@@ -1321,7 +1360,12 @@ export class SelectScreen {
       // colored green (positive) or red (negative). Otherwise
       // fall back to the legacy plain-string render.
       if (stat.baseNumber !== undefined && stat.scaling) {
-        const delta = levelDelta(stat.baseNumber, stat.scaling, level);
+        const delta = effectiveDelta(
+          stat.baseNumber,
+          stat.scaling,
+          statLevel,
+          diffMult,
+        );
         drawValueWithDelta(
           ctx,
           stat.value,
@@ -1379,7 +1423,12 @@ export class SelectScreen {
       // displayDamage. Shows `Damage: N + delta` with the delta
       // colored green / red the same way as the stat rows.
       if (ab.displayDamage !== undefined) {
-        const delta = levelDelta(ab.displayDamage, "damage", level);
+        const delta = effectiveDelta(
+          ab.displayDamage,
+          "damage",
+          statLevel,
+          diffMult,
+        );
         ctx.fillStyle = TEXT_DIM;
         ctx.font = "10px system-ui, sans-serif";
         ctx.textAlign = "left";
@@ -1468,20 +1517,32 @@ export class SelectScreen {
   }
 }
 
-// Compute the integer delta a level adds to a base stat under the
-// scaling family. Mirrors what applyLevelToCharacter does in
+// Compute the integer delta a level + (optional) AI-difficulty tier
+// adds to a base stat under the scaling family. Mirrors what
+// applyLevelToCharacter + applyDifficultyMult do in
 // src/core/leveling.ts so the displayed delta matches what the
-// engine actually applies at round start. HP rounds (the engine
-// rounds maxHp). Speed and damage are reported as integer percent-of-
-// base equivalents for display so the user sees a whole-number delta;
-// the engine carries the float internally.
-function levelDelta(base: number, scaling: StatScaling, level: number): number {
-  if (level <= 0) return 0;
-  let mult: number;
-  if (scaling === "hp") mult = hpMultForLevel(level);
-  else if (scaling === "speed") mult = speedMultForLevel(level);
-  else mult = damageMultForLevel(level);
-  return Math.round(base * mult) - base;
+// engine actually applies at round start. diffMult = null on the
+// YOU card (only per-level scaling); set to AI_DIFFICULTY_STAT_MULTS[d]
+// on the VS COMPUTER card so the flat tier multiplier layers on top.
+function effectiveDelta(
+  base: number,
+  scaling: StatScaling,
+  level: number,
+  diffMult: { hp: number; speed: number; damage: number } | null,
+): number {
+  let lvlMult: number;
+  let dMult: number;
+  if (scaling === "hp") {
+    lvlMult = hpMultForLevel(level);
+    dMult = diffMult?.hp ?? 1;
+  } else if (scaling === "speed") {
+    lvlMult = speedMultForLevel(level);
+    dMult = diffMult?.speed ?? 1;
+  } else {
+    lvlMult = damageMultForLevel(level);
+    dMult = diffMult?.damage ?? 1;
+  }
+  return Math.round(base * lvlMult * dMult) - base;
 }
 
 // Right-align a value followed by a colored level-bonus delta. The
