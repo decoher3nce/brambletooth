@@ -15,10 +15,15 @@
 // START commits and transitions main.ts to the "playing" scene.
 
 import { CHARACTERS } from "../characters/characters";
-import type { CharacterDef, CharacterRole } from "../characters/characters";
+import type { CharacterDef, CharacterRole, StatScaling } from "../characters/characters";
 import { ABILITIES } from "../abilities/abilities";
 import { CHARACTER_ART, drawGumdropBody } from "../render/characterArt";
 import { playSound } from "../audio/sound";
+import {
+  hpMultForLevel,
+  speedMultForLevel,
+  damageMultForLevel,
+} from "../core/leveling";
 
 export interface SelectHooks {
   // Fired when the primary button is pressed (START locally; READY toggle
@@ -125,6 +130,10 @@ const TEXT = "#fff";
 const TEXT_DIM = "rgba(255, 255, 255, 0.55)";
 const TEXT_LOCKED = "rgba(255, 255, 255, 0.25)";
 const ACCENT = "#ffd84a";
+// Level-bonus delta colors: green for buffs (positive), red for debuffs
+// (negative). Used by the detail card's stat rows and ability damage line.
+const BONUS_POS = "#6fdf7c";
+const BONUS_NEG = "#ff6f6f";
 
 export class SelectScreen {
   private selectedId: string | null = null;
@@ -1307,29 +1316,24 @@ export class SelectScreen {
       ctx.fillStyle = TEXT_DIM;
       ctx.textAlign = "left";
       ctx.fillText(stat.label, x + pad, cy);
-      ctx.fillStyle = TEXT;
-      ctx.textAlign = "right";
-      ctx.fillText(stat.value, x + w - pad, cy);
-      cy += 16;
-    }
-    // Level bonus modifier line — surfaces what the next round
-    // will get for this character at the current level. Constants
-    // mirror LEVEL_*_PER_LEVEL in src/core/leveling.ts; keeping
-    // them inline avoids dragging a leveling.ts import into the UI
-    // module just for two numbers.
-    {
-      const HP_PER_LEVEL = 0.010;
-      const SPEED_PER_LEVEL = 0.003;
-      const DAMAGE_PER_LEVEL = 0.010;
-      const hpPct = Math.round(level * 100 * HP_PER_LEVEL);
-      const spdPct = Math.round(level * 100 * SPEED_PER_LEVEL * 10) / 10;
-      const dmgPct = Math.round(level * 100 * DAMAGE_PER_LEVEL);
-      ctx.fillStyle = TEXT_DIM;
-      ctx.textAlign = "left";
-      ctx.font = "11px system-ui, sans-serif";
-      ctx.fillText("Level bonus", x + pad, cy);
-      ctx.textAlign = "right";
-      ctx.fillText(`+${hpPct}% HP · +${spdPct}% spd · +${dmgPct}% dmg`, x + w - pad, cy);
+      // If the stat carries a baseNumber + scaling, render the
+      // level-adjusted value as `base + delta` with the delta
+      // colored green (positive) or red (negative). Otherwise
+      // fall back to the legacy plain-string render.
+      if (stat.baseNumber !== undefined && stat.scaling) {
+        const delta = levelDelta(stat.baseNumber, stat.scaling, level);
+        drawValueWithDelta(
+          ctx,
+          stat.value,
+          delta,
+          x + w - pad,
+          cy,
+        );
+      } else {
+        ctx.fillStyle = TEXT;
+        ctx.textAlign = "right";
+        ctx.fillText(stat.value, x + w - pad, cy);
+      }
       cy += 16;
     }
     cy += 8;
@@ -1369,6 +1373,24 @@ export class SelectScreen {
       const descLines = wrapText(ctx, ab.description, descWidth);
       for (const line of descLines) {
         ctx.fillText(line, x + descIndent, cy);
+        cy += 12;
+      }
+      // Damage row — only for abilities that declared a baseline
+      // displayDamage. Shows `Damage: N + delta` with the delta
+      // colored green / red the same way as the stat rows.
+      if (ab.displayDamage !== undefined) {
+        const delta = levelDelta(ab.displayDamage, "damage", level);
+        ctx.fillStyle = TEXT_DIM;
+        ctx.font = "10px system-ui, sans-serif";
+        ctx.textAlign = "left";
+        ctx.fillText("Damage", x + descIndent, cy);
+        drawValueWithDelta(
+          ctx,
+          String(ab.displayDamage),
+          delta,
+          x + descRight,
+          cy,
+        );
         cy += 12;
       }
       cy += 5; // gap before next ability
@@ -1444,6 +1466,47 @@ export class SelectScreen {
     ctx.arcTo(x, y, x + r, y, r);
     ctx.closePath();
   }
+}
+
+// Compute the integer delta a level adds to a base stat under the
+// scaling family. Mirrors what applyLevelToCharacter does in
+// src/core/leveling.ts so the displayed delta matches what the
+// engine actually applies at round start. HP rounds (the engine
+// rounds maxHp). Speed and damage are reported as integer percent-of-
+// base equivalents for display so the user sees a whole-number delta;
+// the engine carries the float internally.
+function levelDelta(base: number, scaling: StatScaling, level: number): number {
+  if (level <= 0) return 0;
+  let mult: number;
+  if (scaling === "hp") mult = hpMultForLevel(level);
+  else if (scaling === "speed") mult = speedMultForLevel(level);
+  else mult = damageMultForLevel(level);
+  return Math.round(base * mult) - base;
+}
+
+// Right-align a value followed by a colored level-bonus delta. The
+// delta string sits flush to xRight; the base sits flush to its left
+// edge. delta = 0 collapses to a plain right-aligned value.
+function drawValueWithDelta(
+  ctx: CanvasRenderingContext2D,
+  baseText: string,
+  delta: number,
+  xRight: number,
+  y: number,
+): void {
+  ctx.textAlign = "right";
+  if (delta === 0) {
+    ctx.fillStyle = TEXT;
+    ctx.fillText(baseText, xRight, y);
+    return;
+  }
+  const sign = delta > 0 ? "+" : "−";
+  const deltaText = `  ${sign} ${Math.abs(delta)}`;
+  const deltaW = ctx.measureText(deltaText).width;
+  ctx.fillStyle = TEXT;
+  ctx.fillText(baseText, xRight - deltaW, y);
+  ctx.fillStyle = delta > 0 ? BONUS_POS : BONUS_NEG;
+  ctx.fillText(deltaText, xRight, y);
 }
 
 // Word-wrap helper. Splits text into lines no wider than maxWidth in the

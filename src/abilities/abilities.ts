@@ -65,6 +65,11 @@ export interface AbilityDef {
   // (no cooldown applied, no channel started). Used by abilities like
   // Magnesis that need pre-conditions (e.g., at least one plate placed).
   canCast?: (ctx: AbilityContext) => boolean;
+  // Base damage shown in the character-select detail card. Used to
+  // render a "Damage: N + delta" row that highlights the level-based
+  // damage bonus in green (positive) or red (negative). Only set for
+  // abilities whose primary effect is damage at a fixed number.
+  displayDamage?: number;
 }
 
 // Registry — populated by character files at import time.
@@ -84,6 +89,7 @@ registerAbility({
   name: "Slash",
   description: "Short melee swipe in front of you.",
   cooldown: 0.6,
+  displayDamage: 18,
   cast: ({ world, caster, aim }) => {
     const dir = normalize(sub(aim, caster.pos));
     const reach = 60;
@@ -149,6 +155,7 @@ registerAbility({
   name: "Slime Shot",
   description: "Ranged glob that slows on hit.",
   cooldown: 1.2,
+  displayDamage: 12,
   cast: ({ world, caster, aim }) => {
     const dir = normalize(sub(aim, caster.pos));
     const speed = 320;
@@ -172,6 +179,7 @@ registerAbility({
   name: "Slime Trap",
   description: "Place a sticky trap that damages and slows.",
   cooldown: 4.0,
+  displayDamage: 15,
   cast: ({ world, caster }) => {
     // Drop at caster feet
     world.spawn<TrapEntity>({
@@ -485,6 +493,7 @@ registerAbility({
   name: "Slash",
   description: `Heavy stone swipe in front of you. ${GRAVEMARCH_SLASH_DAMAGE} damage.`,
   cooldown: 0.7,
+  displayDamage: GRAVEMARCH_SLASH_DAMAGE,
   cast: ({ world, caster, aim }) => {
     const dir = normalize(sub(aim, caster.pos));
     const reach = 72;
@@ -553,6 +562,7 @@ registerAbility({
   name: "Rock Wall",
   description: `Hold to charge a bigger, more curved arc in the direction you aim. ${ROCK_WALL_BASE_COUNT}-${ROCK_WALL_MAX_COUNT} rocks · ${ROCK_WALL_CONTACT_DAMAGE} damage on contact · lasts ${ROCK_WALL_TTL}s. Slowed while charging.`,
   cooldown: 14,
+  displayDamage: ROCK_WALL_CONTACT_DAMAGE,
   holdToCharge: {
     maxChargeTime: ROCK_WALL_MAX_CHARGE,
     slowFactor: ROCK_WALL_SLOW_FACTOR,
@@ -652,6 +662,7 @@ registerAbility({
   name: "Stone Step",
   description: "Tunnel a fixed distance forward and surface. Aim sets the direction.",
   cooldown: 11,
+  displayDamage: STONE_STEP_HIT_DAMAGE,
   chargeTime: 0.3,
   cast: () => { /* windup */ },
   onChargeComplete: ({ world, caster, aim }) => {

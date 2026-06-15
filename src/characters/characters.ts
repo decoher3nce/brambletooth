@@ -5,9 +5,23 @@ import { MAGNEK_PLATE_CAP, NECRO_ZOMBIE_CAP, NECRO_COMMAND_DURATION } from "../a
 
 export type CharacterRole = "hunter" | "survivor" | "flex";
 
+// Which level-scaling multiplier applies to a stat. Matches the
+// constants in src/core/leveling.ts: hp (+1%/lvl), speed (+0.3%/lvl),
+// damage (+1%/lvl). Stats with no scaling render as static values.
+export type StatScaling = "hp" | "speed" | "damage";
+
 export interface DisplayStat {
   label: string;
+  // Legacy fallback when no scaling is set — also used as the
+  // PREFIX before the calculated value (e.g. "1.35× for ").
   value: string;
+  // When baseNumber + scaling are both set, the select-screen detail
+  // panel renders "baseNumber + delta" with the delta colored green
+  // for positive level bonuses and red for negative. suffix appends
+  // after the value ("s", "%", "×", " units").
+  baseNumber?: number;
+  scaling?: StatScaling;
+  suffix?: string;
 }
 
 export interface CharacterDef {
@@ -43,8 +57,8 @@ export const CHARACTERS: Record<string, CharacterDef> = {
     narrative:
       "Hulking forest hunter, slime-spitter and trap-setter. Closes gaps with brutal teleports. The first thing other survivors warn each other about.",
     displayStats: () => [
-      { label: "HP", value: "140" },
-      { label: "Speed", value: "145" },
+      { label: "HP", value: "140", baseNumber: 140, scaling: "hp" },
+      { label: "Speed", value: "145", baseNumber: 145, scaling: "speed" },
     ],
   },
   match: {
@@ -60,8 +74,8 @@ export const CHARACTERS: Record<string, CharacterDef> = {
     narrative:
       "Fast, light, no offense — just runs. Built for evasion. The flame that won't sit still.",
     displayStats: () => [
-      { label: "HP", value: "80" },
-      { label: "Speed", value: "165" },
+      { label: "HP", value: "80", baseNumber: 80, scaling: "hp" },
+      { label: "Speed", value: "165", baseNumber: 165, scaling: "speed" },
       { label: "Overdrive boost", value: "1.35× for 2.5s" },
       { label: "Glitch range", value: "60–300 units (hold to charge)" },
     ],
@@ -79,8 +93,8 @@ export const CHARACTERS: Record<string, CharacterDef> = {
     narrative:
       "Magnetic. Places iron plates and yanks himself between them. Pre-positions for safety; vanishes when cornered.",
     displayStats: () => [
-      { label: "HP", value: "100" },
-      { label: "Speed", value: "145" },
+      { label: "HP", value: "100", baseNumber: 100, scaling: "hp" },
+      { label: "Speed", value: "145", baseNumber: 145, scaling: "speed" },
       { label: "Plate cap", value: String(MAGNEK_PLATE_CAP) },
     ],
   },
@@ -97,8 +111,8 @@ export const CHARACTERS: Record<string, CharacterDef> = {
     narrative:
       "A crow that walks the line between worlds. Raises zombie minions and commands them onto chosen prey. No footsteps — wings carry her over the ground.",
     displayStats: () => [
-      { label: "HP", value: "90" },
-      { label: "Speed", value: "150" },
+      { label: "HP", value: "90", baseNumber: 90, scaling: "hp" },
+      { label: "Speed", value: "150", baseNumber: 150, scaling: "speed" },
       { label: "Zombie cap", value: String(NECRO_ZOMBIE_CAP) },
       { label: "Command duration", value: `${NECRO_COMMAND_DURATION}s` },
     ],
@@ -116,9 +130,9 @@ export const CHARACTERS: Record<string, CharacterDef> = {
     narrative:
       "Hewn from cave stone, slow but unstoppable. Blue veins run hot under the granite skin — the old kind of magic that calls walls up from the floor and tunnels through solid rock.",
     displayStats: () => [
-      { label: "HP", value: "200" },
-      { label: "Speed", value: "115" },
-      { label: "Slash damage", value: "23" },
+      { label: "HP", value: "200", baseNumber: 200, scaling: "hp" },
+      { label: "Speed", value: "115", baseNumber: 115, scaling: "speed" },
+      { label: "Slash damage", value: "23", baseNumber: 23, scaling: "damage" },
       { label: "Shield duration", value: "10s" },
     ],
   },
