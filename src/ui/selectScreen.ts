@@ -149,6 +149,15 @@ export class SelectScreen {
   // panel. Defaults to 0 (the baseline) when no hook is supplied —
   // legacy code paths get sensible behavior.
   getCharacterLevel: (id: string) => number = () => 0;
+  // Per-character cumulative XP — drives the "XP: X / Y" line and
+  // progress bar in the detail panel. Companion to
+  // getCharacterLevel; main.ts wires both from the local profile.
+  getCharacterXp: (id: string) => number = () => 0;
+  // XP needed to reach a level — same function as leveling.xpForLevel.
+  // Threaded as a hook so SelectScreen doesn't import from
+  // ../core/leveling directly.
+  xpForLevel: (level: number) => number = () => 0;
+  maxLevel = 100;
 
   // Dual-pick mode (VS Computer hunt rounds). When true, two detail
   // cards render side-by-side — YOU on the left, VS COMPUTER on the
@@ -982,6 +991,42 @@ export class SelectScreen {
     ctx.fillText(`Lv ${level}`, x + w - pad, cy);
     ctx.font = "12px system-ui, sans-serif";
     cy += 16;
+    // XP row — shows progress within the CURRENT level as
+    // "XP: nIn / nNeeded" on the left/right pair, plus a thin
+    // horizontal progress bar underneath. At MAX_LEVEL the row
+    // collapses to "XP: MAX" and the bar fills solid yellow.
+    {
+      const xp = this.getCharacterXp(def.id);
+      const isMax = level >= this.maxLevel;
+      const xpForCurrent = this.xpForLevel(level);
+      const xpForNext = this.xpForLevel(level + 1);
+      const xpInLevel = Math.max(0, xp - xpForCurrent);
+      const xpNeededForLevel = Math.max(1, xpForNext - xpForCurrent);
+      const progress = isMax ? 1 : Math.max(0, Math.min(1, xpInLevel / xpNeededForLevel));
+      ctx.fillStyle = TEXT_DIM;
+      ctx.textAlign = "left";
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.fillText("XP", x + pad, cy);
+      ctx.fillStyle = TEXT;
+      ctx.textAlign = "right";
+      const xpLabel = isMax
+        ? "MAX"
+        : `${xpInLevel} / ${xpNeededForLevel}`;
+      ctx.fillText(xpLabel, x + w - pad, cy);
+      cy += 6;
+      // Progress bar — full-width track with a filled portion.
+      const barX = x + pad;
+      const barY = cy;
+      const barW = w - pad * 2;
+      const barH = 5;
+      ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
+      this.roundedRect(ctx, barX, barY, barW, barH, barH / 2);
+      ctx.fill();
+      ctx.fillStyle = isMax ? "#ffd84a" : ACCENT;
+      this.roundedRect(ctx, barX, barY, Math.max(barH, barW * progress), barH, barH / 2);
+      ctx.fill();
+      cy += barH + 12;
+    }
     for (const stat of def.displayStats()) {
       ctx.fillStyle = TEXT_DIM;
       ctx.textAlign = "left";

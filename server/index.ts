@@ -641,25 +641,28 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
     if (req.url === "/api/profile/sync" && req.method === "POST") {
-      // The client sends FOUR arrays of mutable state: points,
-      // achievements, inventory (shop purchases), completedMaps
-      // (campaign progress). All four must reach syncProfile or the
-      // server-side union pass drops them on every sync, the server
-      // sends back its (now empty) values, and the client's
+      // The client sends FIVE arrays / objects of mutable state:
+      // points, achievements, inventory (shop purchases),
+      // completedMaps (campaign progress), characterXp (per-
+      // character XP totals). All five must reach syncProfile or
+      // the server-side union pass drops them on every sync, the
+      // server sends back its (now empty) values, and the client's
       // localStorage gets clobbered with the empty version. That's
-      // exactly the silent data-loss bug we shipped: a player would
-      // complete Streams or buy the Factory key, the local write
-      // would land, then the next sync would wipe it.
+      // the silent data-loss bug we shipped before — a player
+      // would complete Streams or buy the Factory key, the local
+      // write would land, then the next sync would wipe it.
       const body = (await readJsonBody(req)) as {
         name?: unknown; pin?: unknown;
         points?: number; achievements?: unknown;
         inventory?: unknown; completedMaps?: unknown;
+        characterXp?: unknown;
       };
       const result = syncProfile(body.name, body.pin, {
         points: body.points,
         achievements: body.achievements,
         inventory: body.inventory,
         completedMaps: body.completedMaps,
+        characterXp: body.characterXp,
       });
       sendJson(res, 200, result);
       return;

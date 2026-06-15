@@ -29,6 +29,11 @@ export interface ProfileRecord {
   achievements: EarnedAchievement[];  // earned with timestamps
   inventory: PurchasedItem[];         // shop purchases with timestamps
   completedMaps: string[];            // map ids beaten in campaign
+  // Per-character cumulative XP. Keys are CHARACTERS ids; values are
+  // raw XP totals (level derived via src/core/leveling.levelFromXp).
+  // Client + server merge by max-per-key so progress never goes
+  // backward on sync.
+  characterXp: Record<string, number>;
   createdAt: number;
   updatedAt: number;
 }
@@ -90,6 +95,20 @@ function migrateInventory(input: unknown): PurchasedItem[] {
   return out;
 }
 
+// Normalize a characterXp payload (or stored field) into a clean
+// { [characterId]: number } map. Drops keys whose value isn't a
+// finite non-negative number; floors the rest. Used both at load
+// time and inside the sync route's max-per-key merge.
+function migrateCharacterXp(input: unknown): Record<string, number> {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return {};
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+    const n = Number(v);
+    if (Number.isFinite(n) && n >= 0) out[k] = Math.floor(n);
+  }
+  return out;
+}
+
 function ensureLoaded(): void {
   if (loaded) return;
   loaded = true;
@@ -102,12 +121,15 @@ function ensureLoaded(): void {
         const p = raw[key] as ProfileRecord & {
           achievements?: unknown;
           inventory?: unknown;
+          characterXp?: unknown;
         };
         if (p) {
           p.achievements = migrateAchievements(p.achievements);
           p.inventory = migrateInventory(p.inventory);
           // Backfill completedMaps on records written before maps existed.
           if (!Array.isArray(p.completedMaps)) p.completedMaps = [];
+          // Backfill characterXp (added later).
+          p.characterXp = migrateCharacterXp(p.characterXp);
         }
       }
       store = raw as ProfileMap;
@@ -167,6 +189,7 @@ export function login(name: unknown, pin: unknown): LoginResult {
     achievements: [],
     inventory: [],
     completedMaps: [],
+    characterXp: {},
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -184,6 +207,7 @@ export interface PublicProfile {
   achievements: EarnedAchievement[];
   inventory: PurchasedItem[];
   completedMaps: string[];
+  characterXp: Record<string, number>;
 }
 export function lookupPublic(name: unknown): { ok: boolean; profile?: PublicProfile; error?: string } {
   ensureLoaded();
@@ -199,6 +223,7 @@ export function lookupPublic(name: unknown): { ok: boolean; profile?: PublicProf
       achievements: existing.achievements ?? [],
       inventory: existing.inventory ?? [],
       completedMaps: existing.completedMaps ?? [],
+      characterXp: existing.characterXp ?? {},
     },
   };
 }
@@ -214,7 +239,7 @@ export function lookupPublic(name: unknown): { ok: boolean; profile?: PublicProf
 export function syncProfile(
   name: unknown,
   pin: unknown,
-  payload: { points?: number; achievements?: unknown; inventory?: unknown; completedMaps?: unknown },
+  payload: { points?: number; achievements?: unknown; inventory?: unknown; completedMaps?: unknown; characterXp?: unknown },
 ): LoginResult {
   ensureLoaded();
   if (!isValidName(name)) return { ok: false, error: "Name must be 1-24 characters" };
@@ -279,6 +304,18 @@ export function syncProfile(
       if (typeof id === "string") set.add(id);
     }
     existing.completedMaps = [...set];
+  }
+  if (payload.characterXp && typeof payload.characterXp === "object") {
+    // Per-character XP: max-per-key merge. The client can't lower a
+    // total — it can only contribute new XP earned in rounds it
+    // played since the last sync. Same discipline as achievements
+    // (server keeps the strictly-better record).
+    const incoming = migrateCharacterXp(payload.characterXp);
+    const merged: Record<string, number> = { ...(existing.characterXp ?? {}) };
+    for (const [k, v] of Object.entries(incoming)) {
+      merged[k] = Math.max(merged[k] ?? 0, v);
+    }
+    existing.characterXp = merged;
   }
   existing.updatedAt = Date.now();
   save();

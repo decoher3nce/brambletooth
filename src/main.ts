@@ -275,6 +275,10 @@ interface ProfileResponse {
     achievements?: (string | { id: string; earnedAt?: number })[];
     inventory?: (string | { id: string; purchasedAt?: number })[];
     completedMaps?: string[];
+    // Per-character XP map. Server-canonical after the max-per-key
+    // merge in syncProfile — we save what comes back so localStorage
+    // matches whatever the server now holds.
+    characterXp?: Record<string, number>;
   };
   error?: string;
 }
@@ -317,6 +321,20 @@ async function tryLogin(name: string, pin: string): Promise<boolean> {
     if (Array.isArray(body.profile.completedMaps)) {
       saveCompletedMaps(body.profile.completedMaps);
     }
+    if (body.profile.characterXp && typeof body.profile.characterXp === "object") {
+      // Cross-device sync: on login, merge whatever XP the server
+      // holds with whatever's in localStorage (take max per
+      // character so we never roll back progress earned offline).
+      const local = getAllCharacterXp();
+      const merged: Record<string, number> = { ...local };
+      for (const [k, v] of Object.entries(body.profile.characterXp)) {
+        const n = Number(v);
+        if (Number.isFinite(n) && n >= 0) {
+          merged[k] = Math.max(merged[k] ?? 0, Math.floor(n));
+        }
+      }
+      saveAllCharacterXp(merged);
+    }
     loggedIn = true;
     try { localStorage.setItem(LOGGEDIN_KEY, "1"); } catch { /* ignore */ }
     nameInput.value = body.profile.name;
@@ -357,6 +375,7 @@ function scheduleProfileSync(): void {
           achievements: getEarnedAchievements(),
           inventory: getInventory(),
           completedMaps: getCompletedMaps(),
+          characterXp: getAllCharacterXp(),
         }),
       });
       const body = (await r.json()) as ProfileResponse;
@@ -388,6 +407,13 @@ function scheduleProfileSync(): void {
         // CompletedMaps — server already unions; just take what it sends.
         if (Array.isArray(body.profile.completedMaps)) {
           saveCompletedMaps(body.profile.completedMaps);
+        }
+        // characterXp — same discipline. The server already merged
+        // by max-per-key, so just take what it returns. Skipping
+        // this would clobber XP earned on another device since the
+        // last sync.
+        if (body.profile.characterXp && typeof body.profile.characterXp === "object") {
+          saveAllCharacterXp(body.profile.characterXp);
         }
       }
     } catch { /* swallow — local is the source of truth until next sync */ }
@@ -509,6 +535,8 @@ const selectScreen = new SelectScreen();
 // god-mode also unlocks everything for testing.
 selectScreen.isCharacterAllowed = isCharacterUnlocked;
 selectScreen.getCharacterLevel = (id) => getCharacterLevel(id);
+selectScreen.getCharacterXp = (id) => getCharacterXp(id);
+selectScreen.xpForLevel = (lv) => xpForLevel(lv);
 // Dual-pick view (two detail cards side-by-side: YOU + VS COMPUTER)
 // is on for any local hunt round — vs-computer or campaign — but
 // off for FFA (no single AI to pick) and off whenever a network
@@ -3733,6 +3761,9 @@ function addCharacterXp(characterId: string, amount: number): void {
   const all = getAllCharacterXp();
   all[characterId] = (all[characterId] ?? 0) + Math.floor(amount);
   saveAllCharacterXp(all);
+  // Cross-device persistence — same debounced sync the points /
+  // achievements / inventory paths use.
+  scheduleProfileSync();
 }
 
 // Draw the 5-pill AI difficulty selector at the bottom-center of the
