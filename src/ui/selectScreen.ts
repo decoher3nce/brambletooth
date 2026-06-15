@@ -113,12 +113,12 @@ const TILE_W = 96;
 const TILE_H = 96;
 const TILE_GAP = 10;
 const ROW_WIDTH = SLOTS_PER_ROLE * TILE_W + (SLOTS_PER_ROLE - 1) * TILE_GAP;
-const DETAIL_W = 380;
+const DETAIL_W = 340;
 const DETAIL_H = 580;
 const DETAIL_GAP = 32;
 // Height reserved for the detail-card portrait. Sized to fit a
-// 2× character (radius 56, ~2.6× tall = ~145px) with margin.
-const DETAIL_PORTRAIT_H = 180;
+// 1.7× character (radius ~48, ~2.6× tall = ~125px) with margin.
+const DETAIL_PORTRAIT_H = 155;
 const SECTION_GAP = 28;
 
 const BG_COLOR = "#1a2421";
@@ -1243,8 +1243,8 @@ export class SelectScreen {
     // Portrait (large). Anchor feet near the bottom of the reserved
     // portrait area so the body draws upward into the available space.
     // 16px gap below the feet leaves room for the shadow.
-    const portraitY = cy + DETAIL_PORTRAIT_H - 16;
-    this.drawPortrait(ctx, def, x + w / 2, portraitY, 2.0);
+    const portraitY = cy + DETAIL_PORTRAIT_H - 14;
+    this.drawPortrait(ctx, def, x + w / 2, portraitY, 1.7);
     cy = cy + DETAIL_PORTRAIT_H;
 
     // Name + role.

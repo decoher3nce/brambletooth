@@ -3864,10 +3864,14 @@ function applyLevelsToWorld(world: World): void {
 }
 
 // ---- AI difficulty (VS Computer) ----
+// Default tier is "normal" — applied eagerly the first time the
+// page loads with no stored preference so the displayed highlight
+// state and the storage state stay in lockstep.
 function getAiDifficulty(): AiDifficulty {
   try {
     const raw = localStorage.getItem(AI_DIFFICULTY_KEY);
     if (raw && AI_DIFFICULTIES.includes(raw as AiDifficulty)) return raw as AiDifficulty;
+    localStorage.setItem(AI_DIFFICULTY_KEY, "normal");
   } catch { /* ignore */ }
   return "normal";
 }
