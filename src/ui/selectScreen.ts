@@ -143,6 +143,13 @@ export class SelectScreen {
   // collapses into the same shape as not-yet-shipped characters.
   isCharacterAllowed: (id: string) => boolean = () => true;
 
+  // Per-character XP level for the local profile. main.ts sets this
+  // from getCharacterLevel(id). Renderer paints a small "Lv N" badge
+  // on each card AND shows the level + bonus modifiers in the detail
+  // panel. Defaults to 0 (the baseline) when no hook is supplied —
+  // legacy code paths get sensible behavior.
+  getCharacterLevel: (id: string) => number = () => 0;
+
   // Toggle networked-lobby chrome. Pass null to render the local picker.
   setLobbyView(view: LobbyView | null): void {
     this.lobbyView = view;
@@ -623,6 +630,30 @@ export class SelectScreen {
       return;
     }
 
+    // Lv N badge — top-right corner pill. Reads at a glance which
+    // characters the player has grinded vs which are baseline.
+    if (def) {
+      const lv = this.getCharacterLevel(def.id);
+      const badgeText = `Lv ${lv}`;
+      ctx.font = "bold 10px system-ui, sans-serif";
+      ctx.textBaseline = "alphabetic";
+      const tw = Math.ceil(ctx.measureText(badgeText).width);
+      const badgeW = tw + 10;
+      const badgeH = 14;
+      const bx = tile.x + tile.w - badgeW - 4;
+      const by = tile.y + 4;
+      ctx.fillStyle = "rgba(20, 20, 20, 0.78)";
+      this.roundedRect(ctx, bx, by, badgeW, badgeH, 4);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255, 216, 74, 0.55)";
+      ctx.lineWidth = 1;
+      this.roundedRect(ctx, bx, by, badgeW, badgeH, 4);
+      ctx.stroke();
+      ctx.fillStyle = "#ffd84a";
+      ctx.textAlign = "center";
+      ctx.fillText(badgeText, bx + badgeW / 2, by + badgeH - 3);
+    }
+
     // Filled tile: mini portrait + name. Anchor the portrait so its
     // FEET (= cy) sit near the bottom of the tile — characters draw
     // upward from cy, so this puts the body in the visible area and
@@ -753,6 +784,19 @@ export class SelectScreen {
 
     // Stats list (label : value).
     ctx.font = "12px system-ui, sans-serif";
+    // Level row first — calls out the player's current level for
+    // this character with a yellow accent so it doesn't get lost
+    // in the stat list.
+    const level = this.getCharacterLevel(def.id);
+    ctx.fillStyle = TEXT_DIM;
+    ctx.textAlign = "left";
+    ctx.fillText("Level", x + pad, cy);
+    ctx.fillStyle = ACCENT;
+    ctx.textAlign = "right";
+    ctx.font = "bold 12px system-ui, sans-serif";
+    ctx.fillText(`Lv ${level}`, x + w - pad, cy);
+    ctx.font = "12px system-ui, sans-serif";
+    cy += 16;
     for (const stat of def.displayStats()) {
       ctx.fillStyle = TEXT_DIM;
       ctx.textAlign = "left";
@@ -760,6 +804,26 @@ export class SelectScreen {
       ctx.fillStyle = TEXT;
       ctx.textAlign = "right";
       ctx.fillText(stat.value, x + w - pad, cy);
+      cy += 16;
+    }
+    // Level bonus modifier line — surfaces what the next round
+    // will get for this character at the current level. Constants
+    // mirror LEVEL_*_PER_LEVEL in src/core/leveling.ts; keeping
+    // them inline avoids dragging a leveling.ts import into the UI
+    // module just for two numbers.
+    {
+      const HP_PER_LEVEL = 0.010;
+      const SPEED_PER_LEVEL = 0.003;
+      const DAMAGE_PER_LEVEL = 0.010;
+      const hpPct = Math.round(level * 100 * HP_PER_LEVEL);
+      const spdPct = Math.round(level * 100 * SPEED_PER_LEVEL * 10) / 10;
+      const dmgPct = Math.round(level * 100 * DAMAGE_PER_LEVEL);
+      ctx.fillStyle = TEXT_DIM;
+      ctx.textAlign = "left";
+      ctx.font = "11px system-ui, sans-serif";
+      ctx.fillText("Level bonus", x + pad, cy);
+      ctx.textAlign = "right";
+      ctx.fillText(`+${hpPct}% HP · +${spdPct}% spd · +${dmgPct}% dmg`, x + w - pad, cy);
       cy += 16;
     }
     cy += 8;

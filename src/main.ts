@@ -49,11 +49,16 @@ import { HuntMode } from "./modes/hunt";
 import { FFAMode, FFA_MAX_PLAYERS } from "./modes/ffa";
 import {
   AI_DIFFICULTIES,
+  AI_DIFFICULTY_STAT_MULTS,
   aiDifficultyLabel,
+  applyDifficultyMult,
   applyLevelToCharacter,
   jitteredAiLevel,
   levelFromXp,
   xpForLevel,
+  LEVEL_HP_PER_LEVEL,
+  LEVEL_SPEED_PER_LEVEL,
+  LEVEL_DAMAGE_PER_LEVEL,
   XP_ROUND_COMPLETE,
   XP_WIN_BONUS,
   XP_KILL,
@@ -503,6 +508,7 @@ const selectScreen = new SelectScreen();
 // Wire shop-locked characters out of the select screen. Bigfoot
 // god-mode also unlocks everything for testing.
 selectScreen.isCharacterAllowed = isCharacterUnlocked;
+selectScreen.getCharacterLevel = (id) => getCharacterLevel(id);
 selectScreen.bind(canvas, logicalSize, {
   onStart: (chosenId) => {
     if (appMode === "net" && net) {
@@ -3730,7 +3736,11 @@ function drawAiDifficultyBar(dims: { w: number; h: number }): void {
   const gap = 8;
   const totalW = labels.length * pillW + (labels.length - 1) * gap;
   const startX = (cw - totalW) / 2;
-  const y = ch - 56;
+  // Position the row clearly ABOVE the SelectScreen's START button.
+  // SelectScreen places the start button near `ch - 100` and it's
+  // 56px tall, so the pill row goes well above that top edge with
+  // breathing room for the AI DIFFICULTY label.
+  const y = ch - 180;
   // Header label.
   ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
   ctx.font = "11px system-ui, sans-serif";
@@ -3780,6 +3790,11 @@ function applyLevelsToWorld(world: World): void {
     if (c.isPlayer) continue;
     const aiLevel = jitteredAiLevel(playerLevel, diff);
     applyLevelToCharacter(c, aiLevel);
+    // Layer the AI difficulty tier multiplier ON TOP of leveling so
+    // the spread between Noob and Legendary is felt instantly even
+    // at level 0 — Noob AI sits at 30% stats (a baby could win),
+    // Legendary at 400% (almost impossible).
+    applyDifficultyMult(c, diff);
   }
 }
 
@@ -3793,6 +3808,49 @@ function getAiDifficulty(): AiDifficulty {
 }
 function setAiDifficulty(d: AiDifficulty): void {
   try { localStorage.setItem(AI_DIFFICULTY_KEY, d); } catch { /* ignore */ }
+}
+
+// ---- Difficulty sweep tracking (Difficult/Legendary achievements) ----
+// localStorage key holds a JSON object of { difficulty: characterId[] }.
+// "Defeating a character" = winning a round at that difficulty with
+// that AI character in the world. When the recorded set contains
+// every CHARACTERS id at a given tier, the corresponding sweep
+// achievement fires + a one-time point bonus is awarded.
+const DEFEATED_KEY = "brambletooth.defeatedAt";
+const POINTS_DIFFICULT_SWEEP = 50;
+const POINTS_LEGENDARY_SWEEP = 100;
+function getAllDefeats(): Record<string, string[]> {
+  try {
+    const raw = localStorage.getItem(DEFEATED_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, string[]> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (Array.isArray(v)) out[k] = v.filter((s): s is string => typeof s === "string");
+    }
+    return out;
+  } catch { return {}; }
+}
+function getDefeatsAt(diff: AiDifficulty): Set<string> {
+  return new Set(getAllDefeats()[diff] ?? []);
+}
+function addDefeatedAt(diff: AiDifficulty, charIds: string[]): void {
+  if (charIds.length === 0) return;
+  const all = getAllDefeats();
+  const set = new Set(all[diff] ?? []);
+  for (const id of charIds) set.add(id);
+  all[diff] = [...set];
+  try { localStorage.setItem(DEFEATED_KEY, JSON.stringify(all)); } catch { /* ignore */ }
+}
+// True when every CHARACTERS id is in the recorded defeat set for
+// the given tier. Used to gate the sweep achievement + bonus.
+function isSweepComplete(diff: AiDifficulty): boolean {
+  const defeated = getDefeatsAt(diff);
+  for (const id of Object.keys(CHARACTERS)) {
+    if (!defeated.has(id)) return false;
+  }
+  return true;
 }
 
 // ---- Completed-maps storage (campaign progress) ----
@@ -4195,6 +4253,40 @@ function processAwards(
       addCharacterXp(me.characterId, xp);
     }
     if (localTeamWon) addPoints(POINTS_WIN);
+    // ---- Difficulty sweep tracking ----
+    // Local single-player only (not MP, not FFA). On a win at
+    // Difficult or Legendary, record every AI character that was in
+    // the world this round as "defeated at this difficulty." Once
+    // the recorded set covers every CHARACTERS id at that tier, fire
+    // the sweep achievement + a one-time point bonus.
+    if (localTeamWon && appMode === "local" && play) {
+      const diff = getAiDifficulty();
+      if (diff === "difficult" || diff === "legendary") {
+        const aiIds: string[] = [];
+        for (const e of world.entities) {
+          if (e.kind === "character" && !e.isPlayer) aiIds.push(e.characterId);
+        }
+        if (aiIds.length > 0) {
+          addDefeatedAt(diff, aiIds);
+          if (isSweepComplete(diff)) {
+            const achId = diff === "difficult" ? "difficult_sweep" : "legendary_sweep";
+            const bonus = diff === "difficult"
+              ? POINTS_DIFFICULT_SWEEP
+              : POINTS_LEGENDARY_SWEEP;
+            // earnAchievement is idempotent — the bonus addPoints only
+            // fires the FIRST time the achievement is granted because we
+            // check the achievement-earned set before paying out.
+            if (!isAchievementEarned(achId)) {
+              earnAchievement(achId);
+              addPoints(bonus);
+              fireAchievementBanner(
+                `${diff === "difficult" ? "DIFFICULT" : "LEGENDARY"} SWEEP · +${bonus}`,
+              );
+            }
+          }
+        }
+      }
+    }
     if (state.lastSeenTeam === "survivor" && me && me.hp > 0) {
       addPoints(POINTS_SURVIVE);
       // Untouchable: survivor finished alive AND never dropped below half

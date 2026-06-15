@@ -118,6 +118,45 @@ export function jitteredAiLevel(
   return Math.max(0, Math.round(target + noise));
 }
 
+// ---- AI difficulty stat multipliers ----
+// These STACK ON TOP of the per-level scaling (applyLevelToCharacter)
+// to give the difficulty tier a dramatic gameplay knob without
+// bloating the underlying level curve. Per-level scaling stays tiny
+// (1% HP / 0.3% speed / 1% damage); the difficulty tier sits on top
+// as a separate multiplier so the spread between Noob and Legendary
+// is felt instantly even at level 0:
+//
+//   Noob       — 30% HP / 70% speed / 30% damage  (a baby can win)
+//   Easy       — 60% HP / 85% speed / 60% damage
+//   Normal     — 100% / 100% / 100%               (baseline mirror)
+//   Difficult  — 200% HP / 110% speed / 200% damage
+//   Legendary  — 400% HP / 130% speed / 400% damage (almost impossible)
+//
+// Applied to AI characters ONLY. Player characters get only the level
+// multiplier so their progression curve isn't drowned out by tier
+// scaling.
+export const AI_DIFFICULTY_STAT_MULTS: Record<AiDifficulty, {
+  hp: number; speed: number; damage: number;
+}> = {
+  noob:      { hp: 0.30, speed: 0.70, damage: 0.30 },
+  easy:      { hp: 0.60, speed: 0.85, damage: 0.60 },
+  normal:    { hp: 1.00, speed: 1.00, damage: 1.00 },
+  difficult: { hp: 2.00, speed: 1.10, damage: 2.00 },
+  legendary: { hp: 4.00, speed: 1.30, damage: 4.00 },
+};
+
+// Apply the AI difficulty tier's stat multiplier on top of whatever
+// level scaling was already applied. Multiplies the entity's hp /
+// maxHp / speed / damageMult in place. Idempotent in the sense that
+// calling it twice would compound — call once per spawn.
+export function applyDifficultyMult(c: CharacterEntity, diff: AiDifficulty): void {
+  const m = AI_DIFFICULTY_STAT_MULTS[diff];
+  c.maxHp = Math.max(1, Math.round(c.maxHp * m.hp));
+  c.hp = c.maxHp;
+  c.speed = c.speed * m.speed;
+  c.damageMult = (c.damageMult ?? 1) * m.damage;
+}
+
 // Stamp a level onto a freshly-spawned CharacterEntity. The mode
 // initializer spawns characters with their baseline (level-0) stats
 // from CHARACTERS; this then rescales hp / maxHp / speed by the

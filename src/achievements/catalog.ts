@@ -27,6 +27,8 @@ export const ACHIEVEMENT_ORDER = [
   "hunter_slayer",
   "pacifist",
   "forest_world_1",
+  "difficult_sweep",
+  "legendary_sweep",
 ];
 
 // ---- Icon helpers ----
@@ -451,7 +453,72 @@ export const ACHIEVEMENT_CATALOG: Record<string, AchievementDef> = {
     description: "Escape the forest via the exit",
     draw: drawForestArch,
   },
+  difficult_sweep: {
+    id: "difficult_sweep",
+    name: "Difficult Sweep",
+    description: "Defeat every character on Difficult",
+    draw: (ctx, x, y, s, locked) => drawTrophyBadge(ctx, x, y, s, locked, "D"),
+  },
+  legendary_sweep: {
+    id: "legendary_sweep",
+    name: "Legendary Sweep",
+    description: "Defeat every character on Legendary",
+    draw: (ctx, x, y, s, locked) => drawTrophyBadge(ctx, x, y, s, locked, "L"),
+  },
 };
+
+// Difficulty-sweep icon — a chunky trophy with a single-letter rank
+// badge ("D" for Difficult, "L" for Legendary). Locked instances render
+// at the same low alpha as the rest of the catalog.
+function drawTrophyBadge(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  s: number,
+  locked: boolean,
+  letter: string,
+): void {
+  const a = alpha(locked);
+  ctx.save();
+  ctx.translate(x, y);
+  // Cup body — gold trapezoid.
+  ctx.fillStyle = `rgba(232, 176, 74, ${a})`;
+  ctx.beginPath();
+  ctx.moveTo(s * 0.30, s * 0.22);
+  ctx.lineTo(s * 0.70, s * 0.22);
+  ctx.lineTo(s * 0.62, s * 0.55);
+  ctx.lineTo(s * 0.38, s * 0.55);
+  ctx.closePath();
+  ctx.fill();
+  // Stem.
+  ctx.fillStyle = `rgba(170, 120, 40, ${a})`;
+  ctx.fillRect(s * 0.45, s * 0.55, s * 0.10, s * 0.18);
+  // Base.
+  ctx.fillStyle = `rgba(170, 120, 40, ${a})`;
+  ctx.beginPath();
+  ctx.moveTo(s * 0.30, s * 0.78);
+  ctx.lineTo(s * 0.70, s * 0.78);
+  ctx.lineTo(s * 0.66, s * 0.85);
+  ctx.lineTo(s * 0.34, s * 0.85);
+  ctx.closePath();
+  ctx.fill();
+  // Handles.
+  ctx.strokeStyle = `rgba(232, 176, 74, ${a})`;
+  ctx.lineWidth = Math.max(2, s * 0.04);
+  ctx.beginPath();
+  ctx.arc(s * 0.30, s * 0.34, s * 0.10, -Math.PI / 2, Math.PI / 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(s * 0.70, s * 0.34, s * 0.10, Math.PI / 2, -Math.PI / 2, true);
+  ctx.stroke();
+  // Rank letter inside the cup.
+  ctx.fillStyle = `rgba(40, 28, 8, ${a})`;
+  ctx.font = `bold ${Math.floor(s * 0.26)}px system-ui, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(letter, s * 0.50, s * 0.40);
+  ctx.restore();
+}
 
 // Locked-tile background — drawn behind icons in the profile list.
 export function drawAchievementTile(
