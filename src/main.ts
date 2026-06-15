@@ -509,6 +509,11 @@ const selectScreen = new SelectScreen();
 // god-mode also unlocks everything for testing.
 selectScreen.isCharacterAllowed = isCharacterUnlocked;
 selectScreen.getCharacterLevel = (id) => getCharacterLevel(id);
+// Dual-pick view (two detail cards side-by-side: YOU + VS COMPUTER)
+// is on for any local hunt round — vs-computer or campaign — but
+// off for FFA (no single AI to pick) and off whenever a network
+// lobby is driving the screen.
+selectScreen.isDualPickMode = () => appMode === "local" && !pendingFFA;
 selectScreen.bind(canvas, logicalSize, {
   onStart: (chosenId) => {
     if (appMode === "net" && net) {
@@ -1121,15 +1126,26 @@ function startRound(
   let hunterId: string;
   let survivorId: string;
   let playerRole: "hunter" | "survivor";
+  // Honor the SelectScreen's explicit AI pick when dual-pick mode is
+  // active. Falls back to the legacy random pick when the player
+  // hasn't surfaced an AI choice (e.g. unit tests, first-time
+  // initialization, or future code paths that bypass the select
+  // screen).
+  const aiPick = selectScreen.getAiSelected();
+  const aiPickDef = aiPick ? CHARACTERS[aiPick] : null;
   if (def.role === "hunter") {
     hunterId = chosenId;
-    survivorId = pickRandom(AI_SURVIVORS);
+    survivorId = aiPickDef && aiPickDef.role === "survivor"
+      ? aiPick!
+      : pickRandom(AI_SURVIVORS);
     playerRole = "hunter";
   } else {
     // Pull from the OWNED hunter pool — Gravemarch only appears
     // as the AI opponent once the player has purchased him.
     const pool = aiHunters();
-    hunterId = pool.length > 0 ? pickRandom(pool) : "slagy";
+    hunterId = aiPickDef && aiPickDef.role === "hunter"
+      ? aiPick!
+      : (pool.length > 0 ? pickRandom(pool) : "slagy");
     survivorId = chosenId;
     playerRole = "survivor";
   }

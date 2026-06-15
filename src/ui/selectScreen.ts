@@ -150,6 +150,21 @@ export class SelectScreen {
   // legacy code paths get sensible behavior.
   getCharacterLevel: (id: string) => number = () => 0;
 
+  // Dual-pick mode (VS Computer hunt rounds). When true, two detail
+  // cards render side-by-side — YOU on the left, VS COMPUTER on the
+  // right — and the tap handler routes opposing-role tile taps to the
+  // AI pick instead of swapping the player's role. A small SWAP button
+  // between the two cards toggles which character is yours. Off in
+  // network lobby + FFA flows.
+  isDualPickMode: () => boolean = () => false;
+  // The AI's currently-selected character in dual-pick mode. main.ts
+  // reads this via getAiSelected() when starting a VS Computer round.
+  // Auto-defaulted to a sensible opposing-role character when the
+  // player's pick changes.
+  private aiSelectedId: string | null = null;
+  // SWAP-button hit rect (rebuilt each draw, dual-mode only).
+  private swapBtn: { x: number; y: number; w: number; h: number } | null = null;
+
   // Toggle networked-lobby chrome. Pass null to render the local picker.
   setLobbyView(view: LobbyView | null): void {
     this.lobbyView = view;
@@ -159,9 +174,13 @@ export class SelectScreen {
   // is also centered). main.ts uses this to position the AI
   // difficulty pill row so it doesn't bleed under the detail card
   // on wide viewports (iPad, large desktops). Mirrors the same
-  // layout math used in draw() — keep in sync.
+  // layout math used in draw() — including the dual-pick widening
+  // when two detail cards are shown.
   getGridCenterX(cw: number): number {
-    const layoutW = ROW_WIDTH + DETAIL_GAP + DETAIL_W;
+    const DUAL_DETAIL_GAP = 20;
+    const dual = this.isDualPickMode() && !this.lobbyView;
+    const detailsW = dual ? DETAIL_W * 2 + DUAL_DETAIL_GAP : DETAIL_W;
+    const layoutW = ROW_WIDTH + DETAIL_GAP + detailsW;
     const layoutX = Math.max(20, (cw - layoutW) / 2);
     return layoutX + ROW_WIDTH / 2;
   }
@@ -345,18 +364,45 @@ export class SelectScreen {
     // Tap outside any pinned row clears the pin (silently — no sound).
     if (this.pinnedPlayer) this.pinnedPlayer = null;
 
+    // SWAP-button hit in dual-pick mode: swap who plays which character.
+    if (this.swapBtn && this.isDualPickMode()) {
+      const b = this.swapBtn;
+      if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) {
+        playSound("ui_pick");
+        this.swapPicks();
+        this.hoverId = null;
+        if (this.selectedId) hooks.onSelect?.(this.selectedId);
+        return;
+      }
+    }
     for (const tile of this.tiles) {
       if (
         tile.characterId &&
         p.x >= tile.x && p.x <= tile.x + tile.w &&
         p.y >= tile.y && p.y <= tile.y + tile.h
       ) {
+        // Dual-pick routing: in VS Computer, opposing-role tile taps
+        // set the AI's pick instead of swapping the player's role.
+        // SWAP button handles role flips.
+        if (this.isDualPickMode() && this.selectedId) {
+          const playerDef = CHARACTERS[this.selectedId];
+          if (playerDef && tile.role !== playerDef.role) {
+            // Opposing role — set as AI's character.
+            if (tile.characterId === this.aiSelectedId) return;
+            this.aiSelectedId = tile.characterId;
+            this.hoverId = null;
+            playSound("ui_pick");
+            return;
+          }
+        }
         const changed = tile.characterId !== this.selectedId;
         this.selectedId = tile.characterId;
         // On touch, we also want the detail panel to show the just-tapped
         // character — clear hover so the displayed character == selected.
         this.hoverId = null;
         playSound("ui_pick");
+        // Keep the AI's pick consistent with the player's new role.
+        this.ensureAiPick();
         if (changed) hooks.onSelect?.(tile.characterId);
         return;
       }
@@ -403,6 +449,50 @@ export class SelectScreen {
     return this.hoverId ?? this.selectedId;
   }
 
+  // The AI's currently-selected character id in dual-pick mode.
+  // main.ts reads this when starting a VS Computer round.
+  getAiSelected(): string | null {
+    return this.aiSelectedId;
+  }
+
+  // Default the AI's pick to the first allowed character of the
+  // opposing role from the player's pick. Called whenever the
+  // player's selection changes role or aiSelectedId would otherwise
+  // collide. No-op outside dual-pick mode.
+  private ensureAiPick(): void {
+    if (!this.isDualPickMode()) return;
+    if (!this.selectedId) {
+      this.aiSelectedId = null;
+      return;
+    }
+    const playerDef = CHARACTERS[this.selectedId];
+    if (!playerDef) return;
+    const opposing: CharacterRole = playerDef.role === "hunter" ? "survivor" : "hunter";
+    const pool = this.charactersByRole(opposing);
+    if (pool.length === 0) {
+      this.aiSelectedId = null;
+      return;
+    }
+    // Keep the existing AI pick if it's still a valid opposing-role
+    // character (preserves the player's explicit choice across
+    // re-renders); otherwise default to the first allowed.
+    const current = this.aiSelectedId ? CHARACTERS[this.aiSelectedId] : null;
+    if (!current || current.role !== opposing || !this.isCharacterAllowed(this.aiSelectedId!)) {
+      this.aiSelectedId = pool[0]!.id;
+    }
+  }
+
+  // Swap the player's pick with the AI's pick. Used by the SWAP
+  // button between the two detail cards — clicking it switches which
+  // role the player plays (e.g. "I want to play this survivor as a
+  // hunter and let the AI take the survivor instead").
+  private swapPicks(): void {
+    if (!this.aiSelectedId || !this.selectedId) return;
+    const tmp = this.selectedId;
+    this.selectedId = this.aiSelectedId;
+    this.aiSelectedId = tmp;
+  }
+
   draw(ctx: CanvasRenderingContext2D, dims: { w: number; h: number }): void {
     const cw = dims.w;
     const ch = dims.h;
@@ -418,8 +508,17 @@ export class SelectScreen {
     ctx.textBaseline = "alphabetic";
     ctx.fillText(this.lobbyView?.title ?? "CHOOSE YOUR CHARACTER", cw / 2, 56);
 
-    // Layout block: grid on left, detail card on right, centered as a unit.
-    const layoutW = ROW_WIDTH + DETAIL_GAP + DETAIL_W;
+    // Dual-pick layout? In VS Computer hunt rounds (not network,
+    // not FFA) we show TWO detail cards side-by-side — "YOU" and
+    // "VS COMPUTER". A small SWAP button sits between them.
+    const dual = this.isDualPickMode() && !this.lobbyView;
+    if (dual) this.ensureAiPick();
+    // Inter-card gap when dual.
+    const DUAL_DETAIL_GAP = 20;
+    // Layout block: grid on left, detail card(s) on right, centered
+    // as a unit.
+    const detailsW = dual ? DETAIL_W * 2 + DUAL_DETAIL_GAP : DETAIL_W;
+    const layoutW = ROW_WIDTH + DETAIL_GAP + detailsW;
     const layoutX = Math.max(20, (cw - layoutW) / 2);
     const gridX = layoutX;
     const detailX = layoutX + ROW_WIDTH + DETAIL_GAP;
@@ -454,8 +553,43 @@ export class SelectScreen {
       survivorsRowY,
     );
 
-    // Detail card.
-    this.drawDetailCard(ctx, detailX, gridTop, DETAIL_W, DETAIL_H);
+    // Detail card(s).
+    if (dual) {
+      const playerColor = "#ffd84a"; // yellow accent — matches the
+      const aiColor = "#d05050";     // detail-card pill + tile border
+      this.drawDetailCard(
+        ctx, detailX, gridTop, DETAIL_W, DETAIL_H,
+        this.selectedId, "YOU", playerColor,
+      );
+      const aiX = detailX + DETAIL_W + DUAL_DETAIL_GAP;
+      this.drawDetailCard(
+        ctx, aiX, gridTop, DETAIL_W, DETAIL_H,
+        this.aiSelectedId, "VS COMPUTER", aiColor,
+      );
+      // SWAP button vertically centered between the cards. Small,
+      // dark, with a ⇄ glyph — tapping swaps player ↔ AI.
+      const swapW = 36;
+      const swapH = 36;
+      const swapX = aiX - DUAL_DETAIL_GAP / 2 - swapW / 2;
+      const swapY = gridTop + DETAIL_H / 2 - swapH / 2;
+      this.swapBtn = { x: swapX, y: swapY, w: swapW, h: swapH };
+      ctx.fillStyle = "rgba(30, 36, 34, 0.95)";
+      this.roundedRect(ctx, swapX, swapY, swapW, swapH, swapW / 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
+      ctx.lineWidth = 1.5;
+      this.roundedRect(ctx, swapX, swapY, swapW, swapH, swapW / 2);
+      ctx.stroke();
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 18px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("⇄", swapX + swapW / 2, swapY + swapH / 2 + 1);
+      ctx.textBaseline = "alphabetic";
+    } else {
+      this.swapBtn = null;
+      this.drawDetailCard(ctx, detailX, gridTop, DETAIL_W, DETAIL_H);
+    }
 
     // Networked lobby panel (both players' picks + ready) below the grid.
     if (this.lobbyView) {
@@ -593,6 +727,7 @@ export class SelectScreen {
   ): void {
     const locked = def === null;
     const selected = def !== null && def.id === this.selectedId;
+    const aiSelected = def !== null && def.id === this.aiSelectedId && this.isDualPickMode();
     const hovered = def !== null && def.id === this.hoverId;
 
     // Players (in the networked lobby) who picked this character. Includes
@@ -617,6 +752,12 @@ export class SelectScreen {
       // yellow "selected" border.
       const me = picks.find((p) => p.you);
       ctx.strokeStyle = me?.color ?? TILE_BORDER_SELECTED;
+      ctx.lineWidth = 3;
+    } else if (aiSelected) {
+      // Dual-pick: the AI's chosen character gets a red border so the
+      // player can see at a glance which character the computer will
+      // play. Doesn't override your own selection — that wins above.
+      ctx.strokeStyle = "#d05050";
       ctx.lineWidth = 3;
     } else if (othersPicks.length > 0) {
       // Border in the first other-picker's color (rest shown as tags below).
@@ -730,16 +871,49 @@ export class SelectScreen {
     y: number,
     w: number,
     h: number,
+    // Override the displayed character (dual-pick mode passes the
+    // player's pick on the left and the AI's pick on the right).
+    // null = use the legacy displayedId() (hover ?? selected).
+    overrideId: string | null = null,
+    // Optional top-of-card label ("YOU" / "VS COMPUTER" in dual
+    // mode). Renders in a small yellow pill anchored to the top
+    // edge; falsy = no label.
+    label: string | null = null,
+    // Tint applied to the card border (player vs AI distinction).
+    borderColor: string | null = null,
   ): void {
     ctx.fillStyle = PANEL_BG;
     this.roundedRect(ctx, x, y, w, h, 12);
     ctx.fill();
-    ctx.strokeStyle = PANEL_STROKE;
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = borderColor ?? PANEL_STROKE;
+    ctx.lineWidth = borderColor ? 2 : 1;
     this.roundedRect(ctx, x, y, w, h, 12);
     ctx.stroke();
+    // Top label pill — drawn first so the card content can flow
+    // below it.
+    if (label) {
+      ctx.font = "bold 10px system-ui, sans-serif";
+      const tw = Math.ceil(ctx.measureText(label).width);
+      const padX = 10;
+      const labelW = tw + padX * 2;
+      const labelH = 18;
+      const labelX = x + 14;
+      const labelY = y - labelH / 2 + 2;
+      ctx.fillStyle = "rgba(20, 20, 20, 0.92)";
+      this.roundedRect(ctx, labelX, labelY, labelW, labelH, 4);
+      ctx.fill();
+      ctx.strokeStyle = borderColor ?? PANEL_STROKE;
+      ctx.lineWidth = 1.5;
+      this.roundedRect(ctx, labelX, labelY, labelW, labelH, 4);
+      ctx.stroke();
+      ctx.fillStyle = borderColor ?? ACCENT;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, labelX + padX, labelY + labelH / 2 + 0.5);
+      ctx.textBaseline = "alphabetic";
+    }
 
-    const id = this.displayedId();
+    const id = overrideId ?? this.displayedId();
     if (!id) {
       ctx.fillStyle = TEXT_DIM;
       ctx.font = "13px system-ui, sans-serif";
