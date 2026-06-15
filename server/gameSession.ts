@@ -13,6 +13,7 @@ import { HumanController } from "../src/core/humanController";
 import { createAIController } from "../src/ai/ai";
 import type { Controller } from "../src/ai/ai";
 import { CHARACTERS } from "../src/characters/characters";
+import { applyLevelToCharacter } from "../src/core/leveling";
 import type { PlayerSlot, InputMessage, SnapshotMessage } from "../src/net/protocol";
 
 const TIME_LIMIT_SECONDS = 3 * 60 + 30;
@@ -26,6 +27,10 @@ export interface SessionPick {
   // spawned character so every other client renders the boot
   // overlay on this player.
   hasSprintBoots?: boolean;
+  // Picking client's level for this character (mirrored from their
+  // per-character XP). Stamped onto the spawned entity so HP /
+  // speed / damage scale at round start. 0 = baseline.
+  level?: number;
 }
 
 interface SessionPlayer {
@@ -102,6 +107,9 @@ export class GameSession {
       const input = createInput();
       controllers.set(hunterEntity.id, new HumanController(input));
       if (hunterPick.hasSprintBoots) hunterEntity.hasSprintBoots = true;
+      // Stamp + apply the picker's character level. Same code path
+      // as local play (main.ts applyLevelsToWorld).
+      applyLevelToCharacter(hunterEntity, Math.max(0, Math.floor(hunterPick.level ?? 0)));
       this.players.push({
         slot: hunterPick.slot,
         characterId: hunterPick.characterId,
@@ -116,6 +124,7 @@ export class GameSession {
       const input = createInput();
       controllers.set(entity.id, new HumanController(input));
       if (pick.hasSprintBoots) entity.hasSprintBoots = true;
+      applyLevelToCharacter(entity, Math.max(0, Math.floor(pick.level ?? 0)));
       this.players.push({
         slot: pick.slot,
         characterId: pick.characterId,

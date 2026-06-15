@@ -44,6 +44,10 @@ interface ClientConn {
   // so other clients can render the boot overlay even though they
   // don't have access to this player's profile inventory.
   hasSprintBoots: boolean;
+  // Local player's level for the selected character (mirrored from
+  // their per-character XP at pick time). Stamped onto the spawned
+  // entity so HP / speed / damage scale at round start. 0 = baseline.
+  characterLevel: number;
   ready: boolean;
   // Maps this client has completed in campaign mode (received via the
   // "completedMaps" message after join). Used to compute the lobby
@@ -75,6 +79,7 @@ interface Ghost {
   slot: PlayerSlot;
   characterId: string;
   hasSprintBoots: boolean;
+  characterLevel: number;
   name: string;
 }
 
@@ -228,6 +233,7 @@ function tryStartCountdown(): void {
     slot: c.slot,
     characterId: c.characterId!,
     hasSprintBoots: c.hasSprintBoots,
+    level: c.characterLevel,
   }));
   const chosenMap = pendingMapId ?? defaultMapId();
   pendingMapId = null;
@@ -348,6 +354,7 @@ function handleMessage(conn: ClientConn, raw: string): void {
       if (CHARACTERS[msg.characterId]) {
         conn.characterId = msg.characterId;
         conn.hasSprintBoots = !!msg.hasSprintBoots;
+        conn.characterLevel = Math.max(0, Math.floor(Number(msg.level ?? 0)) || 0);
         conn.ready = false; // changing pick un-readies
         broadcastLobby();
       }
@@ -420,6 +427,7 @@ function tryRejoin(ws: WebSocket, token: string): ClientConn | null {
     name: ghost.name,
     characterId: ghost.characterId,
     hasSprintBoots: ghost.hasSprintBoots,
+    characterLevel: ghost.characterLevel,
     ready: true,
     completedMaps: [],
   };
@@ -489,6 +497,7 @@ function onConnection(ws: WebSocket): void {
       name: `Player ${slot + 1}`,
       characterId: null,
       hasSprintBoots: false,
+      characterLevel: 0,
       ready: false,
       completedMaps: [],
     };
@@ -562,6 +571,7 @@ function wireConn(conn: ClientConn): void {
         slot: conn.slot,
         characterId: conn.characterId ?? "",
         hasSprintBoots: conn.hasSprintBoots,
+        characterLevel: conn.characterLevel,
         name: conn.name,
       });
       const humansLeft = humansConnected();

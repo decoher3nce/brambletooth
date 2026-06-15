@@ -101,7 +101,7 @@ registerAbility({
       if (e.id === caster.id) continue;
       if (e.statuses["shielded"] > 0) continue;
       if (dist(e.pos, hitCenter) <= arcRadius + e.radius) {
-        e.hp -= 18;
+        e.hp -= 18 * (caster.damageMult ?? 1);
         e.lastDamagerId = caster.id;
       }
     }
@@ -113,7 +113,7 @@ registerAbility({
     for (const e of world.entities) {
       if (e.kind !== "animal" || e.dead) continue;
       if (dist(e.pos, hitCenter) <= arcRadius + e.radius) {
-        e.hp -= 18;
+        e.hp -= 18 * (caster.damageMult ?? 1);
         e.targetId = caster.id;
         if (!e.reactionDecided) {
           e.reactionDecided = true;
@@ -159,7 +159,7 @@ registerAbility({
       vel: scale(dir, speed),
       ownerId: caster.id,
       ttl: 1.5,
-      damage: 12,
+      damage: 12 * (caster.damageMult ?? 1),
       targetTeam: "survivor",
       slowOnHit: 1.0,
       dead: false,
@@ -180,7 +180,7 @@ registerAbility({
       radius: 28,
       ownerId: caster.id,
       ttl: 12.0,
-      damage: 15,
+      damage: 15 * (caster.damageMult ?? 1),
       slowDuration: 1.5,
       targetTeam: "survivor",
       armDelay: 0.4,
@@ -498,7 +498,7 @@ registerAbility({
       if (e.id === caster.id) continue;
       if (e.statuses["shielded"] > 0) continue;
       if (dist(e.pos, hitCenter) <= arcRadius + e.radius) {
-        e.hp -= GRAVEMARCH_SLASH_DAMAGE;
+        e.hp -= GRAVEMARCH_SLASH_DAMAGE * (caster.damageMult ?? 1);
         e.lastDamagerId = caster.id;
       }
     }
@@ -610,7 +610,7 @@ registerAbility({
         blocking: true,
         ttl: ROCK_WALL_TTL,
         ownerId: caster.id,
-        contactDamage: ROCK_WALL_CONTACT_DAMAGE,
+        contactDamage: ROCK_WALL_CONTACT_DAMAGE * (caster.damageMult ?? 1),
         dead: false,
       });
     }

@@ -228,7 +228,7 @@ export class Engine {
             if (target.statuses["phased"] > 0) continue;
             if (circlesOverlap(c.pos, c.radius, target.pos, target.radius)) {
               if (!target.invincible) {
-                target.hp -= STONE_STEP_HIT_DAMAGE;
+                target.hp -= STONE_STEP_HIT_DAMAGE * (c.damageMult ?? 1);
                 target.lastDamagerId = c.id;
               }
               hitIds.add(target.id);

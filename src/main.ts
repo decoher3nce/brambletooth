@@ -47,6 +47,19 @@ import type { MapDef, ProfileProgress, WorldDef } from "./maps/registry";
 import type { Camera } from "./render/renderer";
 import { HuntMode } from "./modes/hunt";
 import { FFAMode, FFA_MAX_PLAYERS } from "./modes/ffa";
+import {
+  AI_DIFFICULTIES,
+  aiDifficultyLabel,
+  applyLevelToCharacter,
+  jitteredAiLevel,
+  levelFromXp,
+  xpForLevel,
+  XP_ROUND_COMPLETE,
+  XP_WIN_BONUS,
+  XP_KILL,
+  XP_OBJECTIVE,
+} from "./core/leveling";
+import type { AiDifficulty } from "./core/leveling";
 import { FOREST_ARENA_CONFIG, buildForest } from "./arenas/forest";
 import { createAIController } from "./ai/ai";
 import { HumanController } from "./core/humanController";
@@ -498,7 +511,7 @@ selectScreen.bind(canvas, logicalSize, {
       if (me?.ready) {
         net.ready(false);
       } else {
-        net.select(chosenId, hasSprintBoots());
+        net.select(chosenId, hasSprintBoots(), getCharacterLevel(chosenId));
         net.ready(true);
       }
     } else if (appMode === "local") {
@@ -511,7 +524,7 @@ selectScreen.bind(canvas, logicalSize, {
   },
   onSelect: (id) => {
     // Live pick broadcast so the opponent sees it immediately.
-    if (appMode === "net" && net && net.phase === "lobby") net.select(id, hasSprintBoots());
+    if (appMode === "net" && net && net.phase === "lobby") net.select(id, hasSprintBoots(), getCharacterLevel(id));
   },
   isTouchMode: () => input.isTouchMode,
   isActive: () =>
@@ -582,6 +595,10 @@ let mapTileBtns: { mapId: string; rect: Rect; playable: boolean }[] = [];
 // past the last world. Reset to 0 when the scene re-opens.
 let mapSelectScrollY = 0;
 let mapSelectScrollMax = 0;     // computed each draw — content overflow
+// AI difficulty selector pill rects on the character-select screen
+// (vs-computer / campaign flows). Rebuilt each draw; click routed
+// in handleTitleTap below.
+let difficultyPillBtns: { d: AiDifficulty; rect: Rect }[] = [];
 // Viewport edges for the scrollable list — recomputed each draw,
 // read at hit-test time so tiles drawn outside the clip don't
 // register taps even when their hit rect happens to overlap the
@@ -901,6 +918,25 @@ function handleMapVoteTap(p: { x: number; y: number }): boolean {
   return false;
 }
 
+// Difficulty-pill click handler — runs in the LOCAL select scene.
+// Returns true when the click was absorbed so the caller can avoid
+// further handling. Sibling listeners (the SelectScreen's own
+// mousedown) still fire; SelectScreen ignores y-coordinates below
+// the card grid so this doesn't collide.
+function handleDifficultyTap(p: { x: number; y: number }): boolean {
+  if (!started) return false;
+  if (appMode !== "local" || scene !== "select") return false;
+  if (pendingFFA) return false;
+  for (const pill of difficultyPillBtns) {
+    if (!inRect(p, pill.rect)) continue;
+    if (pill.d === getAiDifficulty()) return true;
+    playSound("ui_click");
+    setAiDifficulty(pill.d);
+    return true;
+  }
+  return false;
+}
+
 canvas.addEventListener("mousedown", (ev) => {
   const r = canvas.getBoundingClientRect();
   const p = { x: ev.clientX - r.left, y: ev.clientY - r.top };
@@ -911,6 +947,7 @@ canvas.addEventListener("mousedown", (ev) => {
   if (started) {
     if (handleMapVoteTap(p)) return;
     if (handleLeaveGameTap(p)) return;
+    if (handleDifficultyTap(p)) return;
   } else {
     handleTitleTap(p);
   }
@@ -944,6 +981,7 @@ canvas.addEventListener(
     if (started) {
       if (handleMapVoteTap(p)) { ev.preventDefault(); return; }
       if (handleLeaveGameTap(p)) { ev.preventDefault(); return; }
+      if (handleDifficultyTap(p)) { ev.preventDefault(); return; }
     } else {
       ev.preventDefault();
       // On the campaign / vs-computer map list, remember the starting
@@ -1123,6 +1161,13 @@ function startRound(
     if (player && hasSprintBoots()) player.hasSprintBoots = true;
   }
 
+  // Apply per-character level scaling. Player character uses the
+  // local profile's XP for this character. AI characters get a
+  // jittered level derived from the player's level + the chosen
+  // AI difficulty offset (Noob -20 ... Legendary +20) so they
+  // vary lineup-to-lineup instead of all being the same level.
+  applyLevelsToWorld(world);
+
   const controllers = new Map<number, Controller>();
   for (const c of world.allCharacters()) {
     if (c.isPlayer) {
@@ -1201,6 +1246,9 @@ function startFFARound(chosenId: string): void {
     if (player) player.invincible = true;
   }
 
+  // Apply per-character level scaling — same path as Hunt.
+  applyLevelsToWorld(world);
+
   // Sprint Boots overlay flag — mirrors the local inventory onto
   // the player character so the renderer can paint the boots at
   // their feet. AI characters in FFA don't get boots (no profile).
@@ -1244,6 +1292,13 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
   if (scene === "select") {
     selectScreen.setLobbyView(null);
     selectScreen.draw(ctx, dims);
+    // VS-Computer flow shows a 5-pill AI difficulty selector at the
+    // bottom of the character-select screen. Other flows (campaign,
+    // FFA, multiplayer lobby) skip it — campaign and FFA still respect
+    // the stored difficulty, they just don't expose the picker here.
+    // Hidden when in MP-driven select (no AI) and when pendingFFA
+    // is true (FFA is its own AI mode for now).
+    if (!pendingFFA) drawAiDifficultyBar(dims);
     return;
   }
   if (scene === "playing" && play) {
@@ -1397,7 +1452,7 @@ function frameNet(dt: number, dims: { w: number; h: number }): void {
       netCamInit = false;
       if (!netInitialPickSent && n.slot !== null) {
         const sel = selectScreen.getSelected();
-        if (sel) n.select(sel, hasSprintBoots());
+        if (sel) n.select(sel, hasSprintBoots(), getCharacterLevel(sel));
         netInitialPickSent = true;
       }
       selectScreen.setLobbyView(buildLobbyView());
@@ -1418,7 +1473,7 @@ function frameNet(dt: number, dims: { w: number; h: number }): void {
         // start sequence rooted where they were waiting.
         if (!netInitialPickSent && n.slot !== null) {
           const sel = selectScreen.getSelected();
-          if (sel) n.select(sel, hasSprintBoots());
+          if (sel) n.select(sel, hasSprintBoots(), getCharacterLevel(sel));
           netInitialPickSent = true;
         }
         selectScreen.setLobbyView(buildLobbyView());
@@ -3551,6 +3606,14 @@ function getRecentAchievements(limit: number): EarnedAchievement[] {
 // locally and adds to this list; scheduleProfileSync ships to the
 // server which merges using the earliest-known timestamp.
 const INVENTORY_KEY = "brambletooth.inventory";
+// Per-character cumulative XP map. localStorage key holds a
+// JSON object of { characterId: xp }. Levels derive from XP via
+// leveling.ts (xpForLevel). v1 keeps this client-only; cross-
+// device sync can be added by extending the profile sync route.
+const CHARACTER_XP_KEY = "brambletooth.characterXp";
+// AI difficulty tier for VS-Computer rounds, persisted across
+// sessions. Default = "normal" (AI mirrors the player's level).
+const AI_DIFFICULTY_KEY = "brambletooth.aiDifficulty";
 interface PurchasedItem { id: string; purchasedAt: number; }
 
 // Sprint Boots shop item — gates the in-game sprint key. Bigfoot
@@ -3612,6 +3675,124 @@ function saveInventory(list: PurchasedItem[]): void {
 }
 function isItemOwned(id: string): boolean {
   return getInventory().some((p) => p.id === id);
+}
+
+// ---- Character XP storage (per-character leveling) ----
+// All persisted as JSON in CHARACTER_XP_KEY: { [characterId]: xp }.
+// Levels are derived on read via leveling.levelFromXp — we store
+// only the cumulative XP so the curve can be retuned later without
+// invalidating existing data.
+function getAllCharacterXp(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(CHARACTER_XP_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      const n = Number(v);
+      if (Number.isFinite(n) && n >= 0) out[k] = Math.floor(n);
+    }
+    return out;
+  } catch { return {}; }
+}
+function saveAllCharacterXp(map: Record<string, number>): void {
+  try { localStorage.setItem(CHARACTER_XP_KEY, JSON.stringify(map)); }
+  catch { /* ignore */ }
+}
+function getCharacterXp(characterId: string): number {
+  return getAllCharacterXp()[characterId] ?? 0;
+}
+function getCharacterLevel(characterId: string): number {
+  return levelFromXp(getCharacterXp(characterId));
+}
+function addCharacterXp(characterId: string, amount: number): void {
+  if (amount <= 0) return;
+  const all = getAllCharacterXp();
+  all[characterId] = (all[characterId] ?? 0) + Math.floor(amount);
+  saveAllCharacterXp(all);
+}
+
+// Draw the 5-pill AI difficulty selector at the bottom-center of the
+// character-select screen. One pill per tier — the active pill gets
+// a brighter fill + a yellow outline; the rest are muted. Each pill
+// pushes its rect into difficultyPillBtns so handleTitleTap can
+// route clicks back to setAiDifficulty.
+function drawAiDifficultyBar(dims: { w: number; h: number }): void {
+  difficultyPillBtns = [];
+  const cw = dims.w;
+  const ch = dims.h;
+  const current = getAiDifficulty();
+  const labels: AiDifficulty[] = AI_DIFFICULTIES;
+  // Pill geometry — sized to fit five pills inside ~640px.
+  const pillW = 96;
+  const pillH = 32;
+  const gap = 8;
+  const totalW = labels.length * pillW + (labels.length - 1) * gap;
+  const startX = (cw - totalW) / 2;
+  const y = ch - 56;
+  // Header label.
+  ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("AI DIFFICULTY", cw / 2, y - 8);
+  for (let i = 0; i < labels.length; i++) {
+    const d = labels[i]!;
+    const isActive = d === current;
+    const x = startX + i * (pillW + gap);
+    const rect: Rect = { x, y, w: pillW, h: pillH };
+    // Body.
+    ctx.fillStyle = isActive ? "rgba(80, 60, 18, 0.85)" : "rgba(28, 32, 30, 0.85)";
+    roundRect(rect, 8);
+    ctx.fill();
+    ctx.strokeStyle = isActive ? "#ffd84a" : "rgba(255, 255, 255, 0.15)";
+    ctx.lineWidth = isActive ? 2 : 1;
+    roundRect(rect, 8);
+    ctx.stroke();
+    // Label.
+    ctx.fillStyle = isActive ? "#fff" : "rgba(255, 255, 255, 0.6)";
+    ctx.font = isActive
+      ? "bold 12px system-ui, sans-serif"
+      : "12px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(aiDifficultyLabel(d), x + pillW / 2, y + pillH / 2 + 1);
+    ctx.textBaseline = "alphabetic";
+    difficultyPillBtns.push({ d, rect });
+  }
+}
+
+// Stamp levels onto every freshly-spawned character in a local-play
+// world. The player character (isPlayer) uses the local profile's
+// XP for that character; every AI character gets a jittered level
+// based on the player's level + the current AI difficulty offset.
+// Called once right after mode.initialize() in startRound + startFFARound.
+function applyLevelsToWorld(world: World): void {
+  let playerLevel = 0;
+  for (const c of world.allCharacters()) {
+    if (c.isPlayer) {
+      playerLevel = getCharacterLevel(c.characterId);
+      applyLevelToCharacter(c, playerLevel);
+    }
+  }
+  const diff = getAiDifficulty();
+  for (const c of world.allCharacters()) {
+    if (c.isPlayer) continue;
+    const aiLevel = jitteredAiLevel(playerLevel, diff);
+    applyLevelToCharacter(c, aiLevel);
+  }
+}
+
+// ---- AI difficulty (VS Computer) ----
+function getAiDifficulty(): AiDifficulty {
+  try {
+    const raw = localStorage.getItem(AI_DIFFICULTY_KEY);
+    if (raw && AI_DIFFICULTIES.includes(raw as AiDifficulty)) return raw as AiDifficulty;
+  } catch { /* ignore */ }
+  return "normal";
+}
+function setAiDifficulty(d: AiDifficulty): void {
+  try { localStorage.setItem(AI_DIFFICULTY_KEY, d); } catch { /* ignore */ }
 }
 
 // ---- Completed-maps storage (campaign progress) ----
@@ -3985,6 +4166,34 @@ function processAwards(
         (outcome === "hunter_win" && state.lastSeenTeam === "hunter") ||
         (outcome === "survivor_win" && state.lastSeenTeam === "survivor")
       );
+    // ---- Character XP award (leveling system) ----
+    // The character the local player drove this round earns:
+    //   - XP_ROUND_COMPLETE (base, any outcome) so even losses
+    //     advance the level
+    //   - XP_WIN_BONUS if the local team won
+    //   - XP_OBJECTIVE per objective the local survivor collected
+    //   - XP_KILL per catch (hunter side) — survivors get no kill
+    //     XP since they don't kill anyone
+    // Persisted to localStorage so progress sticks between sessions.
+    if (me) {
+      let xp = XP_ROUND_COMPLETE;
+      if (localTeamWon) xp += XP_WIN_BONUS;
+      if (me.team === "survivor") {
+        xp += me.objectivesCollected * XP_OBJECTIVE;
+      } else if (me.team === "hunter") {
+        // The catch detection block above tracks catches per round
+        // in state.prevSurvivorIds → currentSurvivorIds delta and
+        // already pays points. Use the same shape: every survivor
+        // that was in prevSurvivorIds and is gone now counts as a
+        // kill credited to this hunter.
+        let kills = 0;
+        for (const id of state.prevSurvivorIds) {
+          if (!currentSurvivorIds.has(id)) kills++;
+        }
+        xp += kills * XP_KILL;
+      }
+      addCharacterXp(me.characterId, xp);
+    }
     if (localTeamWon) addPoints(POINTS_WIN);
     if (state.lastSeenTeam === "survivor" && me && me.hp > 0) {
       addPoints(POINTS_SURVIVE);

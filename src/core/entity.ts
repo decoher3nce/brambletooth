@@ -134,6 +134,21 @@ export interface CharacterEntity extends BaseEntity {
   // most-kills win condition. Optional so existing modes that
   // don't read it stay unaffected.
   lastDamagerId?: EntityId;
+  // Character level (level system). 0 = baseline (matches the
+  // CHARACTERS def stats exactly). Each level scales HP / speed /
+  // damage by a small fraction (~+1% HP, +0.3% speed, +1% damage
+  // per level — see src/core/leveling.ts) so a high-level
+  // character can edge out a lower one without dominating. May be
+  // NEGATIVE for AI characters at lower difficulty tiers (Noob
+  // = -20). Engine reads it to drive stat scaling at spawn; the
+  // multipliers below are pre-baked snapshots set by the spawner.
+  level?: number;
+  // Pre-baked damage multiplier from level — applied by abilities
+  // and the engine's damage paths to the base damage values. 1.0
+  // = baseline; ~1.20 at lvl 20. Stored on the entity so the
+  // ability handlers (which don't see CharacterDef) can pick it
+  // up without a CHARACTERS lookup per damage tick.
+  damageMult?: number;
   // Whether this character is wearing Sprint Boots — the shop item.
   // Renderer reads this to overlay a yellow boot at the feet so
   // other players can identify a sprint-capable character at a

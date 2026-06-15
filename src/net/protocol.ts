@@ -51,6 +51,12 @@ export interface SelectMessage {
   // player's inventory) can render the boots overlay in
   // snapshots. Absent / false → no boots.
   hasSprintBoots?: boolean;
+  // Local player's level for the chosen character (derived from
+  // their per-character XP via leveling.ts). Server stamps this
+  // onto the spawned entity in GameSession so HP / speed / damage
+  // are scaled at round start. Defaults to 0 if absent (legacy
+  // clients without the leveling system get baseline stats).
+  level?: number;
 }
 
 export interface ReadyMessage {
