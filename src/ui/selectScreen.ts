@@ -180,6 +180,11 @@ export class SelectScreen {
   // the VS COMPUTER card's displayed character at a tick rate that
   // eases out over `duration` seconds, then snaps to `targetId`.
   private rouletteAnim: { startTime: number; duration: number; targetId: string } | null = null;
+  // Previous roulette tick index — tickRoulette plays a tick sound
+  // each time the integer index advances (i.e., each time the
+  // VISIBLE character cycles to a new one), not every frame. Reset
+  // to -1 between spins so the first tick fires reliably.
+  private lastRouletteTickIdx: number = -1;
   // SURPRISE mode: the AI's pick is committed but hidden in the UI
   // (the VS COMPUTER card renders a "?" placeholder and the tile
   // grid suppresses the ai-pick red border) until the round starts.
@@ -623,11 +628,14 @@ export class SelectScreen {
       duration: 1800,
       targetId: target.id,
     };
+    this.lastRouletteTickIdx = -1;
     this.aiSurprise = false;
   }
 
   // Commit a random AI pick AND hide it from the UI. Clears any
-  // active roulette so the two states don't conflict.
+  // active roulette so the two states don't conflict. Fires an
+  // ominous swell so the player feels the danger of an unknown
+  // matchup.
   private setSurprise(): void {
     const pool = this.opposingCharacters();
     if (pool.length === 0) return;
@@ -635,6 +643,7 @@ export class SelectScreen {
     this.aiSelectedId = pick.id;
     this.aiSurprise = true;
     this.rouletteAnim = null;
+    playSound("surprise_reveal");
   }
 
   // Public — main.ts checks this when starting the round so it can
@@ -647,12 +656,17 @@ export class SelectScreen {
   // visible pick at a rate that eases out (fast at first, slowing
   // toward the end), then snaps to the pre-picked targetId when
   // elapsed >= duration. No-op when no animation is active.
+  // Plays a tick sound each time the integer index advances —
+  // matches the visible cycle — and a landing chime when the
+  // wheel settles.
   private tickRoulette(): void {
     if (!this.rouletteAnim) return;
     const elapsed = performance.now() - this.rouletteAnim.startTime;
     if (elapsed >= this.rouletteAnim.duration) {
       this.aiSelectedId = this.rouletteAnim.targetId;
       this.rouletteAnim = null;
+      this.lastRouletteTickIdx = -1;
+      playSound("roulette_settle");
       return;
     }
     const pool = this.opposingCharacters();
@@ -664,6 +678,10 @@ export class SelectScreen {
     const TOTAL_TICKS = 24;
     const tickIdx = Math.floor(eased * TOTAL_TICKS);
     this.aiSelectedId = pool[tickIdx % pool.length]!.id;
+    if (tickIdx !== this.lastRouletteTickIdx) {
+      this.lastRouletteTickIdx = tickIdx;
+      playSound("roulette_tick");
+    }
   }
 
   draw(ctx: CanvasRenderingContext2D, dims: { w: number; h: number }): void {

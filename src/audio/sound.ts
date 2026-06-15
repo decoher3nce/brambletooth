@@ -105,6 +105,14 @@ export type SoundId =
   | "ui_click"
   | "ui_pick"
   | "ui_back"
+  // Roulette/surprise: fired by the dual-pick screen's RANDOMIZE
+  // button as the AI's chosen character cycles, and by the
+  // SURPRISE button when it commits a hidden pick. roulette_tick
+  // fires per visible tile-cycle; roulette_settle lands when the
+  // wheel stops; surprise_reveal is a single ominous swell.
+  | "roulette_tick"
+  | "roulette_settle"
+  | "surprise_reveal"
   | "ui_denied";
 
 export function playSound(id: SoundId, opts: PlayOpts = {}): void {
@@ -299,6 +307,35 @@ const SOUND_DEFS: Record<SoundId, SoundDef> = {
   // UI: disabled — low dull thud, no melodic content.
   ui_denied: (c, dest) => {
     envOsc(c, dest, "sawtooth", 180, 90, 0.08, 0.18);
+  },
+  // Roulette wheel detent — short crisp click that fires per visible
+  // tile-cycle. Two-layered: a bright square attack for the wood-on-
+  // pin click, plus a high noise spritz for the bearing zing. Short
+  // enough (~40ms) that 24 ticks across the 1.8s animation read as
+  // a fast-slowing flurry rather than a stutter.
+  roulette_tick: (c, dest) => {
+    envOsc(c, dest, "square", 2000, 1400, 0.035, 0.20);
+    envNoise(c, dest, 0.030, 0.10, 4500);
+  },
+  // Roulette landing — small chime + low thunk when the wheel
+  // stops. Triangle bell on the fundamental plus an octave
+  // sparkle, anchored by a quick sub-bass strike so it feels
+  // committed rather than tinkly.
+  roulette_settle: (c, dest) => {
+    envOsc(c, dest, "triangle", 660, 660, 0.55, 0.34);   // bell body
+    envOsc(c, dest, "sine",     1320, 1320, 0.50, 0.18); // octave shimmer
+    envOsc(c, dest, "sine",     220, 110, 0.30, 0.24);   // bell strike
+    envNoise(c, dest, 0.05, 0.08, 1800);                 // tiny attack hiss
+  },
+  // Surprise reveal — slow ominous swell with a descending sawtooth
+  // menace, a sub-bass drone an octave below, a high whining sine,
+  // and a low-passed noise rumble. Builds a dread cue suited to
+  // "the computer's pick is hidden until the round starts."
+  surprise_reveal: (c, dest) => {
+    envOsc(c, dest, "sawtooth", 220, 80,  1.20, 0.30);  // descending menace
+    envOsc(c, dest, "sawtooth", 110, 40,  1.20, 0.22);  // sub-octave drone
+    envOsc(c, dest, "sine",     440, 220, 1.00, 0.12);  // dissonant whine
+    envNoise(c, dest, 1.20, 0.16, 500);                 // low rumble bed
   },
   // Footstep: short soft thud — low-frequency hit + brief filtered
   // noise for grit. Plays once per character per ~step interval; the
