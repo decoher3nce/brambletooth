@@ -1228,7 +1228,7 @@ function startRound(
     if (c.isPlayer) {
       controllers.set(c.id, new HumanController(input, hasSprintBoots));
     } else {
-      const ai = createAIController(c.characterId);
+      const ai = createAIController(c.characterId, getAiDifficulty());
       if (ai) controllers.set(c.id, ai);
     }
   }
@@ -1323,7 +1323,7 @@ function startFFARound(chosenId: string): void {
       // by their own training even though the team labels are
       // unified. Good-enough v1; per-character FFA AI is a
       // follow-up.
-      const ai = createAIController(c.characterId);
+      const ai = createAIController(c.characterId, getAiDifficulty());
       if (ai) controllers.set(c.id, ai);
     }
   }

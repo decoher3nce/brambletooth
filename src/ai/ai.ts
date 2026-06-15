@@ -8,6 +8,15 @@ import type { World } from "../core/world";
 import type { Vec2 } from "../core/math";
 import { dist, len, normalize, sub, add, scale } from "../core/math";
 import { MAGNEK_PLATE_CAP } from "../abilities/abilities";
+import type { AiDifficulty } from "../core/leveling";
+import {
+  type BehaviorConfig,
+  behaviorFor,
+  jitterAim,
+  leadAim,
+  shouldFireRandomly,
+  shouldHesitate,
+} from "./behavior";
 
 export interface AIIntent {
   moveDir: Vec2;         // unit-ish vector, magnitude clamped to 1
@@ -141,6 +150,14 @@ function platesOf(world: World, ownerId: number): PlateEntity[] {
 // tree, so it's easy to audit and tweak.
 export class SlagyAI implements AIController {
   private trapCooldownLocal = 0;
+  private cfg: BehaviorConfig;
+  // Per-ability list of self-character ability ids — used to fire a
+  // random one when chaos triggers.
+  private readonly chaosPool = ["slash", "slime_shot", "slime_trap", "relocate"];
+
+  constructor(cfg: BehaviorConfig = behaviorFor("normal")) {
+    this.cfg = cfg;
+  }
 
   update(self: CharacterEntity, world: World, dt: number): AIIntent {
     this.trapCooldownLocal -= dt;
@@ -170,32 +187,57 @@ export class SlagyAI implements AIController {
     };
 
     // Slash range: very close
-    if (d < 55 && (self.cooldowns["slash"] ?? 0) <= 0) {
+    if (d < 55 && (self.cooldowns["slash"] ?? 0) <= 0 && !shouldHesitate(this.cfg)) {
       intent.abilitiesToFire.push("slash");
     }
 
-    // Slime shot: medium range
-    if (d > 80 && d < 350 && (self.cooldowns["slime_shot"] ?? 0) <= 0) {
-      // Lead the target a bit
-      const lead = scale(target.vel, 0.25);
-      intent.aim = add(target.pos, lead);
+    // Slime shot: medium range. leadFactor scales projection of
+    // target velocity — Noob (0) shoots where the survivor WAS,
+    // Legendary (0.7) where they'll be. aimJitter then rotates the
+    // shot by a small random angle for execution noise.
+    if (
+      d > 80 && d < 350 &&
+      (self.cooldowns["slime_shot"] ?? 0) <= 0 &&
+      !shouldHesitate(this.cfg)
+    ) {
+      const led = leadAim(target.pos, target.vel, this.cfg.leadFactor);
+      intent.aim = jitterAim(self.pos, led, this.cfg.aimJitter);
       intent.abilitiesToFire.push("slime_shot");
     }
 
-    // Drop a trap occasionally when close-ish but not in slash range
+    // Drop a trap occasionally when close-ish but not in slash range.
+    // Noob is gated by abilityHesitation so it routinely "forgets" to
+    // use this ability — current strategy doc says Noob essentially
+    // never lays traps.
     if (
       d > 60 && d < 200 &&
       (self.cooldowns["slime_trap"] ?? 0) <= 0 &&
-      this.trapCooldownLocal <= 0
+      this.trapCooldownLocal <= 0 &&
+      !shouldHesitate(this.cfg)
     ) {
       intent.abilitiesToFire.push("slime_trap");
       this.trapCooldownLocal = 6.0; // don't keep dropping
     }
 
-    // Relocate when far away to close the gap
-    if (d > 320 && (self.cooldowns["relocate"] ?? 0) <= 0) {
+    // Relocate when far away to close the gap. Same hesitation gate.
+    if (
+      d > 320 &&
+      (self.cooldowns["relocate"] ?? 0) <= 0 &&
+      !shouldHesitate(this.cfg)
+    ) {
       intent.aim = target.pos;
       intent.abilitiesToFire.push("relocate");
+    }
+
+    // Random chaos: fire an off-cd ability at random. Noob does this
+    // ~20% of ticks (looks dumb because it IS dumb); Legendary never.
+    if (shouldFireRandomly(this.cfg)) {
+      const ready = this.chaosPool.filter(
+        (id) => (self.cooldowns[id] ?? 0) <= 0 && !intent.abilitiesToFire.includes(id),
+      );
+      if (ready.length > 0) {
+        intent.abilitiesToFire.push(ready[Math.floor(Math.random() * ready.length)]!);
+      }
     }
 
     // If we're inside our own slash arc, stop walking forward — strafe slightly.
@@ -212,6 +254,10 @@ export class SlagyAI implements AIController {
 // We don't actually use this in v0.1 (the player IS the survivor) but
 // having it ready means we can hot-swap roles for testing.
 export class MatchAI implements AIController {
+  private cfg: BehaviorConfig;
+  constructor(cfg: BehaviorConfig = behaviorFor("normal")) {
+    this.cfg = cfg;
+  }
   update(self: CharacterEntity, world: World, _dt: number): AIIntent {
     const hunters = world.charactersOnTeam("hunter");
     const objectives = world.entities.filter(
@@ -235,11 +281,21 @@ export class MatchAI implements AIController {
       const away = normalize(sub(self.pos, nearestHunter.pos));
       moveDir = navigate(self, world, away);
       const intent: AIIntent = { moveDir, aim: self.pos, abilitiesToFire: [] };
-      if ((self.cooldowns["overdrive"] ?? 0) <= 0 && nearestD < 160) {
+      if (
+        (self.cooldowns["overdrive"] ?? 0) <= 0 && nearestD < 160 &&
+        !shouldHesitate(this.cfg)
+      ) {
         intent.abilitiesToFire.push("overdrive");
       }
-      if ((self.cooldowns["glitch"] ?? 0) <= 0 && nearestD < 100) {
-        intent.aim = add(self.pos, scale(away, 200));
+      if (
+        (self.cooldowns["glitch"] ?? 0) <= 0 && nearestD < 100 &&
+        !shouldHesitate(this.cfg)
+      ) {
+        // Glitch direction = away vector, optionally with jitter so
+        // Noob teleports somewhere "near-ish" rather than straight
+        // away from the hunter.
+        const escape = add(self.pos, scale(away, 200));
+        intent.aim = jitterAim(self.pos, escape, this.cfg.aimJitter);
         intent.abilitiesToFire.push("glitch");
       }
       return intent;
@@ -273,8 +329,13 @@ export class MatchAI implements AIController {
 //     a spread network makes a safe landing likely.
 export class MagnekAI implements AIController {
   private placeTimer = 0;
+  private cfg: BehaviorConfig;
   // Minimum spacing between plates so the network actually spreads out.
   private static SPACING = 240;
+
+  constructor(cfg: BehaviorConfig = behaviorFor("normal")) {
+    this.cfg = cfg;
+  }
 
   update(self: CharacterEntity, world: World, dt: number): AIIntent {
     this.placeTimer -= dt;
@@ -312,16 +373,20 @@ export class MagnekAI implements AIController {
       const away = normalize(sub(self.pos, nearestHunter.pos));
       intent.moveDir = navigate(self, world, away);
 
-      // Trigger Magnesis early enough that the channel completes before the
-      // hunter is on top of us. Needs a plate and a ready cooldown.
+      // Trigger Magnesis early enough that the channel completes before
+      // the hunter is on top of us. Tier-tuned trigger range: Noob
+      // panics late (small radius), Legendary commits early (large
+      // radius so the channel finishes before the hunter strikes).
+      const magnesisRange = 160 + this.cfg.leadFactor * 200;
       if (
         !channeling &&
         myPlates.length > 0 &&
         (self.cooldowns["magnesis"] ?? 0) <= 0 &&
-        nearestD < 200
+        nearestD < magnesisRange &&
+        !shouldHesitate(this.cfg)
       ) {
         intent.abilitiesToFire.push("magnesis");
-      } else if (canPlace && farFromPlates()) {
+      } else if (canPlace && farFromPlates() && !shouldHesitate(this.cfg)) {
         // No escape available — drop a fresh plate to build one.
         intent.abilitiesToFire.push("place_plate");
         this.placeTimer = 3.0;
@@ -356,6 +421,10 @@ export class MagnekAI implements AIController {
 // time building the swarm via resurrect, and commands the swarm onto
 // the nearest hunter when threatened.
 export class NecroAI implements AIController {
+  private cfg: BehaviorConfig;
+  constructor(cfg: BehaviorConfig = behaviorFor("normal")) {
+    this.cfg = cfg;
+  }
   update(self: CharacterEntity, world: World, dt: number): AIIntent {
     void dt;
     const hunters = world.charactersOnTeam("hunter");
@@ -391,7 +460,8 @@ export class NecroAI implements AIController {
       if (
         !channeling &&
         myZombies.length > 0 &&
-        (self.cooldowns["command_attack"] ?? 0) <= 0
+        (self.cooldowns["command_attack"] ?? 0) <= 0 &&
+        !shouldHesitate(this.cfg)
       ) {
         intent.abilitiesToFire.push("command_attack");
       }
@@ -415,7 +485,8 @@ export class NecroAI implements AIController {
     if (
       !channeling &&
       myZombies.length < 3 &&
-      (self.cooldowns["resurrect"] ?? 0) <= 0
+      (self.cooldowns["resurrect"] ?? 0) <= 0 &&
+      !shouldHesitate(this.cfg)
     ) {
       intent.abilitiesToFire.push("resurrect");
     }
@@ -433,6 +504,11 @@ export class NecroAI implements AIController {
 // twitchy than Slagy — high HP and Shield mean he doesn't need
 // to scramble.
 export class GravemarchAI implements AIController {
+  private cfg: BehaviorConfig;
+  private readonly chaosPool = ["gravemarch_slash", "rock_wall", "rock_shield", "stone_step"];
+  constructor(cfg: BehaviorConfig = behaviorFor("normal")) {
+    this.cfg = cfg;
+  }
   update(self: CharacterEntity, world: World, _dt: number): AIIntent {
     const survivors = world.charactersOnTeam("survivor");
     if (survivors.length === 0) {
@@ -461,31 +537,58 @@ export class GravemarchAI implements AIController {
     if (
       self.hp < self.maxHp * 0.55 &&
       !(self.statuses["shielded"] > 0) &&
-      (self.cooldowns["rock_shield"] ?? 0) <= 0
+      (self.cooldowns["rock_shield"] ?? 0) <= 0 &&
+      !shouldHesitate(this.cfg)
     ) {
       intent.abilitiesToFire.push("rock_shield");
     }
 
     // Heavy slash in melee.
-    if (d < 60 && (self.cooldowns["gravemarch_slash"] ?? 0) <= 0) {
+    if (
+      d < 60 &&
+      (self.cooldowns["gravemarch_slash"] ?? 0) <= 0 &&
+      !shouldHesitate(this.cfg)
+    ) {
       intent.abilitiesToFire.push("gravemarch_slash");
     }
 
-    // Stone Step to close from far away.
-    if (d > 360 && (self.cooldowns["stone_step"] ?? 0) <= 0 && !self.charging) {
-      intent.aim = target.pos;
+    // Stone Step to close from far away. Aim point is target.pos at
+    // base, leadAim'd ahead at higher tiers so Gravemarch surfaces
+    // where the survivor will be (and chews up that pass-through
+    // damage at the predicted point too). Jitter degrades execution.
+    if (
+      d > 360 &&
+      (self.cooldowns["stone_step"] ?? 0) <= 0 &&
+      !self.charging &&
+      !shouldHesitate(this.cfg)
+    ) {
+      const led = leadAim(target.pos, target.vel, this.cfg.leadFactor);
+      intent.aim = jitterAim(self.pos, led, this.cfg.aimJitter);
       intent.abilitiesToFire.push("stone_step");
     }
 
     // Rock Wall at the survivor's position when they're at
-    // mid-range — drops in front of them to cut the escape.
+    // mid-range — drops in front of them to cut the escape. Higher
+    // tiers wall at the LEAD point (where the survivor will be when
+    // the wall lands), not the current position.
     if (
       d > 110 && d < 320 &&
       (self.cooldowns["rock_wall"] ?? 0) <= 0 &&
-      !self.charging
+      !self.charging &&
+      !shouldHesitate(this.cfg)
     ) {
-      intent.aim = target.pos;
+      const led = leadAim(target.pos, target.vel, this.cfg.leadFactor);
+      intent.aim = jitterAim(self.pos, led, this.cfg.aimJitter);
       intent.abilitiesToFire.push("rock_wall");
+    }
+
+    if (shouldFireRandomly(this.cfg)) {
+      const ready = this.chaosPool.filter(
+        (id) => (self.cooldowns[id] ?? 0) <= 0 && !intent.abilitiesToFire.includes(id),
+      );
+      if (ready.length > 0) {
+        intent.abilitiesToFire.push(ready[Math.floor(Math.random() * ready.length)]!);
+      }
     }
 
     return intent;
@@ -496,18 +599,26 @@ export class GravemarchAI implements AIController {
 // characters without an AI (they'd stand still — callers should avoid
 // putting them on the AI side). Centralizes the id→controller mapping so
 // main.ts doesn't repeat the switch.
-export function createAIController(characterId: string): AIController | null {
+//
+// The optional difficulty argument selects which BehaviorConfig the new
+// controller is constructed with — defaults to Normal-tier for back-
+// compat with any caller that doesn't yet thread difficulty through.
+export function createAIController(
+  characterId: string,
+  difficulty: AiDifficulty = "normal",
+): AIController | null {
+  const cfg = behaviorFor(difficulty);
   switch (characterId) {
     case "slagy":
-      return new SlagyAI();
+      return new SlagyAI(cfg);
     case "match":
-      return new MatchAI();
+      return new MatchAI(cfg);
     case "necro":
-      return new NecroAI();
+      return new NecroAI(cfg);
     case "magnek":
-      return new MagnekAI();
+      return new MagnekAI(cfg);
     case "gravemarch":
-      return new GravemarchAI();
+      return new GravemarchAI(cfg);
     default:
       return null;
   }
