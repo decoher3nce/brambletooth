@@ -1,7 +1,7 @@
-// Tiny file-backed profile store keyed by player name. Players log in
-// with {name, pin}; the server returns their points (or creates a new
-// profile the first time). Lets points follow a player across devices
-// and sessions over the local Tailnet.
+// Tiny file-backed profile store keyed by player name. Players log
+// in with {name, pin}; the server returns their points (or creates
+// a new profile the first time). Lets points follow a player across
+// devices and sessions over the local Tailnet.
 //
 // Security note: this is a kid's game on a private Tailscale network. The
 // PIN is stored in plaintext in a JSON file next to the server. That's
