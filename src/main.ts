@@ -3735,7 +3735,14 @@ function drawAiDifficultyBar(dims: { w: number; h: number }): void {
   const pillH = 32;
   const gap = 8;
   const totalW = labels.length * pillW + (labels.length - 1) * gap;
-  const startX = (cw - totalW) / 2;
+  // Center the row on the SelectScreen's grid column, NOT the
+  // viewport center. On wide screens (iPad, large desktops) the
+  // detail card sits to the right of the grid, and a screen-
+  // centered pill row would bleed under it. The grid column is
+  // where the START button lives, so the pills sit directly
+  // above START.
+  const gridCenterX = selectScreen.getGridCenterX(cw);
+  const startX = gridCenterX - totalW / 2;
   // Position the row clearly ABOVE the SelectScreen's START button.
   // SelectScreen places the start button near `ch - 100` and it's
   // 56px tall, so the pill row goes well above that top edge with
@@ -3745,7 +3752,7 @@ function drawAiDifficultyBar(dims: { w: number; h: number }): void {
   ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
   ctx.font = "11px system-ui, sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText("AI DIFFICULTY", cw / 2, y - 8);
+  ctx.fillText("AI DIFFICULTY", gridCenterX, y - 8);
   for (let i = 0; i < labels.length; i++) {
     const d = labels[i]!;
     const isActive = d === current;

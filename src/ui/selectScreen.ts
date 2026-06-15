@@ -155,6 +155,17 @@ export class SelectScreen {
     this.lobbyView = view;
   }
 
+  // Screen-space center X of the grid column (where the START button
+  // is also centered). main.ts uses this to position the AI
+  // difficulty pill row so it doesn't bleed under the detail card
+  // on wide viewports (iPad, large desktops). Mirrors the same
+  // layout math used in draw() — keep in sync.
+  getGridCenterX(cw: number): number {
+    const layoutW = ROW_WIDTH + DETAIL_GAP + DETAIL_W;
+    const layoutX = Math.max(20, (cw - layoutW) / 2);
+    return layoutX + ROW_WIDTH / 2;
+  }
+
   constructor() {
     // Default selection: first survivor in CHARACTERS so START is
     // immediately useful. Falls back to first hunter if no survivor.
