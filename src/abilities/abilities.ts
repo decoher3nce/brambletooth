@@ -699,3 +699,109 @@ registerAbility({
     };
   },
 });
+
+// ---- Infection-mode abilities (Zombie character) ----
+
+// Damage applied per cast. Tuned per the design brief — survivors
+// start at 10 HP, so a slam tags them for 1/2 and a lunge fully
+// converts a clean hit. Cooldowns leave window between presses but
+// don't trivialize escape.
+export const POISON_SLAM_DAMAGE = 5;
+export const POISON_SLAM_RADIUS = 70;
+export const POISON_SLAM_SLOW_DURATION = 1.0;
+export const LUNGE_DAMAGE = 10;
+export const LUNGE_DISTANCE = 110;
+export const LUNGE_HIT_RADIUS = 50;
+
+// Predicate used by both Zombie abilities — a target is "edible" if
+// it's a non-zombie character, not the caster, not shielded, not
+// already dead. Keeps the filter logic identical between slam + lunge.
+function isInfectionTarget(e: CharacterEntity, caster: CharacterEntity): boolean {
+  if (e.dead) return false;
+  if (e.id === caster.id) return false;
+  if (e.characterId === "zombie") return false;
+  if (e.statuses["shielded"] > 0) return false;
+  if (e.statuses["phased"] > 0) return false;
+  return true;
+}
+
+// Poison Slam — AoE shockwave around the zombie. Damages every
+// non-zombie character within POISON_SLAM_RADIUS + their body radius
+// and applies a brief slow to keep them from sprinting off. Visual
+// flash spawned as a short-lived projectile-shaped marker so the
+// renderer can paint the shockwave ring.
+registerAbility({
+  id: "poison_slam",
+  name: "Poison Slam",
+  description: `Toxic shockwave around you. ${POISON_SLAM_DAMAGE} damage and slows survivors caught in the blast.`,
+  cooldown: 1.5,
+  displayDamage: POISON_SLAM_DAMAGE,
+  cast: ({ world, caster }) => {
+    for (const e of world.allCharacters()) {
+      if (!isInfectionTarget(e, caster)) continue;
+      if (dist(e.pos, caster.pos) <= POISON_SLAM_RADIUS + e.radius) {
+        if (!e.invincible) {
+          e.hp -= POISON_SLAM_DAMAGE * (caster.damageMult ?? 1);
+          e.lastDamagerId = caster.id;
+        }
+        e.statuses["slowed"] = POISON_SLAM_SLOW_DURATION;
+      }
+    }
+    world.spawn<ProjectileEntity>({
+      kind: "projectile",
+      pos: { ...caster.pos },
+      radius: POISON_SLAM_RADIUS,
+      vel: { x: 0, y: 0 },
+      ownerId: caster.id,
+      ttl: 0.30,
+      damage: 0,
+      targetTeam: "survivor",
+      dead: false,
+    });
+  },
+});
+
+// Lunge — short forward dash that deals heavy damage at the
+// landing spot. Modeled as a relocate-and-arc: caster snaps to a
+// point LUNGE_DISTANCE along the aim vector (clamped to arena
+// bounds), then every edible character within LUNGE_HIT_RADIUS of
+// the landing spot takes LUNGE_DAMAGE. Faster + chunkier than
+// Slagy's slash; the round-defining ability of the Zombie kit.
+registerAbility({
+  id: "lunge",
+  name: "Lunge",
+  description: `Dash forward and bite. ${LUNGE_DAMAGE} damage in a small arc on landing.`,
+  cooldown: 3.0,
+  displayDamage: LUNGE_DAMAGE,
+  cast: ({ world, caster, aim }) => {
+    const dir = normalize(sub(aim, caster.pos));
+    const target = add(caster.pos, scale(dir, LUNGE_DISTANCE));
+    const b = world.arena.bounds;
+    target.x = Math.max(b.minX + caster.radius, Math.min(b.maxX - caster.radius, target.x));
+    target.y = Math.max(b.minY + caster.radius, Math.min(b.maxY - caster.radius, target.y));
+    caster.pos = target;
+    caster.facing = Math.atan2(dir.y, dir.x);
+    for (const e of world.allCharacters()) {
+      if (!isInfectionTarget(e, caster)) continue;
+      if (dist(e.pos, target) <= LUNGE_HIT_RADIUS + e.radius) {
+        if (!e.invincible) {
+          e.hp -= LUNGE_DAMAGE * (caster.damageMult ?? 1);
+          e.lastDamagerId = caster.id;
+        }
+      }
+    }
+    // Visual marker — fast-decay flash at the landing spot so the
+    // renderer can paint a bite burst.
+    world.spawn<ProjectileEntity>({
+      kind: "projectile",
+      pos: { ...target },
+      radius: LUNGE_HIT_RADIUS,
+      vel: { x: 0, y: 0 },
+      ownerId: caster.id,
+      ttl: 0.18,
+      damage: 0,
+      targetTeam: "survivor",
+      dead: false,
+    });
+  },
+});

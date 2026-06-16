@@ -1,7 +1,13 @@
 // Each character is a data record. Adding new characters = adding entries
 // here (and any new abilities they need in abilities.ts).
 
-import { MAGNEK_PLATE_CAP, NECRO_ZOMBIE_CAP, NECRO_COMMAND_DURATION } from "../abilities/abilities";
+import {
+  MAGNEK_PLATE_CAP,
+  NECRO_ZOMBIE_CAP,
+  NECRO_COMMAND_DURATION,
+  POISON_SLAM_DAMAGE,
+  LUNGE_DAMAGE,
+} from "../abilities/abilities";
 
 export type CharacterRole = "hunter" | "survivor" | "flex";
 
@@ -134,6 +140,31 @@ export const CHARACTERS: Record<string, CharacterDef> = {
       { label: "Speed", value: "115", baseNumber: 115, scaling: "speed" },
       { label: "Slash damage", value: "23", baseNumber: 23, scaling: "damage" },
       { label: "Shield duration", value: "10s" },
+    ],
+  },
+  // Infection mode only — not selectable from the normal character
+  // select. Patient Zero plus every converted survivor takes this
+  // form. Kit is two abilities that scale through the existing
+  // displayDamage delta path: poison_slam (5) + lunge (10). HP/speed
+  // tuned so a fresh zombie is a real threat but a smart survivor
+  // can kite it.
+  zombie: {
+    id: "zombie",
+    name: "Zombie",
+    role: "hunter",
+    maxHp: 30,
+    speed: 135,
+    radius: 19,
+    color: "#5a7d3c",     // mossy rotting-flesh green
+    colorDark: "#2e3f1f", // shadow bog
+    abilities: ["poison_slam", "lunge"],
+    narrative:
+      "Patient Zero spreads on contact. A toxic slam knocks survivors off their feet; a lunge closes gaps in a hurry. Every survivor it kills wakes up infected.",
+    displayStats: () => [
+      { label: "HP", value: "30", baseNumber: 30, scaling: "hp" },
+      { label: "Speed", value: "135", baseNumber: 135, scaling: "speed" },
+      { label: "Slam damage", value: String(POISON_SLAM_DAMAGE), baseNumber: POISON_SLAM_DAMAGE, scaling: "damage" },
+      { label: "Lunge damage", value: String(LUNGE_DAMAGE), baseNumber: LUNGE_DAMAGE, scaling: "damage" },
     ],
   },
 };

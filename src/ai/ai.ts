@@ -595,6 +595,83 @@ export class GravemarchAI implements AIController {
   }
 }
 
+// Zombie AI — used by Infection mode. Picks the nearest non-zombie
+// character, navigates toward them, slams when close, lunges when at
+// mid-range. Doesn't use lead/jitter as aggressively as the other
+// hunters because both Zombie abilities are short-range; aim noise
+// matters less than positioning.
+export class ZombieAI implements AIController {
+  private cfg: BehaviorConfig;
+  private readonly chaosPool = ["poison_slam", "lunge"];
+
+  constructor(cfg: BehaviorConfig = behaviorFor("normal")) {
+    this.cfg = cfg;
+  }
+
+  update(self: CharacterEntity, world: World, _dt: number): AIIntent {
+    // Targets: every non-zombie, non-dead, non-exited character on
+    // the map. Mirrors the ability filter in
+    // src/abilities/abilities.ts so the AI's "who do I chase?" view
+    // matches the "who does my swing hit?" view.
+    let target: CharacterEntity | null = null;
+    let bestDist = Infinity;
+    for (const c of world.allCharacters()) {
+      if (c.dead || c.exited) continue;
+      if (c.characterId === "zombie") continue;
+      if (c.id === self.id) continue;
+      const d = dist(self.pos, c.pos);
+      if (d < bestDist) {
+        bestDist = d;
+        target = c;
+      }
+    }
+    if (!target) {
+      return { moveDir: { x: 0, y: 0 }, aim: self.pos, abilitiesToFire: [] };
+    }
+    const dir = normalize(sub(target.pos, self.pos));
+    const intent: AIIntent = {
+      moveDir: navigate(self, world, dir),
+      aim: target.pos,
+      abilitiesToFire: [],
+    };
+
+    // Poison Slam: close-range. Fires when the target is inside the
+    // slam radius + their body. Hesitation gate makes Noob look
+    // sluggish; Legendary slams the instant the target is in range.
+    if (
+      bestDist < 90 &&
+      (self.cooldowns["poison_slam"] ?? 0) <= 0 &&
+      !shouldHesitate(this.cfg)
+    ) {
+      intent.abilitiesToFire.push("poison_slam");
+    }
+
+    // Lunge: mid-range gap closer. Want some daylight so the dash
+    // actually crosses ground; if the target is already in slam
+    // range, slam instead.
+    if (
+      bestDist >= 90 && bestDist <= 200 &&
+      (self.cooldowns["lunge"] ?? 0) <= 0 &&
+      !shouldHesitate(this.cfg)
+    ) {
+      const led = leadAim(target.pos, target.vel, this.cfg.leadFactor);
+      intent.aim = jitterAim(self.pos, led, this.cfg.aimJitter);
+      intent.abilitiesToFire.push("lunge");
+    }
+
+    if (shouldFireRandomly(this.cfg)) {
+      const ready = this.chaosPool.filter(
+        (id) => (self.cooldowns[id] ?? 0) <= 0 && !intent.abilitiesToFire.includes(id),
+      );
+      if (ready.length > 0) {
+        intent.abilitiesToFire.push(ready[Math.floor(Math.random() * ready.length)]!);
+      }
+    }
+
+    return intent;
+  }
+}
+
 // Factory: build the right controller for a character id. Returns null for
 // characters without an AI (they'd stand still — callers should avoid
 // putting them on the AI side). Centralizes the id→controller mapping so
@@ -619,6 +696,8 @@ export function createAIController(
       return new MagnekAI(cfg);
     case "gravemarch":
       return new GravemarchAI(cfg);
+    case "zombie":
+      return new ZombieAI(cfg);
     default:
       return null;
   }

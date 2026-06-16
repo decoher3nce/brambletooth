@@ -48,6 +48,14 @@ import type { Camera } from "./render/renderer";
 import { HuntMode } from "./modes/hunt";
 import { FFAMode, FFA_MAX_PLAYERS } from "./modes/ffa";
 import {
+  InfectionMode,
+  INFECTION_MAX_PLAYERS,
+  INFECTION_TIME_LIMIT,
+  INFECTION_SURVIVOR_HP,
+} from "./modes/infection";
+import { ZombieAI } from "./ai/ai";
+import { behaviorFor } from "./ai/behavior";
+import {
   AI_DIFFICULTIES,
   AI_DIFFICULTY_STAT_MULTS,
   aiDifficultyLabel,
@@ -541,13 +549,16 @@ selectScreen.xpForLevel = (lv) => xpForLevel(lv);
 // is on for any local hunt round — vs-computer or campaign — but
 // off for FFA (no single AI to pick) and off whenever a network
 // lobby is driving the screen.
-selectScreen.isDualPickMode = () => appMode === "local" && !pendingFFA;
+selectScreen.isDualPickMode = () =>
+  appMode === "local" && !pendingFFA && !pendingInfection;
 // VS COMPUTER card reads the current AI difficulty tier to compute
 // its displayed level + colored stat / damage deltas. null in non-VS
 // flows (network lobby, FFA) — the AI card then falls back to plain
 // per-level deltas.
 selectScreen.getAiDifficulty = () =>
-  appMode === "local" && !pendingFFA ? getAiDifficulty() : null;
+  appMode === "local" && !pendingFFA && !pendingInfection
+    ? getAiDifficulty()
+    : null;
 selectScreen.bind(canvas, logicalSize, {
   onStart: (chosenId) => {
     if (appMode === "net" && net) {
@@ -560,6 +571,10 @@ selectScreen.bind(canvas, logicalSize, {
         net.ready(true);
       }
     } else if (appMode === "local") {
+      if (pendingInfection) {
+        startInfectionRound(chosenId);
+        return;
+      }
       if (pendingFFA) {
         startFFARound(chosenId);
       } else {
@@ -610,7 +625,7 @@ touchControls.bind(canvas, logicalSize, {
 // --- Title screen + back-button input ---
 // Title hit zones (only when !started). Back-button hit zone (only when
 // started) is stored separately and computed each draw from logical size.
-let titleButtons: { campaign: Rect; vs: Rect; two: Rect; shop: Rect; ffa: Rect } | null = null;
+let titleButtons: { campaign: Rect; vs: Rect; two: Rect; shop: Rect; ffa: Rect; infection: Rect } | null = null;
 let titleLoginBtn: Rect | null = null;
 let titleLogoutBtn: Rect | null = null;
 let titleProfileBtn: Rect | null = null;
@@ -668,6 +683,10 @@ let pendingIsCampaign: boolean = false;
 // startRound. Reset to false at the end of every round + on title
 // back-out so it can't leak between flows.
 let pendingFFA: boolean = false;
+// True when the title screen routed via the INFECTION button. The
+// select screen's onStart routes to startInfectionRound instead of
+// the standard HuntMode startRound. Cleared after the round starts.
+let pendingInfection: boolean = false;
 
 // Settings sub-scene hit zones (re-built each draw).
 let settingsBackBtn: Rect | null = null;
@@ -825,6 +844,14 @@ function handleTitleTap(p: { x: number; y: number }): void {
     // of startRound when this flag is set.
     pendingFFA = true;
     chooseMode("local");
+  } else if (inRect(p, titleButtons.infection)) {
+    playSound("ui_click");
+    // INFECTION jumps straight to character select. The select
+    // screen's onStart routes to startInfectionRound. The player
+    // picks their starting character; Patient Zero is chosen
+    // randomly at round start (the player has a 1/6 chance).
+    pendingInfection = true;
+    chooseMode("local");
   }
 }
 
@@ -971,7 +998,7 @@ function handleMapVoteTap(p: { x: number; y: number }): boolean {
 function handleDifficultyTap(p: { x: number; y: number }): boolean {
   if (!started) return false;
   if (appMode !== "local" || scene !== "select") return false;
-  if (pendingFFA) return false;
+  if (pendingFFA || pendingInfection) return false;
   for (const pill of difficultyPillBtns) {
     if (!inRect(p, pill.rect)) continue;
     if (pill.d === getAiDifficulty()) return true;
@@ -1349,6 +1376,105 @@ function startFFARound(chosenId: string): void {
   scene = "playing";
 }
 
+// Spin up a single-player Infection round. Six total characters
+// (player + 5 AI), one is chosen as Patient Zero inside
+// InfectionMode.initialize. AI characters fill remaining slots
+// with random picks from the unlocked pool (duplicates OK so the
+// lobby always fills to 6 even with a small roster). Reuses Forest
+// Map 1 as the v1 arena.
+function startInfectionRound(chosenId: string): void {
+  const def = CHARACTERS[chosenId];
+  if (!def) return;
+  const mapDef = getMap("forest_1") ?? getMap(defaultMapId())!;
+  const pool = availableFFACharacters(); // same unlock filter as FFA
+  const total = Math.min(INFECTION_MAX_PLAYERS, pool.length + 1); // +1 for the human
+  const botCount = Math.max(0, total - 1);
+  const botIds: string[] = [];
+  for (let i = 0; i < botCount; i++) {
+    botIds.push(pool[Math.floor(Math.random() * pool.length)]!);
+  }
+  const world = new World(mapDef.arenaConfig, INFECTION_TIME_LIMIT);
+  mapDef.buildArena(world, Math.floor(Math.random() * 1e9), 0);
+
+  const mode = new InfectionMode({
+    playerCharacterId: chosenId,
+    botCharacterIds: botIds,
+  });
+  mode.initialize(world);
+
+  if (loggedIn && isInvincibleProfile(getName(), getPin())) {
+    const player = world.playerCharacter();
+    if (player) player.invincible = true;
+  }
+
+  // Per-character level scaling. applyLevelsToWorld scales maxHp,
+  // but Infection caps survivors at 10 HP and zombies at 30 HP
+  // regardless of level/difficulty — survival is about positioning,
+  // not stat snowball. Re-clamp HP right after.
+  applyLevelsToWorld(world);
+  const zombieMaxHp = CHARACTERS["zombie"]!.maxHp;
+  for (const c of world.allCharacters()) {
+    c.maxHp = c.characterId === "zombie" ? zombieMaxHp : INFECTION_SURVIVOR_HP;
+    c.hp = c.maxHp;
+  }
+
+  // Sprint Boots overlay flag for the human.
+  {
+    const player = world.playerCharacter();
+    if (player && hasSprintBoots()) player.hasSprintBoots = true;
+  }
+
+  const controllers = new Map<number, Controller>();
+  for (const c of world.allCharacters()) {
+    if (c.isPlayer) {
+      controllers.set(c.id, new HumanController(input, hasSprintBoots));
+    } else if (c.characterId === "zombie") {
+      controllers.set(c.id, new ZombieAI(behaviorFor(getAiDifficulty())));
+    } else {
+      const ai = createAIController(c.characterId, getAiDifficulty());
+      if (ai) controllers.set(c.id, ai);
+    }
+  }
+
+  const engine = new Engine({ world, mode, controllers });
+  const player = world.playerCharacter();
+  const cam = createCamera(player ? { ...player.pos } : { x: 0, y: 0 });
+
+  play = {
+    world, mode, engine, controllers, cam,
+    chosenCharacterId: chosenId,
+    mapId: mapDef.id,
+    isCampaign: false,
+    countdown: 3,
+  };
+  pendingInfection = false;
+  scene = "playing";
+}
+
+// Per-frame controller-swap pass for Infection mode. When a
+// survivor AI's character is converted to Zombie mid-round
+// (InfectionMode flags it in newlyInfectedIds), we replace their
+// AI with a ZombieAI so they immediately start hunting. The human
+// player keeps their HumanController — they just find themselves
+// driving a zombie now, with the new kit auto-mapped to ability
+// slots 1 and 2.
+function syncInfectionControllers(): void {
+  if (!play) return;
+  if (!(play.mode instanceof InfectionMode)) return;
+  const m = play.mode;
+  if (m.newlyInfectedIds.length === 0) return;
+  for (const id of m.newlyInfectedIds) {
+    const c = play.world.entities.find(
+      (e) => e.kind === "character" && e.id === id,
+    );
+    if (!c) continue;
+    if (c.kind !== "character") continue;
+    if (c.isPlayer) continue; // human keeps HumanController
+    play.controllers.set(c.id, new ZombieAI(behaviorFor(getAiDifficulty())));
+  }
+  m.newlyInfectedIds.length = 0;
+}
+
 function frameLocal(dt: number, dims: { w: number; h: number }): void {
   if (scene === "select") {
     selectScreen.setLobbyView(null);
@@ -1359,7 +1485,7 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
     // the stored difficulty, they just don't expose the picker here.
     // Hidden when in MP-driven select (no AI) and when pendingFFA
     // is true (FFA is its own AI mode for now).
-    if (!pendingFFA) drawAiDifficultyBar(dims);
+    if (!pendingFFA && !pendingInfection) drawAiDifficultyBar(dims);
     return;
   }
   if (scene === "playing" && play) {
@@ -1379,6 +1505,11 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
       input.pressedAbilities.clear();
     } else {
       p.engine.tick(dt);
+      // Infection mode: after the engine resolves deaths +
+      // checkOutcome morphs the freshly-dead into zombies, swap
+      // their AI controllers to ZombieAI so they immediately
+      // start hunting. Cheap no-op for every other mode.
+      syncInfectionControllers();
     }
 
     const player = p.world.playerCharacter();
@@ -1986,13 +2117,17 @@ function frameTitle(dims: { w: number; h: number }): void {
   // it's a non-progression mode (no campaign unlock, no maps to
   // pick) — matches the SHOP tonality.
   const ffa: Rect = { x: rightX, y: by + bh + gap, w: colW, h: bh };
-  titleButtons = { campaign, vs, two, shop, ffa };
+  // INFECTION sits below FFA in the red column. Survive 2 minutes
+  // against Patient Zero — get tagged once and you spread it too.
+  const infection: Rect = { x: rightX, y: by + 2 * (bh + gap), w: colW, h: bh };
+  titleButtons = { campaign, vs, two, shop, ffa, infection };
 
   drawModeButton(campaign, "CAMPAIGN", "Story · unlock maps + worlds", true, "yellow");
   drawModeButton(vs, "VS COMPUTER", "Pick any unlocked map · vs AI", true, "yellow");
   drawModeButton(two, "MULTIPLAYER", "1 vs Many · vote on a map", true, "yellow");
   drawModeButton(shop, "SHOP", "Characters · Outfits · Upgrades", true, "purple");
   drawModeButton(ffa, "FREE FOR ALL", "Up to 8 fighters · random win condition · vs AI", true, "red");
+  drawModeButton(infection, "INFECTION", "Survive 2 minutes · the dead come back infected", true, "red");
 }
 
 function drawLoginForm(dims: { w: number; h: number }, top: number): void {
@@ -3691,6 +3826,10 @@ function hasSprintBoots(): boolean {
 // aren't gated by any shop entry are always available. Bigfoot
 // god-mode unlocks everything for testing.
 function isCharacterUnlocked(characterId: string): boolean {
+  // Zombie is mode-internal — Infection mode swaps survivors into it
+  // at conversion time. It must never appear in the character-select
+  // grid, the AI pool, or any other "pick a character" UI.
+  if (characterId === "zombie") return false;
   if (loggedIn && isInvincibleProfile(getName(), getPin())) return true;
   // Scan the catalog for a character-kind item whose characterId
   // matches; if found, the character is gated on that item.
@@ -4288,8 +4427,17 @@ function processAwards(
   // End-of-round: win + survive (one-shot).
   if (outcome !== "ongoing" && !state.endAwarded) {
     state.endAwarded = true;
-    const localTeamWon =
-      state.lastSeenTeam !== null && (
+    // Infection mode uses team="survivor" for ALL characters
+    // internally (zombies included) so the engine doesn't grow a
+    // new Team value — but the player's actual side is
+    // determined by their current characterId. Resolve win/loss
+    // off that flag instead of lastSeenTeam.
+    const isInfection = play?.mode instanceof InfectionMode;
+    const infectedSide = isInfection && me?.characterId === "zombie";
+    const localTeamWon = isInfection
+      ? (outcome === "hunter_win" && infectedSide) ||
+        (outcome === "survivor_win" && !infectedSide)
+      : state.lastSeenTeam !== null && (
         (outcome === "hunter_win" && state.lastSeenTeam === "hunter") ||
         (outcome === "survivor_win" && state.lastSeenTeam === "survivor")
       );
