@@ -656,6 +656,7 @@ const httpServer = createServer(async (req, res) => {
         points?: number; achievements?: unknown;
         inventory?: unknown; completedMaps?: unknown;
         characterXp?: unknown;
+        resetVersion?: unknown;
       };
       const result = syncProfile(body.name, body.pin, {
         points: body.points,
@@ -663,6 +664,7 @@ const httpServer = createServer(async (req, res) => {
         inventory: body.inventory,
         completedMaps: body.completedMaps,
         characterXp: body.characterXp,
+        resetVersion: body.resetVersion,
       });
       sendJson(res, 200, result);
       return;

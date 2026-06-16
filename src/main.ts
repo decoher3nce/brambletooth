@@ -287,8 +287,47 @@ interface ProfileResponse {
     // merge in syncProfile — we save what comes back so localStorage
     // matches whatever the server now holds.
     characterXp?: Record<string, number>;
+    // Server-driven reset epoch. When it advances, the client wipes
+    // its profile-cache localStorage on next login so the new server
+    // snapshot (a hard reset) sticks instead of being immediately
+    // re-corrupted by a max-merge against stale values. See
+    // wipeProfileCacheForReset().
+    resetVersion?: number;
   };
   error?: string;
+}
+
+// Tracks the most recent server resetVersion the client has
+// observed. Compared against server.resetVersion on every login —
+// if server is higher, the client wipes its profile-cache keys
+// before saving the new snapshot. Defaults to 0 so a fresh client
+// (no key) is in sync with a fresh server (resetVersion 0).
+const RESET_VERSION_KEY = "brambletooth.resetVersion";
+function getLocalResetVersion(): number {
+  try {
+    const raw = localStorage.getItem(RESET_VERSION_KEY);
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+  } catch { return 0; }
+}
+function setLocalResetVersion(n: number): void {
+  try { localStorage.setItem(RESET_VERSION_KEY, String(Math.max(0, Math.floor(n)))); }
+  catch { /* ignore */ }
+}
+
+// Hard-wipe the profile-cache localStorage keys when a server-side
+// reset has bumped the epoch past ours. Leaves session keys (name,
+// pin, loggedIn, audio prefs, ai difficulty) intact so the player
+// stays signed in but starts fresh.
+function wipeProfileCacheForReset(): void {
+  try {
+    localStorage.removeItem(POINTS_KEY);
+    localStorage.removeItem(ACHIEVEMENTS_KEY);
+    localStorage.removeItem(INVENTORY_KEY);
+    localStorage.removeItem(COMPLETED_MAPS_KEY);
+    localStorage.removeItem(CHARACTER_XP_KEY);
+    localStorage.removeItem(DEFEATED_KEY);
+  } catch { /* ignore */ }
 }
 
 async function tryLogin(name: string, pin: string): Promise<boolean> {
@@ -307,6 +346,19 @@ async function tryLogin(name: string, pin: string): Promise<boolean> {
     }
     setName(body.profile.name);
     setPin(pin);
+    // Server-driven reset check. If the server's epoch is ahead of
+    // ours, an admin has hard-reset this player since this client
+    // last logged in. Wipe the profile-cache localStorage BEFORE
+    // saving the new snapshot so the subsequent characterXp merge
+    // (max-per-key with empty server == old local wins) doesn't
+    // immediately re-corrupt the reset.
+    const serverRV = Number(body.profile.resetVersion) || 0;
+    const localRV = getLocalResetVersion();
+    const wipedForReset = serverRV > localRV;
+    if (wipedForReset) {
+      wipeProfileCacheForReset();
+      setLocalResetVersion(serverRV);
+    }
     setPointsLocal(body.profile.points);
     if (Array.isArray(body.profile.achievements)) {
       saveEarnedAchievements(
@@ -384,6 +436,11 @@ function scheduleProfileSync(): void {
           inventory: getInventory(),
           completedMaps: getCompletedMaps(),
           characterXp: getAllCharacterXp(),
+          // Forward the client's last-seen reset epoch. The server
+          // ignores all mutations from clients on a stale epoch so
+          // a server-side hard reset isn't immediately undone by a
+          // stale tab still posting its old totals.
+          resetVersion: getLocalResetVersion(),
         }),
       });
       const body = (await r.json()) as ProfileResponse;

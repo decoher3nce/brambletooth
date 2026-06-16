@@ -2,6 +2,7 @@
 // in with {name, pin}; the server returns their points (or creates
 // a new profile the first time). Lets points follow a player across
 // devices and sessions over the local Tailnet.
+// (Touch to force tsx-watch reload after a data/profiles.json edit.)
 //
 // Security note: this is a kid's game on a private Tailscale network. The
 // PIN is stored in plaintext in a JSON file next to the server. That's
@@ -34,6 +35,14 @@ export interface ProfileRecord {
   // Client + server merge by max-per-key so progress never goes
   // backward on sync.
   characterXp: Record<string, number>;
+  // Server-driven reset epoch. Bumped manually in data/profiles.json
+  // when an admin wants to wipe a player's progress back to zero.
+  // Login compares against the client's saved version: if server >
+  // client, the client wipes its localStorage profile cache before
+  // accepting the server snapshot. syncProfile refuses writes from
+  // clients with a lower resetVersion so the wipe doesn't get
+  // immediately re-corrupted by a still-stale tab pushing back.
+  resetVersion: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -130,6 +139,12 @@ function ensureLoaded(): void {
           if (!Array.isArray(p.completedMaps)) p.completedMaps = [];
           // Backfill characterXp (added later).
           p.characterXp = migrateCharacterXp(p.characterXp);
+          // Backfill resetVersion (added later) — pre-existing
+          // profiles default to 0 so a fresh client-side cache is
+          // considered in-sync and no spurious wipe fires.
+          const rv = Number((p as { resetVersion?: unknown }).resetVersion);
+          (p as ProfileRecord).resetVersion =
+            Number.isFinite(rv) && rv >= 0 ? Math.floor(rv) : 0;
         }
       }
       store = raw as ProfileMap;
@@ -190,6 +205,7 @@ export function login(name: unknown, pin: unknown): LoginResult {
     inventory: [],
     completedMaps: [],
     characterXp: {},
+    resetVersion: 0,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -239,7 +255,7 @@ export function lookupPublic(name: unknown): { ok: boolean; profile?: PublicProf
 export function syncProfile(
   name: unknown,
   pin: unknown,
-  payload: { points?: number; achievements?: unknown; inventory?: unknown; completedMaps?: unknown; characterXp?: unknown },
+  payload: { points?: number; achievements?: unknown; inventory?: unknown; completedMaps?: unknown; characterXp?: unknown; resetVersion?: unknown },
 ): LoginResult {
   ensureLoaded();
   if (!isValidName(name)) return { ok: false, error: "Name must be 1-24 characters" };
@@ -248,6 +264,19 @@ export function syncProfile(
   const existing = store[key];
   if (!existing) return { ok: false, error: "Profile not found" };
   if (existing.pin !== pin) return { ok: false, error: "Wrong PIN" };
+  // Reset-version guard. If the client is on an older epoch than
+  // the server (i.e. an admin bumped resetVersion since this tab
+  // last logged in), refuse to apply ANY mutations — otherwise the
+  // stale localStorage state would immediately re-corrupt the
+  // fresh server snapshot. Returning ok=true with the current
+  // server record nudges the client into re-logging-in to pick up
+  // the new epoch + wipe its cache.
+  const clientResetVersion = Number((payload as { resetVersion?: unknown }).resetVersion);
+  const serverResetVersion = existing.resetVersion ?? 0;
+  const clientRV = Number.isFinite(clientResetVersion) ? Math.floor(clientResetVersion) : 0;
+  if (clientRV < serverResetVersion) {
+    return { ok: true, profile: existing };
+  }
   if (typeof payload.points === "number" && Number.isFinite(payload.points)) {
     existing.points = Math.max(0, Math.floor(payload.points));
   }
