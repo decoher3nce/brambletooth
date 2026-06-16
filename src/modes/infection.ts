@@ -109,7 +109,13 @@ export class InfectionMode implements GameMode {
       const slot = SPAWN_SLOTS[i % SPAWN_SLOTS.length]!;
       const x = b.minX + (b.maxX - b.minX) * slot.fx;
       const y = b.minY + (b.maxY - b.minY) * slot.fy;
-      const c: CharacterEntity = {
+      // world.spawn assigns the entity id (it spreads the input
+      // into a NEW object and pushes that) — so we capture its
+      // return value rather than re-using the pre-spawn literal.
+      // Holding the pre-spawn reference was the bug that froze
+      // every Infection round (no patient zero was actually
+      // morphed; spawned[i] was an orphan with id=undefined).
+      const c = world.spawn<CharacterEntity>({
         kind: "character",
         team: "survivor",
         characterId: def.id,
@@ -127,8 +133,7 @@ export class InfectionMode implements GameMode {
         objectivesCollected: 0,
         exited: false,
         stamina: 1,
-      } as CharacterEntity;
-      world.spawn<CharacterEntity>(c);
+      });
       spawned.push(c);
     }
 
@@ -192,14 +197,18 @@ export class InfectionMode implements GameMode {
   }
 
   // Re-stat a character to Zombie. Preserves entity id, position
-  // (caller can move them via respawnRemote), level, and team.
-  // Resets HP (to the design-cap of 30), speed (level-scaled),
-  // damageMult, abilities, cooldowns, transient state.
-  // Idempotent — calling on an already-zombie is a no-op.
+  // (caller can move them via respawnRemote), and level. Switches
+  // team to "hunter" so the survivor AIs (Match / Magnek / Necro /
+  // Gravemarch) detect the zombie as a threat via the existing
+  // charactersOnTeam("hunter") path and flee naturally. Resets HP
+  // (to the design-cap of 30), speed (level-scaled), damageMult,
+  // abilities, cooldowns, transient state. Idempotent — calling
+  // on an already-zombie is a no-op.
   private morphToZombie(c: CharacterEntity): void {
     if (c.characterId === "zombie") return;
     const zDef = CHARACTERS["zombie"]!;
     c.characterId = zDef.id;
+    c.team = "hunter";
     c.radius = zDef.radius;
     // HP stays at the mode's flat 30 cap — never level-scaled, to
     // match the survivor 10 HP cap. Speed + damage DO scale by
