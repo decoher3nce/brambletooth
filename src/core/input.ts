@@ -40,6 +40,11 @@ export interface InputState {
   // boost. The gate on whether sprint is even ALLOWED (shop
   // ownership) lives in HumanController, not here.
   sprintHeld: boolean;
+  // Edge-triggered chop press (C key). Engine consumes it on the
+  // tick it fires and clears the flag after dispatch. Only honored
+  // when the local player's character is flagged hasAxe (shop
+  // item); ignored on all other characters.
+  chopPressed: boolean;
   // Per-slot HELD state of the four ability buttons (slots
   // 0..3). HumanController reads this to build the
   // abilitiesHeld set for hold-to-cast abilities (Glitch).
@@ -66,6 +71,7 @@ export function createInput(): InputState {
     gamepadAim: { x: 0, y: 0 },
     gamepadStartPressed: false,
     sprintHeld: false,
+    chopPressed: false,
     gamepadAbilityHeld: [false, false, false, false],
     touchAbilityHeld: [false, false, false, false],
   };
@@ -76,9 +82,15 @@ export function bindInput(canvas: HTMLCanvasElement, input: InputState): void {
 
   window.addEventListener("keydown", (ev) => {
     const k = ev.key.toLowerCase();
-    if (!input.keys.has(k) && abilityKeys.has(k)) {
+    const wasDownBefore = input.keys.has(k);
+    if (!wasDownBefore && abilityKeys.has(k)) {
       input.pressedAbilities.add(k);
     }
+    // Chop — edge-triggered on first C press (suppresses key-repeat
+    // re-firings). Engine consumes the flag in its chop-handling
+    // block and clears it. Like sprint, gating on shop ownership
+    // lives downstream; here we just record that the key was tapped.
+    if (k === "c" && !wasDownBefore) input.chopPressed = true;
     input.keys.add(k);
     // Sprint — held while Shift is down. Sprint gating (shop
     // ownership) happens in HumanController; here we just track
@@ -110,6 +122,7 @@ export function bindInput(canvas: HTMLCanvasElement, input: InputState): void {
     input.keys.clear();
     input.mouseDown = false;
     input.sprintHeld = false;
+    input.chopPressed = false;
   });
 
   // ---- Gamepad lifecycle ----

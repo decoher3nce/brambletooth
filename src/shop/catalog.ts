@@ -44,6 +44,7 @@ export const SHOP_ITEM_ORDER: string[] = [
   "sample_outfit",
   // Upgrades
   "sprint_boots",
+  "axe",
   "sample_upgrade",
   // Worlds
   "factory_world_key",
@@ -92,6 +93,14 @@ export const SHOP_CATALOG: Record<string, ShopItem> = {
     description: "Hold Shift to sprint. +10% speed for 2s · 10s recharge (5s standing still).",
     price: 700,
     iconColor: "#ffd84a",
+  },
+  axe: {
+    id: "axe",
+    kind: "upgrade",
+    name: "Axe",
+    description: "Press C near a tree to chop it. The stump still blocks — useful for re-routing other players.",
+    price: 300,
+    iconColor: "#a0764a",
   },
   gravemarch: {
     id: "gravemarch",
@@ -163,6 +172,7 @@ const ICON_DRAWERS: Record<string, IconDrawer> = {
   gravemarch: drawGravemarchIcon,
   sprint_boots: drawSprintBootsIcon,
   factory_world_key: drawFactoryKeyIcon,
+  axe: drawAxeIcon,
 };
 
 // Frames a square iso card with a vertical color gradient, a thin
@@ -345,6 +355,72 @@ function drawFactoryKeyIcon(
   ctx.arc(bowCx, cy, bowR, 0, Math.PI * 2);
   ctx.stroke();
   ctx.strokeRect(bowCx + bowR - u, cy - 3 * u, 28 * u, 6 * u);
+  ctx.restore();
+}
+
+// Axe — warm-wood frame with an angled wooden haft and a polished
+// steel head. The blade catches a thin highlight so the icon reads
+// as a tool (not a static block) at small sizes.
+function drawAxeIcon(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, size: number,
+): void {
+  drawIconFrame(ctx, x, y, size, "#a0764a", "#3d2716");
+  ctx.save();
+  const u = size * 0.012;
+  const cx = x + size * 0.5;
+  const cy = y + size * 0.5;
+  // Rotate the whole tool so it sits diagonal across the icon —
+  // gives it the same swagger as the key.
+  ctx.translate(cx, cy);
+  ctx.rotate(-Math.PI / 4.5);
+  ctx.translate(-cx, -cy);
+  // Haft (wood handle).
+  ctx.fillStyle = "#6b4528";
+  ctx.fillRect(cx - 22 * u, cy - 3 * u, 44 * u, 6 * u);
+  // Haft grain — two thin lines along the length.
+  ctx.fillStyle = "rgba(255,255,255,0.10)";
+  ctx.fillRect(cx - 22 * u, cy - 2 * u, 44 * u, u * 0.8);
+  ctx.fillStyle = "rgba(0,0,0,0.20)";
+  ctx.fillRect(cx - 22 * u, cy + u * 1.2, 44 * u, u * 0.8);
+  // Pommel cap at the butt end.
+  ctx.fillStyle = "#3d2716";
+  ctx.fillRect(cx - 24 * u, cy - 4 * u, 4 * u, 8 * u);
+  // Axe head — steel blade swept forward + outward. Drawn as a
+  // pentagon: rear seat against the haft, two top points, sharp
+  // tip, and bottom curve back to the seat.
+  ctx.fillStyle = "#c8ccd2";
+  ctx.beginPath();
+  ctx.moveTo(cx + 14 * u, cy - 4 * u);  // rear top
+  ctx.lineTo(cx + 24 * u, cy - 14 * u); // upper outer point
+  ctx.lineTo(cx + 30 * u, cy - 2 * u);  // sharp leading tip
+  ctx.lineTo(cx + 22 * u, cy + 12 * u); // lower outer point
+  ctx.lineTo(cx + 14 * u, cy + 4 * u);  // rear bottom
+  ctx.closePath();
+  ctx.fill();
+  // Blade edge highlight — bright line along the sharpened curve.
+  ctx.strokeStyle = "#f4f6fa";
+  ctx.lineWidth = Math.max(1, u * 1.2);
+  ctx.beginPath();
+  ctx.moveTo(cx + 24 * u, cy - 14 * u);
+  ctx.lineTo(cx + 30 * u, cy - 2 * u);
+  ctx.lineTo(cx + 22 * u, cy + 12 * u);
+  ctx.stroke();
+  // Shadow band along the back of the head where it seats on the haft.
+  ctx.fillStyle = "rgba(0,0,0,0.30)";
+  ctx.fillRect(cx + 12 * u, cy - 4 * u, 4 * u, 8 * u);
+  // Outline.
+  ctx.strokeStyle = "rgba(0,0,0,0.45)";
+  ctx.lineWidth = Math.max(1, u * 0.8);
+  ctx.beginPath();
+  ctx.moveTo(cx + 14 * u, cy - 4 * u);
+  ctx.lineTo(cx + 24 * u, cy - 14 * u);
+  ctx.lineTo(cx + 30 * u, cy - 2 * u);
+  ctx.lineTo(cx + 22 * u, cy + 12 * u);
+  ctx.lineTo(cx + 14 * u, cy + 4 * u);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.strokeRect(cx - 22 * u, cy - 3 * u, 44 * u, 6 * u);
   ctx.restore();
 }
 

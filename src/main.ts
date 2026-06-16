@@ -1304,6 +1304,7 @@ function startRound(
   {
     const player = world.playerCharacter();
     if (player && hasSprintBoots()) player.hasSprintBoots = true;
+    if (player && hasAxe()) player.hasAxe = true;
   }
 
   // Apply per-character level scaling. Player character uses the
@@ -1400,6 +1401,7 @@ function startFFARound(chosenId: string): void {
   {
     const player = world.playerCharacter();
     if (player && hasSprintBoots()) player.hasSprintBoots = true;
+    if (player && hasAxe()) player.hasAxe = true;
   }
 
   const controllers = new Map<number, Controller>();
@@ -1479,6 +1481,7 @@ function startInfectionRound(chosenId: string): void {
   {
     const player = world.playerCharacter();
     if (player && hasSprintBoots()) player.hasSprintBoots = true;
+    if (player && hasAxe()) player.hasAxe = true;
   }
 
   const controllers = new Map<number, Controller>();
@@ -1567,7 +1570,14 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
       // their AI controllers to ZombieAI so they immediately
       // start hunting. Cheap no-op for every other mode.
       syncInfectionControllers();
+      // Axe (shop item) — when the player tapped C this tick AND
+      // their character is flagged hasAxe, chop the nearest tree
+      // within reach into a stump. Stays a local-only action for
+      // v1 — the multiplayer wiring lives behind the same flag
+      // path Sprint Boots uses, but the world mutation is here.
+      handleChopInput(p);
     }
+    input.chopPressed = false;
 
     const player = p.world.playerCharacter();
     if (player) {
@@ -3875,6 +3885,63 @@ interface PurchasedItem { id: string; purchasedAt: number; }
 function hasSprintBoots(): boolean {
   if (loggedIn && isInvincibleProfile(getName(), getPin())) return true;
   return isItemOwned("sprint_boots");
+}
+
+// Axe shop item — when owned, the local player can press C to
+// chop the nearest tree within reach into a stump. Available to
+// every character; same Bigfoot god-mode bypass as Sprint Boots.
+function hasAxe(): boolean {
+  if (loggedIn && isInvincibleProfile(getName(), getPin())) return true;
+  return isItemOwned("axe");
+}
+
+// How close the player has to be to a tree (center-to-center, minus
+// the tree's body radius) for a chop to land. Generous so a player
+// brushing the edge of a tree can still fell it.
+const AXE_CHOP_REACH = 56;
+// Stump body radius after chopping. Trees in the forest arena are
+// ~28; shrinking the radius gives the player a smaller obstacle to
+// pathfind around — chopping is a real reward for spending the
+// points, not just a cosmetic change.
+const STUMP_RADIUS = 14;
+
+// Process a chop press for the local play state. Searches for the
+// nearest BLOCKING tree prop within reach of the player's body,
+// converts it to a stump in place (smaller radius, same blocking
+// flag), and plays a thud + chop visual. No-op when the player
+// doesn't have the Axe item, isn't standing near a tree, or is in
+// a non-character state (dead, exited).
+function handleChopInput(p: NonNullable<typeof play>): void {
+  if (!input.chopPressed) return;
+  const player = p.world.playerCharacter();
+  if (!player || player.dead || player.exited) return;
+  if (!player.hasAxe) return;
+  let nearest: import("./core/entity").PropEntity | null = null;
+  let bestSlack = Infinity;
+  for (const e of p.world.entities) {
+    if (e.kind !== "prop") continue;
+    if (e.shape !== "tree") continue;
+    if (!e.blocking) continue;
+    const dx = e.pos.x - player.pos.x;
+    const dy = e.pos.y - player.pos.y;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    const slack = d - e.radius - player.radius;
+    if (slack > AXE_CHOP_REACH) continue;
+    if (slack < bestSlack) {
+      bestSlack = slack;
+      nearest = e;
+    }
+  }
+  if (!nearest) return;
+  // Convert in place. Keeping the entity id stable means no
+  // dangling references in cooldowns / hit-id sets / animations
+  // that may have been tracking the original tree.
+  nearest.shape = "stump";
+  nearest.radius = STUMP_RADIUS;
+  nearest.blocking = true;
+  // Wood-thud sound — same family as brushing a crate. Punchy,
+  // short, reads as "axe landed."
+  playSound("brush_thud");
 }
 
 // Whether a character is available to the local player. Any

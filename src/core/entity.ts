@@ -156,6 +156,11 @@ export interface CharacterEntity extends BaseEntity {
   // path from hasSprintBoots(), and by the multiplayer server from
   // the slot's inventory snapshot sent in the select message.
   hasSprintBoots?: boolean;
+  // Whether this character is carrying the shop Axe. When true, the
+  // engine accepts the chop input and converts the nearest tree
+  // within reach into a stump (still blocking, shorter visual). Set
+  // at spawn time from hasAxe() in the local play paths.
+  hasAxe?: boolean;
   // Sprint stamina, 0..1. Drains while the player holds sprint;
   // regenerates when not sprinting (faster when standing still).
   // Always present on every character so the engine math is
