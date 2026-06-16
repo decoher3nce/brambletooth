@@ -10,7 +10,7 @@
 // If we ever expose this beyond the tailnet, switch to hashed PINs and
 // add rate limiting.
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, watch } from "node:fs";
 import { dirname, join } from "node:path";
 
 export interface EarnedAchievement {
@@ -118,46 +118,77 @@ function migrateCharacterXp(input: unknown): Record<string, number> {
   return out;
 }
 
-function ensureLoaded(): void {
-  if (loaded) return;
-  loaded = true;
-  if (existsSync(PROFILE_FILE)) {
-    try {
-      const raw = JSON.parse(readFileSync(PROFILE_FILE, "utf8")) as Record<string, unknown>;
-      // Migrate legacy string[] achievements to {id, earnedAt}[],
-      // and backfill inventory (added later) on existing records.
-      for (const key of Object.keys(raw)) {
-        const p = raw[key] as ProfileRecord & {
-          achievements?: unknown;
-          inventory?: unknown;
-          characterXp?: unknown;
-        };
-        if (p) {
-          p.achievements = migrateAchievements(p.achievements);
-          p.inventory = migrateInventory(p.inventory);
-          // Backfill completedMaps on records written before maps existed.
-          if (!Array.isArray(p.completedMaps)) p.completedMaps = [];
-          // Backfill characterXp (added later).
-          p.characterXp = migrateCharacterXp(p.characterXp);
-          // Backfill resetVersion (added later) — pre-existing
-          // profiles default to 0 so a fresh client-side cache is
-          // considered in-sync and no spurious wipe fires.
-          const rv = Number((p as { resetVersion?: unknown }).resetVersion);
-          (p as ProfileRecord).resetVersion =
-            Number.isFinite(rv) && rv >= 0 ? Math.floor(rv) : 0;
-        }
+// Re-read PROFILE_FILE from disk into `store` and re-run the
+// per-record migrations. Shared by ensureLoaded() (first call) and
+// the watcher (every time the file changes on disk).
+function loadFromDisk(): void {
+  if (!existsSync(PROFILE_FILE)) { store = {}; return; }
+  try {
+    const raw = JSON.parse(readFileSync(PROFILE_FILE, "utf8")) as Record<string, unknown>;
+    for (const key of Object.keys(raw)) {
+      const p = raw[key] as ProfileRecord & {
+        achievements?: unknown;
+        inventory?: unknown;
+        characterXp?: unknown;
+      };
+      if (p) {
+        p.achievements = migrateAchievements(p.achievements);
+        p.inventory = migrateInventory(p.inventory);
+        if (!Array.isArray(p.completedMaps)) p.completedMaps = [];
+        p.characterXp = migrateCharacterXp(p.characterXp);
+        const rv = Number((p as { resetVersion?: unknown }).resetVersion);
+        (p as ProfileRecord).resetVersion =
+          Number.isFinite(rv) && rv >= 0 ? Math.floor(rv) : 0;
       }
-      store = raw as ProfileMap;
-    } catch (err) {
-      console.warn(`[profiles] failed to read ${PROFILE_FILE}:`, err);
-      store = {};
     }
-  } else {
-    store = {};
+    store = raw as ProfileMap;
+  } catch (err) {
+    console.warn(`[profiles] failed to read ${PROFILE_FILE}:`, err);
+    // Don't blow away an existing in-memory store on a transient
+    // parse error — keep serving the last good snapshot.
+    if (Object.keys(store).length === 0) store = {};
   }
 }
 
+// One-shot watcher install. Re-reads the JSON whenever it changes on
+// disk so that hand-edits (admin resets, profile fixes) are picked
+// up live without needing to touch a .ts file to nudge tsx-watch.
+// Debounced because writeFileSync triggers multiple watcher events
+// for a single logical write (truncate + write on Linux).
+let watcherInstalled = false;
+let reloadTimer: NodeJS.Timeout | null = null;
+// Tracks writes the server itself made so the watcher doesn't
+// echo-reload them. We bump this just before save() and compare
+// inside the watcher callback.
+let lastSelfWriteAt = 0;
+function ensureWatcher(): void {
+  if (watcherInstalled) return;
+  watcherInstalled = true;
+  try {
+    mkdirSync(dirname(PROFILE_FILE), { recursive: true });
+    watch(PROFILE_FILE, { persistent: false }, () => {
+      // Ignore our own writes (within 200ms of the last save).
+      if (Date.now() - lastSelfWriteAt < 200) return;
+      if (reloadTimer) clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(() => {
+        loadFromDisk();
+        console.log(`[profiles] reloaded ${PROFILE_FILE} after external edit`);
+      }, 50);
+    });
+  } catch (err) {
+    console.warn(`[profiles] could not install watcher on ${PROFILE_FILE}:`, err);
+  }
+}
+
+function ensureLoaded(): void {
+  if (loaded) return;
+  loaded = true;
+  loadFromDisk();
+  ensureWatcher();
+}
+
 function save(): void {
+  lastSelfWriteAt = Date.now();
   try {
     mkdirSync(dirname(PROFILE_FILE), { recursive: true });
     writeFileSync(PROFILE_FILE, JSON.stringify(store, null, 2));
