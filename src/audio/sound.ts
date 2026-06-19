@@ -113,7 +113,15 @@ export type SoundId =
   | "roulette_tick"
   | "roulette_settle"
   | "surprise_reveal"
-  | "ui_denied";
+  | "ui_denied"
+  // Birthday parade animal noises. Distance-attenuated per call so
+  // a distant herd reads as background ambience; nearer critters
+  // pop in clearly. Each species has its own envelope shape so a
+  // mixed herd has texture (frog warble + duck honk + bunny
+  // squeak) without sounding repetitive.
+  | "frog_ribbit"
+  | "duck_quack"
+  | "bunny_squeak";
 
 export function playSound(id: SoundId, opts: PlayOpts = {}): void {
   const c = ensureContext();
@@ -436,6 +444,32 @@ const SOUND_DEFS: Record<SoundId, SoundDef> = {
     envOsc(c, dest, "sawtooth", 220, 180, 0.20, 0.30);
     envOsc(c, dest, "square", 110, 90, 0.18, 0.20);
     envNoise(c, dest, 0.12, 0.10, 1200);
+  },
+  // Birthday parade — frog ribbit. Two-stage croak: a quick low
+  // throat catch ("rr") followed by a longer dropping warble
+  // ("biiit"). The triangle gives the throaty body; the noise
+  // gives the wet pop on the attack.
+  frog_ribbit: (c, dest) => {
+    envOsc(c, dest, "triangle", 320, 180, 0.06, 0.28);     // throat catch
+    envNoise(c, dest, 0.04, 0.10, 900);                    // wet attack
+    envOsc(c, dest, "triangle", 220, 110, 0.18, 0.32, 0.07); // warble body
+    envOsc(c, dest, "sine",     440, 220, 0.16, 0.10, 0.08); // overtone
+  },
+  // Birthday parade — duck quack. Bright nasal honk with a quick
+  // descending sawtooth pitch + a noise puff for the "qua-" attack.
+  // Short and clean so a herd of ducks reads as a chorus, not mush.
+  duck_quack: (c, dest) => {
+    envOsc(c, dest, "sawtooth", 720, 320, 0.13, 0.30);     // main honk
+    envNoise(c, dest, 0.04, 0.10, 2500);                   // attack puff
+    envOsc(c, dest, "square",   480, 240, 0.10, 0.14, 0.02); // texture
+  },
+  // Birthday parade — bunny squeak. Tiny high sine warble that
+  // climbs then drops, with a faint noise tail. Short enough that
+  // a chittering herd reads as a small-mammal chorus.
+  bunny_squeak: (c, dest) => {
+    envOsc(c, dest, "sine", 1100, 1700, 0.05, 0.22);       // up-warble
+    envOsc(c, dest, "sine", 1700, 900,  0.08, 0.20, 0.05); // down-warble
+    envNoise(c, dest, 0.04, 0.05, 6000, 0.05);             // breath tail
   },
 };
 

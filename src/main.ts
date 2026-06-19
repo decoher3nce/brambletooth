@@ -1648,21 +1648,18 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
       dangerMode: computeDangerMode(p.world),
       showStaminaBar: hasSprintBoots(),
     });
-    // Birthday surprise. Critters and bubbles render over the
-    // world but under HUD pills + the countdown overlay so
-    // anything important to the player stays legible. Bumps give
-    // +5 to both maxHp and hp once per critter, with no cap.
+    // Birthday surprise. Herds live in world space — they wander
+    // across the arena and stay where they are while the camera
+    // moves, so the critters don't read as following the player.
+    // Bumps give +5 to both maxHp and hp once per critter, no cap.
     if (p.countdown == null) {
       const player = p.world.playerCharacter();
-      let playerScreen: { x: number; y: number; r: number } | null = null;
-      if (player && !player.dead && !player.exited) {
-        const s = worldToScreen(player.pos, p.cam, renderer.cw, renderer.ch);
-        // Anchor the bump hitbox a bit above the feet (player body
-        // sits "above" the ground point in iso projection — match
-        // roughly where the body sprite is).
-        playerScreen = { x: s.x, y: s.y - 28, r: player.radius + 6 };
-      }
-      birthday.tick(dt, dims, playerScreen, () => {
+      const bounds = p.world.arena.bounds;
+      const playerPos = player && !player.dead && !player.exited
+        ? player.pos
+        : null;
+      const playerR = player ? player.radius : 0;
+      birthday.tick(dt, bounds, playerPos, playerR, () => {
         if (player && !player.dead && !player.exited) {
           player.maxHp += 5;
           player.hp = Math.min(player.hp + 5, player.maxHp);
@@ -1670,7 +1667,13 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
         }
       });
     }
-    birthday.draw(ctx);
+    // Draw in world space — caller projects through the live camera
+    // each frame so critters stay anchored to the arena floor as the
+    // player moves.
+    {
+      const projCam = p.cam;
+      birthday.draw(ctx, (wp) => worldToScreen(wp, projCam, renderer.cw, renderer.ch));
+    }
     if (input.isTouchMode) {
       touchControls.draw(ctx, dims, p.world, p.engine.outcome, p.engine.paused);
     }
