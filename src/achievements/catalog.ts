@@ -29,6 +29,7 @@ export const ACHIEVEMENT_ORDER = [
   "forest_world_1",
   "difficult_sweep",
   "legendary_sweep",
+  "hbd",
 ];
 
 // ---- Icon helpers ----
@@ -398,6 +399,52 @@ function drawDove(
   ctx.restore();
 }
 
+// HBD — tiered birthday cake silhouette with a flame, ribbon, and a
+// confetti dot scatter so it reads as celebratory even when locked.
+function drawBirthdayCake(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, s: number, locked: boolean,
+): void {
+  ctx.save();
+  const a = alpha(locked);
+  // Plate.
+  ctx.fillStyle = `rgba(255, 255, 255, ${0.85 * a})`;
+  ctx.beginPath();
+  ctx.ellipse(x + s * 0.50, y + s * 0.82, s * 0.42, s * 0.07, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Lower tier — pink frosting band on top.
+  ctx.fillStyle = `rgba(229, 110, 130, ${a})`;
+  ctx.fillRect(x + s * 0.18, y + s * 0.55, s * 0.64, s * 0.25);
+  ctx.fillStyle = `rgba(255, 200, 215, ${a})`;
+  ctx.fillRect(x + s * 0.18, y + s * 0.52, s * 0.64, s * 0.08);
+  // Upper tier — yellow.
+  ctx.fillStyle = `rgba(245, 200, 70, ${a})`;
+  ctx.fillRect(x + s * 0.28, y + s * 0.34, s * 0.44, s * 0.20);
+  ctx.fillStyle = `rgba(255, 230, 130, ${a})`;
+  ctx.fillRect(x + s * 0.28, y + s * 0.31, s * 0.44, s * 0.07);
+  // Candle.
+  ctx.fillStyle = `rgba(70, 140, 220, ${a})`;
+  ctx.fillRect(x + s * 0.475, y + s * 0.18, s * 0.05, s * 0.16);
+  // Flame.
+  ctx.fillStyle = `rgba(255, 180, 50, ${a})`;
+  ctx.beginPath();
+  ctx.ellipse(x + s * 0.50, y + s * 0.14, s * 0.05, s * 0.08, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Confetti dots.
+  const dotColors = ["#5fb96b", "#5a8fc8", "#ffd84a", "#d05050", "#a06ac8"];
+  for (let i = 0; i < 6; i++) {
+    const dx = x + s * (0.08 + (i * 0.16) % 0.84);
+    const dy = y + s * (0.10 + ((i * 37) % 20) * 0.012);
+    ctx.fillStyle = locked
+      ? `rgba(255, 255, 255, ${0.22})`
+      : dotColors[i % dotColors.length]!;
+    ctx.beginPath();
+    ctx.arc(dx, dy, s * 0.025, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 export const ACHIEVEMENT_CATALOG: Record<string, AchievementDef> = {
   noob: {
     id: "noob",
@@ -464,6 +511,12 @@ export const ACHIEVEMENT_CATALOG: Record<string, AchievementDef> = {
     name: "Legendary Sweep",
     description: "Defeat every character on Legendary",
     draw: (ctx, x, y, s, locked) => drawTrophyBadge(ctx, x, y, s, locked, "L"),
+  },
+  hbd: {
+    id: "hbd",
+    name: "Happy Birthday!",
+    description: "The rainbow herd came to play",
+    draw: drawBirthdayCake,
   },
 };
 

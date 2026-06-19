@@ -53,6 +53,7 @@ import {
   INFECTION_TIME_LIMIT,
   INFECTION_SURVIVOR_HP,
 } from "./modes/infection";
+import { BirthdayState } from "./birthday/birthday";
 import { ZombieAI } from "./ai/ai";
 import { behaviorFor } from "./ai/behavior";
 import {
@@ -399,6 +400,9 @@ async function tryLogin(name: string, pin: string): Promise<boolean> {
     try { localStorage.setItem(LOGGEDIN_KEY, "1"); } catch { /* ignore */ }
     nameInput.value = body.profile.name;
     pinInput.value = pin;
+    // Birthday auto-activate — MoonLlama only, inside the 7-day
+    // window. After the window, the 5x-'h' gesture is the path.
+    birthday.tryAutoActivate(body.profile.name);
     return true;
   } catch (err) {
     loginError = `Can't reach the server (${(err as Error).message ?? "network"})`;
@@ -595,6 +599,13 @@ let netInitialPickSent = false;
 const netSmoothed = new Map<number, { x: number; y: number }>();
 
 // --- Select screen (local picker + networked lobby) ---
+// Birthday surprise (decorative). Persists "already activated" in
+// localStorage so once it lights up it stays on across sessions.
+// Auto-activates on the title screen when the local profile is
+// MOONLLAMA inside the 7-day birthday window; the 5-keystroke
+// gesture takes over after the window closes.
+const birthday = new BirthdayState();
+
 const selectScreen = new SelectScreen();
 // Wire shop-locked characters out of the select screen. Bigfoot
 // god-mode also unlocks everything for testing.
@@ -1209,6 +1220,16 @@ function goToTitle(): void {
 // --- Keyboard ---
 window.addEventListener("keydown", (ev) => {
   if (!started) return;
+  // Birthday secret-handshake: 5 consecutive 'h' presses (no other
+  // key between) flips the birthday surprise on for the local
+  // profile. Modifier-only events (Shift, Ctrl, Alt, Meta on their
+  // own) don't reset the run — they're just sticky bookkeeping.
+  {
+    const k = ev.key.toLowerCase();
+    if (k !== "shift" && k !== "control" && k !== "alt" && k !== "meta") {
+      birthday.noteKey(k);
+    }
+  }
   if (appMode === "net") {
     if (!net) return;
     if (ev.key === "Escape" && (net.phase === "playing" || net.phase === "ended")) {
@@ -1345,6 +1366,9 @@ function goToSelect(): void {
   play = null;
   scene = "select";
   if (prior) selectScreen.setSelected(prior);
+  // Drop any in-flight birthday herd so a parade started mid-round
+  // doesn't bleed across to the next match's countdown freeze.
+  birthday.reset();
 }
 
 // Pool of characters the player is allowed to use in FFA. Today
@@ -1624,6 +1648,29 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
       dangerMode: computeDangerMode(p.world),
       showStaminaBar: hasSprintBoots(),
     });
+    // Birthday surprise. Critters and bubbles render over the
+    // world but under HUD pills + the countdown overlay so
+    // anything important to the player stays legible. Bumps give
+    // +5 to both maxHp and hp once per critter, with no cap.
+    if (p.countdown == null) {
+      const player = p.world.playerCharacter();
+      let playerScreen: { x: number; y: number; r: number } | null = null;
+      if (player && !player.dead && !player.exited) {
+        const s = worldToScreen(player.pos, p.cam, renderer.cw, renderer.ch);
+        // Anchor the bump hitbox a bit above the feet (player body
+        // sits "above" the ground point in iso projection — match
+        // roughly where the body sprite is).
+        playerScreen = { x: s.x, y: s.y - 28, r: player.radius + 6 };
+      }
+      birthday.tick(dt, dims, playerScreen, () => {
+        if (player && !player.dead && !player.exited) {
+          player.maxHp += 5;
+          player.hp = Math.min(player.hp + 5, player.maxHp);
+          playSound("ui_pick");
+        }
+      });
+    }
+    birthday.draw(ctx);
     if (input.isTouchMode) {
       touchControls.draw(ctx, dims, p.world, p.engine.outcome, p.engine.paused);
     }
@@ -1631,6 +1678,9 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
     if (p.countdown != null && p.countdown > 0) {
       drawCountdownOverlay(dims, p.countdown);
     }
+  }
+  if (birthday.consumeJustActivated()) {
+    earnAchievement("hbd");
   }
 }
 
