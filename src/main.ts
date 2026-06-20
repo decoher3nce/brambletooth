@@ -15,7 +15,7 @@ import { Engine, CORE_FRAC, WALL_BRUSH_BAND } from "./core/engine";
 import type { BrushKind } from "./core/engine";
 import { Renderer, createCamera, screenToWorld } from "./render/renderer";
 import type { Entity, CharacterEntity } from "./core/entity";
-import { isProp } from "./core/entity";
+import { isProp, isProjectile, isTrap } from "./core/entity";
 import { distToSegment } from "./core/math";
 import { playSound, unlockAudio, setHeartbeat, setAudioPrefs } from "./audio/sound";
 import type { SoundId, AudioPrefs } from "./audio/sound";
@@ -1666,6 +1666,24 @@ function frameLocal(dt: number, dims: { w: number; h: number }): void {
           playSound("ui_pick");
         }
       });
+      // Critters die instantly when they touch ANY hazard owned by
+      // a hunter or survivor — slash flashes, projectiles in
+      // flight, slime traps, rock-wall contact tiles, lunge bite
+      // bursts, poison-slam shockwave markers. Rebuild the hazard
+      // list every tick so an expired projectile stops killing.
+      // Pure decorative cleanup — no XP, no kill credit.
+      const hazards: { pos: { x: number; y: number }; radius: number }[] = [];
+      for (const e of p.world.entities) {
+        if (e.dead) continue;
+        if (isProjectile(e)) {
+          hazards.push({ pos: e.pos, radius: e.radius });
+        } else if (isTrap(e)) {
+          hazards.push({ pos: e.pos, radius: e.radius });
+        } else if (isProp(e) && e.contactDamage && e.contactDamage > 0) {
+          hazards.push({ pos: e.pos, radius: e.radius });
+        }
+      }
+      birthday.killNearHazards(hazards);
     }
     // Draw in world space — caller projects through the live camera
     // each frame so critters stay anchored to the arena floor as the

@@ -107,8 +107,13 @@ const HERD_FORMATION_RADIUS = 90; // world-px spread of formation slots
 // fence so a wandering critter doesn't sit on the wall.
 const ARENA_PADDING = 80;
 // Between-herd-spawn cadence (random in this range each time).
-const HERD_GAP_MIN = 12;
-const HERD_GAP_MAX = 32;
+// Tightened so the parade reads as a constant migration rather than
+// the occasional flyby — new herds arrive every ~5-14s.
+const HERD_GAP_MIN = 5;
+const HERD_GAP_MAX = 14;
+// Per-herd member count. Bumped up so the field stays visibly full.
+const HERD_SIZE_MIN = 18;
+const HERD_SIZE_MAX = 32;
 
 export class BirthdayState {
   active = false;
@@ -172,6 +177,32 @@ export class BirthdayState {
   // bookkeeping leaked out with them.
   getCritters(): readonly BirthdayCritter[] {
     return this.critters;
+  }
+
+  // Instantly kill any critter overlapping one of the supplied
+  // hazards. Used by main.ts to translate "a hunter or survivor
+  // damaged the world here" — slash flashes, projectiles, slime
+  // traps, rock-wall contact tiles — into "the herd member there
+  // disappears." Decorative-only side effect; no XP, no score, no
+  // animation. Hazard list is rebuilt each frame so a despawned
+  // projectile stops killing immediately.
+  killNearHazards(
+    hazards: ReadonlyArray<{ pos: Vec2; radius: number }>,
+  ): void {
+    if (!this.active) return;
+    if (hazards.length === 0) return;
+    for (let i = this.critters.length - 1; i >= 0; i--) {
+      const c = this.critters[i]!;
+      for (const h of hazards) {
+        const dx = c.pos.x - h.pos.x;
+        const dy = c.pos.y - h.pos.y;
+        const rsum = c.bumpRadius + h.radius;
+        if (dx * dx + dy * dy <= rsum * rsum) {
+          this.critters.splice(i, 1);
+          break;
+        }
+      }
+    }
   }
 
   // Per-frame tick.
@@ -339,18 +370,17 @@ export class BirthdayState {
     }
   }
 
-  // Spawn one herd. ~85% chance the herd is a single species so
-  // the visual + audio chorus reads as "a frog migration" or
-  // "a duck migration" rather than mixed noise. The remaining 15%
-  // mixes species for variety.
+  // Spawn one herd. Single-species by design so the visual + audio
+  // chorus reads as "a frog migration" or "a duck migration" — the
+  // herd's identity comes through loud and clear rather than as
+  // mixed noise.
   private spawnHerd(bounds: ArenaBounds): void {
-    const dominantSpecies = pickDominantSpecies();
-    const mixed = Math.random() < 0.15;
+    const species = pickDominantSpecies();
     const target = pickHerdTarget(bounds);
-    const count = 12 + Math.floor(Math.random() * 11); // 12..22
+    const count = HERD_SIZE_MIN + Math.floor(Math.random() * (HERD_SIZE_MAX - HERD_SIZE_MIN + 1));
     const herd: Herd = {
       id: this.nextHerdId++,
-      species: dominantSpecies,
+      species,
       target,
       retargetAt: this.elapsed + HERD_RETARGET_MIN + Math.random() * (HERD_RETARGET_MAX - HERD_RETARGET_MIN),
       endAt: this.elapsed + HERD_LIFETIME_MIN + Math.random() * (HERD_LIFETIME_MAX - HERD_LIFETIME_MIN),
@@ -360,9 +390,6 @@ export class BirthdayState {
     // appear already in formation rather than racing in from one
     // point.
     for (let i = 0; i < count; i++) {
-      const species = mixed && Math.random() < 0.30
-        ? pickDominantSpecies()
-        : dominantSpecies;
       const formationOffset = randomFormationOffset();
       const hue = ((i / count) * 360 + Math.random() * 20) % 360;
       const bodyRadius = species === "butterfly" ? 9 : species === "bunny" ? 13 : 14;
