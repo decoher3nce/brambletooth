@@ -38,7 +38,22 @@ const BIRTHDAY_WINDOW_START = new Date("2026-06-19T00:00:00").getTime();
 const BIRTHDAY_WINDOW_DAYS = 7;
 const BIRTHDAY_PROFILE_NAME = "moonllama";
 const HBD_KEYSTROKE_COUNT = 5;
-const BIRTHDAY_ACTIVE_KEY = "brambletooth.birthdayActive";
+// Probability the parade plays for MoonLlama on a non-first round
+// during the birthday window. First round is always on (so the
+// surprise lands); after that it's a coin flip per round.
+const BIRTHDAY_REPEAT_CHANCE = 0.5;
+// Sticky 'h'-gesture activation flag. Once set in this browser, the
+// herd plays for every round of every profile.
+const BIRTHDAY_GESTURE_KEY = "brambletooth.birthdayGesture";
+// Timestamp of MoonLlama's first auto-activation in this browser.
+// Once set, the per-round decision flips from "always on" to a
+// 50/50 coin (BIRTHDAY_REPEAT_CHANCE).
+const BIRTHDAY_FIRST_SEEN_KEY = "brambletooth.birthdayFirstSeenAt";
+// Legacy v1 flag — was set by both auto AND gesture in the prior
+// always-sticky model. Cleared on first construction under the new
+// model so existing browsers transition to "first play loads, then
+// 50/50" instead of staying permanently on.
+const BIRTHDAY_LEGACY_KEY = "brambletooth.birthdayActive";
 
 export type CritterSpecies = "frog" | "bunny" | "duck" | "butterfly";
 
@@ -128,7 +143,7 @@ export class BirthdayState {
 
   constructor() {
     try {
-      if (localStorage.getItem(BIRTHDAY_ACTIVE_KEY)) this.active = true;
+      if (localStorage.getItem(BIRTHDAY_LEGACY_KEY)) this.active = true;
     } catch { /* private mode */ }
   }
 
@@ -160,7 +175,7 @@ export class BirthdayState {
   private activate(): void {
     this.active = true;
     this.justActivated = true;
-    try { localStorage.setItem(BIRTHDAY_ACTIVE_KEY, "1"); } catch { /* ignore */ }
+    try { localStorage.setItem(BIRTHDAY_LEGACY_KEY, "1"); } catch { /* ignore */ }
     this.nextHerdAt = this.elapsed + 1.0;
   }
 

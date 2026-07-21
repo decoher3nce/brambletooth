@@ -68,6 +68,11 @@ export interface PlayOpts {
   doppler?: number;
   // Multiplier on the per-sound base volume.
   volumeMul?: number;
+  // Per-call pitch scaling. Multiplies every envOsc frequency
+  // (start + end). Used by the birthday parade to give each animal
+  // a slightly different voice so the chorus sounds like a real
+  // symphony instead of one critter spammed 30 times. Default 1.
+  pitchMul?: number;
 }
 
 export type SoundId =
@@ -160,13 +165,16 @@ function envOsc(
   dur: number,
   vol = 0.5,
   startOffset = 0,
+  pitchMul = 1,
 ): void {
   const osc = c.createOscillator();
   osc.type = type;
   const t = c.currentTime + startOffset;
-  osc.frequency.setValueAtTime(f0, t);
-  if (f1 !== f0) {
-    osc.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + dur);
+  const pf0 = Math.max(1, f0 * pitchMul);
+  const pf1 = Math.max(1, f1 * pitchMul);
+  osc.frequency.setValueAtTime(pf0, t);
+  if (pf1 !== pf0) {
+    osc.frequency.exponentialRampToValueAtTime(pf1, t + dur);
   }
   const g = c.createGain();
   g.gain.setValueAtTime(vol, t);
