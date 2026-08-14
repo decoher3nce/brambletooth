@@ -131,7 +131,18 @@ const HERD_SIZE_MIN = 18;
 const HERD_SIZE_MAX = 32;
 
 export class BirthdayState {
-  active = false;
+  // Sticky 'h'-gesture activation. Once set on this browser, the
+  // herd plays every round for every profile. Persisted in
+  // localStorage under BIRTHDAY_GESTURE_KEY.
+  private hGestureActive = false;
+  // Timestamp of MoonLlama's first auto-activation on this browser.
+  // 0 = never. After the first auto activation, MoonLlama's per-
+  // round chance flips from "always on" to BIRTHDAY_REPEAT_CHANCE.
+  private firstAutoSeenAt = 0;
+  // Re-evaluated per round by evaluateForRound(). tick/draw gate
+  // off THIS flag — not hGestureActive — so per-round rolls
+  // actually mean something.
+  private activeThisRound = false;
   private nextHerdAt = 0;
   private elapsed = 0;
   private herds: Herd[] = [];
@@ -143,7 +154,16 @@ export class BirthdayState {
 
   constructor() {
     try {
-      if (localStorage.getItem(BIRTHDAY_LEGACY_KEY)) this.active = true;
+      this.hGestureActive = !!localStorage.getItem(BIRTHDAY_GESTURE_KEY);
+      const fs = Number(localStorage.getItem(BIRTHDAY_FIRST_SEEN_KEY) || 0);
+      if (Number.isFinite(fs) && fs > 0) this.firstAutoSeenAt = fs;
+      // Migration from the v1 always-sticky model: clear the legacy
+      // flag so browsers that were permanently on under v1 fall back
+      // into the new "first play loads, then 50/50" behavior for
+      // MoonLlama, and off-by-default for everyone else.
+      if (localStorage.getItem(BIRTHDAY_LEGACY_KEY)) {
+        localStorage.removeItem(BIRTHDAY_LEGACY_KEY);
+      }
     } catch { /* private mode */ }
   }
 
@@ -153,30 +173,62 @@ export class BirthdayState {
     return true;
   }
 
-  tryAutoActivate(profileName: string): void {
-    if (this.active) return;
-    if (profileName.trim().toLowerCase() !== BIRTHDAY_PROFILE_NAME) return;
+  // Called by main.ts at the top of each local round to decide
+  // whether the parade plays. Rules:
+  //   - hGestureActive (5x 'h' in this browser at any point) → on
+  //   - Profile is MoonLlama AND we're inside the birthday window:
+  //       - Never auto-seen here yet → on, record first-seen, earn
+  //         the HBD badge (via consumeJustActivated + the caller's
+  //         earnAchievement("hbd"))
+  //       - Already auto-seen → coin flip (BIRTHDAY_REPEAT_CHANCE)
+  //   - Anyone else, or outside the window → off
+  evaluateForRound(profileName: string): void {
+    this.reset();
+    if (this.hGestureActive) {
+      this.activeThisRound = true;
+      return;
+    }
+    const name = profileName.trim().toLowerCase();
+    if (name !== BIRTHDAY_PROFILE_NAME) {
+      this.activeThisRound = false;
+      return;
+    }
     const now = Date.now();
     const end = BIRTHDAY_WINDOW_START + BIRTHDAY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-    if (now < BIRTHDAY_WINDOW_START || now > end) return;
-    this.activate();
+    if (now < BIRTHDAY_WINDOW_START || now > end) {
+      this.activeThisRound = false;
+      return;
+    }
+    if (this.firstAutoSeenAt === 0) {
+      // MoonLlama's first play inside the window — always on, and
+      // note it so subsequent rounds fall into the 50/50 branch.
+      this.activeThisRound = true;
+      this.firstAutoSeenAt = now;
+      this.justActivated = true;
+      try { localStorage.setItem(BIRTHDAY_FIRST_SEEN_KEY, String(now)); }
+      catch { /* ignore */ }
+      return;
+    }
+    this.activeThisRound = Math.random() < BIRTHDAY_REPEAT_CHANCE;
   }
 
   noteKey(k: string): void {
-    if (this.active) return;
+    if (this.hGestureActive) return;
     if (k === "h") {
       this.hRun += 1;
-      if (this.hRun >= HBD_KEYSTROKE_COUNT) this.activate();
+      if (this.hRun >= HBD_KEYSTROKE_COUNT) {
+        this.hGestureActive = true;
+        this.activeThisRound = true;
+        this.justActivated = true;
+        try { localStorage.setItem(BIRTHDAY_GESTURE_KEY, "1"); }
+        catch { /* ignore */ }
+        // First herd lands almost immediately so the surprise
+        // lands in the same round the gesture fired in.
+        this.nextHerdAt = this.elapsed + 1.0;
+      }
     } else {
       this.hRun = 0;
     }
-  }
-
-  private activate(): void {
-    this.active = true;
-    this.justActivated = true;
-    try { localStorage.setItem(BIRTHDAY_LEGACY_KEY, "1"); } catch { /* ignore */ }
-    this.nextHerdAt = this.elapsed + 1.0;
   }
 
   reset(): void {
@@ -184,6 +236,7 @@ export class BirthdayState {
     this.critters.length = 0;
     this.elapsed = 0;
     this.nextHerdAt = 0;
+    this.activeThisRound = false;
   }
 
   // Returns the critters' visible state for the renderer. Kept
@@ -204,7 +257,7 @@ export class BirthdayState {
   killNearHazards(
     hazards: ReadonlyArray<{ pos: Vec2; radius: number }>,
   ): void {
-    if (!this.active) return;
+    if (!this.activeThisRound) return;
     if (hazards.length === 0) return;
     for (let i = this.critters.length - 1; i >= 0; i--) {
       const c = this.critters[i]!;
@@ -237,7 +290,7 @@ export class BirthdayState {
     playerRadius: number,
     onBump: () => void,
   ): void {
-    if (!this.active) return;
+    if (!this.activeThisRound) return;
     this.elapsed += dt;
 
     // Schedule + spawn herds.
@@ -366,7 +419,7 @@ export class BirthdayState {
     ctx: CanvasRenderingContext2D,
     worldToScreen: (p: Vec2) => Vec2,
   ): void {
-    if (!this.active) return;
+    if (!this.activeThisRound) return;
     // Depth-sort by y so a frog in front of a bunny actually paints
     // in front. The whole herd is on the same iso plane so y
     // ordering is the right tiebreaker.

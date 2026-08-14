@@ -400,9 +400,9 @@ async function tryLogin(name: string, pin: string): Promise<boolean> {
     try { localStorage.setItem(LOGGEDIN_KEY, "1"); } catch { /* ignore */ }
     nameInput.value = body.profile.name;
     pinInput.value = pin;
-    // Birthday auto-activate — MoonLlama only, inside the 7-day
-    // window. After the window, the 5x-'h' gesture is the path.
-    birthday.tryAutoActivate(body.profile.name);
+    // Birthday activation happens per-round now via
+    // birthday.evaluateForRound(getName()) — see startRound /
+    // startFFARound / startInfectionRound. Nothing to do at login.
     return true;
   } catch (err) {
     loginError = `Can't reach the server (${(err as Error).message ?? "network"})`;
@@ -1261,6 +1261,10 @@ function startRound(
   const def = CHARACTERS[chosenId];
   if (!def) return;
   const mapDef = getMap(mapId) ?? getMap(defaultMapId())!;
+  // Decide per round whether the birthday parade plays: sticky
+  // gesture wins, MoonLlama gets first-play + 50/50 in the window,
+  // everyone else stays off.
+  birthday.evaluateForRound(getName());
 
   let hunterId: string;
   let survivorId: string;
@@ -1392,6 +1396,7 @@ function startFFARound(chosenId: string): void {
   const def = CHARACTERS[chosenId];
   if (!def) return;
   const mapDef = getMap("forest_1") ?? getMap(defaultMapId())!;
+  birthday.evaluateForRound(getName());
   const pool = availableFFACharacters();
   // Total cap: 8, but never more than the pool itself (so a
   // 4-character roster ships 4 fighters, not 8 clones).
@@ -1469,6 +1474,7 @@ function startInfectionRound(chosenId: string): void {
   const def = CHARACTERS[chosenId];
   if (!def) return;
   const mapDef = getMap("forest_1") ?? getMap(defaultMapId())!;
+  birthday.evaluateForRound(getName());
   const pool = availableFFACharacters(); // same unlock filter as FFA
   const total = Math.min(INFECTION_MAX_PLAYERS, pool.length + 1); // +1 for the human
   const botCount = Math.max(0, total - 1);
