@@ -89,6 +89,12 @@ export class Renderer {
   // a CanvasPattern via fillStyle for cheap repeated rendering.
   private roughStonePattern: CanvasPattern | null = null;
 
+  // Per-arena background image cache. Keyed by the resolved absolute
+  // URL. The HTMLImageElement itself carries loading state
+  // (img.complete + naturalWidth > 0), so we don't need a separate
+  // status enum — while loading the arena falls back to groundColor.
+  private bgImages: Map<string, HTMLImageElement> = new Map();
+
   constructor(
     public ctx: CanvasRenderingContext2D,
     public canvas: HTMLCanvasElement,
@@ -122,7 +128,7 @@ export class Renderer {
     const ctx = this.ctx;
 
     // Ground fill — flat color, then optional procedural texture
-    // layered on top.
+    // or bespoke background image layered on top.
     ctx.fillStyle = world.arena.groundColor;
     ctx.beginPath();
     ctx.moveTo(c[0].x, c[0].y);
@@ -130,7 +136,52 @@ export class Renderer {
     ctx.closePath();
     ctx.fill();
 
-    if (world.arena.groundTexture === "rough-stone") {
+    // Bespoke background PNG, if the arena declares one. Authored
+    // TOP-DOWN at 1 world unit = 1 px covering the arena rectangle;
+    // we compose the image → world → screen transform in one
+    // ctx.transform call and drawImage in image-local (0,0)
+    // coords. Skipped while the image is still loading (falls back
+    // to the flat groundColor above). When set, suppresses the
+    // default grid so the artwork stands on its own.
+    let bgDrawn = false;
+    if (world.arena.backgroundImage) {
+      const img = this.getBackgroundImage(world.arena.backgroundImage);
+      if (img) {
+        const imgW = img.naturalWidth;
+        const imgH = img.naturalHeight;
+        const arenaW = b.maxX - b.minX;
+        const arenaH = b.maxY - b.minY;
+        ctx.save();
+        // Clip to the iso rhombus so overhang / transparent-edge
+        // pixels don't bleed outside the playfield.
+        ctx.beginPath();
+        ctx.moveTo(c[0].x, c[0].y);
+        for (let i = 1; i < 4; i++) ctx.lineTo(c[i].x, c[i].y);
+        ctx.closePath();
+        ctx.clip();
+        // Composed transform: image-pixel → world coord → iso screen.
+        //   world coord    = arena.min + pixel * (arena_size / img_size)
+        //   screen coord   = cw/2 + (dx - dy) * z   |   ch/2 + (dx + dy) * 0.5 * z
+        // After combining, drawImage(img, 0, 0) paints the whole
+        // image warped onto the arena rhombus.
+        const z = cam.zoom;
+        const sx = arenaW / imgW;
+        const sy = arenaH / imgH;
+        ctx.transform(
+          sx * z,                           // a — image-x contribution to screen-x
+          sx * 0.5 * z,                     // b — image-x contribution to screen-y
+          -sy * z,                          // c — image-y contribution to screen-x
+          sy * 0.5 * z,                     // d — image-y contribution to screen-y
+          this.cw / 2 + (b.minX - b.minY - cam.target.x + cam.target.y) * z,       // e
+          this.ch / 2 + (b.minX + b.minY - cam.target.x - cam.target.y) * 0.5 * z, // f
+        );
+        ctx.drawImage(img, 0, 0);
+        ctx.restore();
+        bgDrawn = true;
+      }
+    }
+
+    if (!bgDrawn && world.arena.groundTexture === "rough-stone") {
       // Cave: overlay the cached rough-stone noise pattern. The
       // pattern is anchored to world coords (not screen) so the
       // texture appears to scroll under the camera correctly.
@@ -162,8 +213,10 @@ export class Renderer {
         ctx.fill();
         ctx.restore();
       }
-    } else {
-      // Default: subtle grid lines on the floor.
+    } else if (!bgDrawn) {
+      // Default: subtle grid lines on the floor. Suppressed when a
+      // bespoke background PNG has already been drawn — the
+      // artwork carries its own ground detail.
       ctx.strokeStyle = world.arena.gridColor;
       ctx.lineWidth = 1;
       const step = 100;
@@ -457,6 +510,28 @@ export class Renderer {
   // The tile is deterministically generated each session (no
   // seed across reloads — the player won't notice and it keeps
   // the code simple).
+  // Fetch (and lazily kick off loading of) a background image by
+  // ArenaConfig-relative path. Returns the HTMLImageElement once
+  // ready, or null while it's still loading / errored. Callers
+  // paint groundColor as a fallback whenever null. Resolves paths
+  // through Vite's BASE_URL so the same relative string works in
+  // dev + prod (served from public/).
+  private getBackgroundImage(path: string): HTMLImageElement | null {
+    const base = (import.meta as unknown as { env?: { BASE_URL?: string } })
+      .env?.BASE_URL ?? "/";
+    const url = base + path.replace(/^\/+/, "");
+    let img = this.bgImages.get(url);
+    if (!img) {
+      img = new Image();
+      // Same-origin (public/ under our base URL), so no CORS opts
+      // needed. Set crossOrigin only if we ever load from a CDN.
+      img.src = url;
+      this.bgImages.set(url, img);
+    }
+    if (img.complete && img.naturalWidth > 0) return img;
+    return null;
+  }
+
   private getRoughStonePattern(): CanvasPattern | null {
     if (this.roughStonePattern) return this.roughStonePattern;
     const SIZE = 512;

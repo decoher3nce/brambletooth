@@ -10,6 +10,11 @@ export const FOREST_ARENA_CONFIG: ArenaConfig = {
   fenceColor: "#8a6b3d",
   groundColor: "#3a5a32",
   gridColor: "rgba(255, 255, 255, 0.04)",
+  // Top-down PNG covering the 1400×1000 world rect. Drop it at
+  // public/backgrounds/forest.png (served under Vite's BASE_URL).
+  // Renderer applies the 2:1 iso projection at draw time.
+  // groundColor above still paints while the image loads.
+  backgroundImage: "backgrounds/forest.png",
 };
 
 // Seeded RNG so prop layout is repeatable. Mulberry32.

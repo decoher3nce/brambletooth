@@ -28,6 +28,15 @@ export interface ArenaConfig {
   // suppresses the regular grid lines, giving the cave a rough
   // cavern-floor read instead of straight grid tiles.
   groundTexture?: "rough-stone";
+  // Optional bespoke background PNG. Path is relative to the Vite
+  // public dir (served under import.meta.env.BASE_URL). Authored
+  // TOP-DOWN at 1 world unit = 1 px covering the arena rectangle;
+  // the renderer applies the 2:1 iso projection at draw time via a
+  // canvas transform, so the image is skewed onto the arena
+  // rhombus. groundColor still renders as the fallback while the
+  // image loads. Grid + fence still draw ON TOP so gameplay chrome
+  // stays legible. Suppresses the default grid when set.
+  backgroundImage?: string;
 }
 
 export class World {
