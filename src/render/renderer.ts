@@ -103,6 +103,27 @@ export class Renderer {
   // Built once on first request; drawn cheap every frame after.
   private tintedSprites: Map<string, HTMLCanvasElement> = new Map();
 
+  // Rasterized copy of the arena background image, kept as a
+  // Uint8ClampedArray for cheap per-pixel sampling. Populated on
+  // first sampleGroundColor call after the image loads. Keyed by
+  // the resolved image URL so switching arenas (e.g. cave after
+  // a forest round) drops the stale cache automatically.
+  private bgSample: {
+    url: string;
+    data: Uint8ClampedArray;
+    imgW: number;
+    imgH: number;
+  } | null = null;
+
+  // Per-shape × per-variant × per-quantized-ground-color tinted
+  // sprite cache. Multiplies the ground color into the bottom
+  // band of the sprite so a tree/rock's grass tuft blends with
+  // whatever ground it's actually sitting on (green grass →
+  // greener base; dirt path → browner base). Ground color is
+  // quantized to 16 steps per channel (bit-mask 0xF0) so we
+  // don't blow up the cache with near-identical entries.
+  private groundTintedSprites: Map<string, HTMLCanvasElement> = new Map();
+
   constructor(
     public ctx: CanvasRenderingContext2D,
     public canvas: HTMLCanvasElement,
@@ -574,6 +595,106 @@ export class Renderer {
     return off;
   }
 
+  // Sample the arena background image at a world position and
+  // return the average RGB over a small window centered there.
+  // Returns null while the background image hasn't loaded yet
+  // (caller falls back to no tint). Rasterizes the image once
+  // per arena into a byte array for cheap subsequent lookups.
+  private sampleGroundColor(
+    worldPos: { x: number; y: number },
+    arena: World["arena"],
+  ): { r: number; g: number; b: number } | null {
+    const path = arena.backgroundImage;
+    if (!path) return null;
+    const img = this.getBackgroundImage(path);
+    if (!img) return null;
+    const base = (import.meta as unknown as { env?: { BASE_URL?: string } })
+      .env?.BASE_URL ?? "/";
+    const url = base + path.replace(/^\/+/, "");
+    // Rasterize on first request (or if the URL changed).
+    if (!this.bgSample || this.bgSample.url !== url) {
+      const off = document.createElement("canvas");
+      off.width = img.naturalWidth;
+      off.height = img.naturalHeight;
+      const octx = off.getContext("2d");
+      if (!octx) return null;
+      octx.drawImage(img, 0, 0);
+      try {
+        const data = octx.getImageData(0, 0, off.width, off.height).data;
+        this.bgSample = { url, data, imgW: off.width, imgH: off.height };
+      } catch { return null; }
+    }
+    const { data, imgW, imgH } = this.bgSample;
+    // World → image UV. Arena is 1:1 mapped to the image rect.
+    const arenaW = arena.bounds.maxX - arena.bounds.minX;
+    const arenaH = arena.bounds.maxY - arena.bounds.minY;
+    const u = (worldPos.x - arena.bounds.minX) / arenaW;
+    const v = (worldPos.y - arena.bounds.minY) / arenaH;
+    const cx = Math.floor(u * imgW);
+    const cy = Math.floor(v * imgH);
+    // Average over an 11×11 window for stability against per-pixel
+    // noise in the ground art.
+    const R = 5;
+    let sr = 0, sg = 0, sb = 0, n = 0;
+    for (let dy = -R; dy <= R; dy++) {
+      const py = cy + dy;
+      if (py < 0 || py >= imgH) continue;
+      for (let dx = -R; dx <= R; dx++) {
+        const px = cx + dx;
+        if (px < 0 || px >= imgW) continue;
+        const idx = (py * imgW + px) * 4;
+        sr += data[idx]!;
+        sg += data[idx + 1]!;
+        sb += data[idx + 2]!;
+        n++;
+      }
+    }
+    if (n === 0) return null;
+    return { r: sr / n, g: sg / n, b: sb / n };
+  }
+
+  // Return a cached ground-tinted copy of a prop sprite variant.
+  // Applied as a multiply blend in a bottom band with a linear
+  // gradient (0 at 72% height → 1.0 at bottom edge) so the grass
+  // tuft at the base picks up the ground color while the canopy
+  // stays untouched. Ground color quantized to 16 steps per
+  // channel; keeps the cache small.
+  private getGroundTintedSprite(
+    shape: import("../core/entity").PropShape,
+    variantIdx: number,
+    ground: { r: number; g: number; b: number },
+  ): HTMLCanvasElement | null {
+    const gr = Math.round(ground.r) & 0xF0;
+    const gg = Math.round(ground.g) & 0xF0;
+    const gb = Math.round(ground.b) & 0xF0;
+    const key = `${shape}:${variantIdx}:${gr},${gg},${gb}`;
+    const cached = this.groundTintedSprites.get(key);
+    if (cached) return cached;
+    const sprite = getPropSprite(shape, 0, variantIdx);
+    if (!sprite) return null;
+    const off = document.createElement("canvas");
+    off.width = sprite.naturalWidth;
+    off.height = sprite.naturalHeight;
+    const octx = off.getContext("2d");
+    if (!octx) return null;
+    octx.drawImage(sprite, 0, 0);
+    // Bottom-band gradient multiply with the ground color.
+    const bandStart = Math.floor(sprite.naturalHeight * 0.72);
+    const grad = octx.createLinearGradient(0, bandStart, 0, sprite.naturalHeight);
+    grad.addColorStop(0, `rgba(${gr},${gg},${gb},0)`);
+    grad.addColorStop(1, `rgba(${gr},${gg},${gb},1)`);
+    octx.globalCompositeOperation = "multiply";
+    octx.fillStyle = grad;
+    octx.fillRect(0, bandStart, sprite.naturalWidth, sprite.naturalHeight - bandStart);
+    // Multiply erased the transparent-region alpha; re-mask to
+    // the sprite's original alpha so the tint doesn't paint
+    // into the transparent margin.
+    octx.globalCompositeOperation = "destination-in";
+    octx.drawImage(sprite, 0, 0);
+    this.groundTintedSprites.set(key, off);
+    return off;
+  }
+
   private getRoughStonePattern(): CanvasPattern | null {
     if (this.roughStonePattern) return this.roughStonePattern;
     const SIZE = 512;
@@ -805,6 +926,16 @@ export class Renderer {
       if (sprite) {
         const baseScale = getPropSpriteBaseScale("tree", e.id, e.spriteVariant);
         const scale = (e.spriteScale ?? 1) * baseScale;
+        // Prefer a ground-tinted cached copy — the grass tuft at
+        // the base picks up whatever color the arena background
+        // painted underneath this tree. Falls back to the plain
+        // sprite while the background image is still loading.
+        const world = this.activeWorld;
+        const ground = world ? this.sampleGroundColor(e.pos, world.arena) : null;
+        const variantIdx = e.spriteVariant ?? Math.abs(e.id) % 4;
+        const drawSrc = ground
+          ? (this.getGroundTintedSprite("tree", variantIdx, ground) ?? sprite)
+          : sprite;
         const w = sprite.naturalWidth * scale;
         const h = sprite.naturalHeight * scale;
         if (e.spriteFlipX) {
@@ -812,10 +943,10 @@ export class Renderer {
           // Flip in place around the ground-point vertical axis.
           ctx.translate(s.x, 0);
           ctx.scale(-1, 1);
-          ctx.drawImage(sprite, -w / 2, s.y - h, w, h);
+          ctx.drawImage(drawSrc, -w / 2, s.y - h, w, h);
           ctx.restore();
         } else {
-          ctx.drawImage(sprite, s.x - w / 2, s.y - h, w, h);
+          ctx.drawImage(drawSrc, s.x - w / 2, s.y - h, w, h);
         }
       } else {
         // Procedural fallback — flat-shaded cone.
@@ -893,9 +1024,15 @@ export class Renderer {
         if (sprite) {
           const baseScale = getPropSpriteBaseScale("rock", e.id, e.spriteVariant);
           const scale = (e.spriteScale ?? 1) * baseScale;
+          const world = this.activeWorld;
+          const ground = world ? this.sampleGroundColor(e.pos, world.arena) : null;
+          const variantIdx = e.spriteVariant ?? Math.abs(e.id) % 4;
+          const drawSrc = ground
+            ? (this.getGroundTintedSprite("rock", variantIdx, ground) ?? sprite)
+            : sprite;
           const w = sprite.naturalWidth * scale;
           const h = sprite.naturalHeight * scale;
-          ctx.drawImage(sprite, s.x - w / 2, s.y - h, w, h);
+          ctx.drawImage(drawSrc, s.x - w / 2, s.y - h, w, h);
         } else {
           ctx.fillStyle = "#8a8a92";
           ctx.beginPath();
