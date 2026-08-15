@@ -654,11 +654,15 @@ export class Renderer {
   }
 
   // Return a cached ground-tinted copy of a prop sprite variant.
-  // Applied as a multiply blend in a bottom band with a linear
-  // gradient (0 at 72% height → 1.0 at bottom edge) so the grass
-  // tuft at the base picks up the ground color while the canopy
-  // stays untouched. Ground color quantized to 16 steps per
-  // channel; keeps the cache small.
+  // Applied as a WHOLE-sprite multiply blend that mixes the
+  // sprite's colors toward the sampled ground color at
+  // GROUND_TINT_STRENGTH (0.25) — sprite identity preserved,
+  // whole tree/rock (leaves + trunk + base) shifts subtly
+  // toward the ground palette so a grove on green grass reads
+  // greener overall than the same grove on a brown path, and
+  // the base grass tuft blends because it's part of the same
+  // tint. Ground color quantized to 16 steps per channel; keeps
+  // the cache small (~dozens of entries per arena, not thousands).
   private getGroundTintedSprite(
     shape: import("../core/entity").PropShape,
     variantIdx: number,
@@ -678,14 +682,19 @@ export class Renderer {
     const octx = off.getContext("2d");
     if (!octx) return null;
     octx.drawImage(sprite, 0, 0);
-    // Bottom-band gradient multiply with the ground color.
-    const bandStart = Math.floor(sprite.naturalHeight * 0.72);
-    const grad = octx.createLinearGradient(0, bandStart, 0, sprite.naturalHeight);
-    grad.addColorStop(0, `rgba(${gr},${gg},${gb},0)`);
-    grad.addColorStop(1, `rgba(${gr},${gg},${gb},1)`);
+    // Multiply blend against a mixed color: mix(white, ground, S)
+    // where S is GROUND_TINT_STRENGTH. This is algebraically
+    // equivalent to mixing every source pixel toward the ground
+    // color by S — a full multiply against pure ground would
+    // erase the sprite, this preserves 75% of the original color
+    // and shifts 25% toward the ground.
+    const S = 0.25;
+    const mixR = Math.round(255 * (1 - S) + gr * S);
+    const mixG = Math.round(255 * (1 - S) + gg * S);
+    const mixB = Math.round(255 * (1 - S) + gb * S);
     octx.globalCompositeOperation = "multiply";
-    octx.fillStyle = grad;
-    octx.fillRect(0, bandStart, sprite.naturalWidth, sprite.naturalHeight - bandStart);
+    octx.fillStyle = `rgb(${mixR}, ${mixG}, ${mixB})`;
+    octx.fillRect(0, 0, sprite.naturalWidth, sprite.naturalHeight);
     // Multiply erased the transparent-region alpha; re-mask to
     // the sprite's original alpha so the tint doesn't paint
     // into the transparent margin.
