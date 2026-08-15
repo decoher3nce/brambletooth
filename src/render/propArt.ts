@@ -29,6 +29,12 @@ export const PROP_SPRITE_VARIANTS: Partial<Record<PropShape, string[]>> = {
     "props/tree_3.png",
     "props/tree_4.png",
   ],
+  rock: [
+    "props/rock_1.png",
+    "props/rock_2.png",
+    "props/rock_3.png",
+    "props/rock_4.png",
+  ],
 };
 
 // Shared image cache. Same pattern as the arena background loader

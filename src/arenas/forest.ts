@@ -190,8 +190,10 @@ export function buildForest(world: World, seed: number, objectiveCount: number):
     }
   }
 
-  // Rocks: ~10. Same scattered approach — the tree clumps left
-  // gaps for these to slot into.
+  // Rocks: ~10, scattered in the gaps between tree clumps. Each
+  // one picks a random variant slot (0-3) and a random scale in
+  // [0.70, 1.30] so the same 4 sprites read as a natural
+  // outcropping instead of a rubber-stamped grid.
   {
     let attempts = 0;
     let count = 0;
@@ -200,7 +202,18 @@ export function buildForest(world: World, seed: number, objectiveCount: number):
       const x = b.minX + 30 + rng() * (b.maxX - b.minX - 60);
       const y = b.minY + 30 + rng() * (b.maxY - b.minY - 60);
       if (tryPlace(x, y, 18)) {
-        spawnPropAt(x, y, "rock", 16, true);
+        const variant = Math.floor(rng() * 4);
+        const scale = 0.70 + rng() * 0.60;
+        world.spawn<PropEntity>({
+          kind: "prop",
+          pos: { x, y },
+          radius: 16,
+          shape: "rock",
+          blocking: true,
+          dead: false,
+          spriteVariant: variant,
+          spriteScale: scale,
+        });
         count++;
       }
     }

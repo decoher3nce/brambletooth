@@ -828,23 +828,35 @@ export class Renderer {
       if (e.ownerId !== undefined) {
         this.drawJaggedWallRock(s.x, s.y, e.radius, e.id);
       } else {
-        ctx.fillStyle = "#8a8a92";
-        ctx.beginPath();
-        ctx.moveTo(s.x - 16, s.y);
-        ctx.lineTo(s.x - 6, s.y - 18);
-        ctx.lineTo(s.x + 10, s.y - 16);
-        ctx.lineTo(s.x + 18, s.y - 2);
-        ctx.lineTo(s.x + 6, s.y + 4);
-        ctx.closePath();
-        ctx.fill();
-        // shadow side
-        ctx.fillStyle = "#5e5e66";
-        ctx.beginPath();
-        ctx.moveTo(s.x + 10, s.y - 16);
-        ctx.lineTo(s.x + 18, s.y - 2);
-        ctx.lineTo(s.x + 6, s.y + 4);
-        ctx.closePath();
-        ctx.fill();
+        // Static decorative rock — prefer bespoke sprite when a
+        // variant slot is loaded. Same billboard rules as trees:
+        // anchor bottom-center = ground point, honor per-instance
+        // spriteScale.
+        const sprite = getPropSprite("rock", e.id, e.spriteVariant);
+        if (sprite) {
+          const scale = e.spriteScale ?? 1;
+          const w = sprite.naturalWidth * scale;
+          const h = sprite.naturalHeight * scale;
+          ctx.drawImage(sprite, s.x - w / 2, s.y - h, w, h);
+        } else {
+          ctx.fillStyle = "#8a8a92";
+          ctx.beginPath();
+          ctx.moveTo(s.x - 16, s.y);
+          ctx.lineTo(s.x - 6, s.y - 18);
+          ctx.lineTo(s.x + 10, s.y - 16);
+          ctx.lineTo(s.x + 18, s.y - 2);
+          ctx.lineTo(s.x + 6, s.y + 4);
+          ctx.closePath();
+          ctx.fill();
+          // shadow side
+          ctx.fillStyle = "#5e5e66";
+          ctx.beginPath();
+          ctx.moveTo(s.x + 10, s.y - 16);
+          ctx.lineTo(s.x + 18, s.y - 2);
+          ctx.lineTo(s.x + 6, s.y + 4);
+          ctx.closePath();
+          ctx.fill();
+        }
       }
     } else if (e.shape === "crate") {
       // Wooden warehouse crate — iso "cube" with darker right face
