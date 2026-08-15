@@ -13,6 +13,7 @@ import { CHARACTERS } from "../characters/characters";
 import { ABILITIES } from "../abilities/abilities";
 import { CHARACTER_ART, drawGumdropBody } from "./characterArt";
 import type { CharacterAnim } from "./characterArt";
+import { getPropSprite } from "./propArt";
 
 // Isometric tile scale. Each world unit = 1px at the ground, then projected.
 const ISO_W = 1.0; // x-axis world->screen scaling factor base
@@ -755,25 +756,35 @@ export class Renderer {
     const s = worldToScreen(e.pos, cam, this.cw, this.ch);
     const ctx = this.ctx;
     if (e.shape === "tree") {
-      // Trunk
-      ctx.fillStyle = "#5a3a22";
-      ctx.fillRect(s.x - 4, s.y - 14, 8, 14);
-      // Foliage: triangle stack, flat shaded
-      ctx.fillStyle = "#2f6b3a";
-      ctx.beginPath();
-      ctx.moveTo(s.x, s.y - 56);
-      ctx.lineTo(s.x - 22, s.y - 18);
-      ctx.lineTo(s.x + 22, s.y - 18);
-      ctx.closePath();
-      ctx.fill();
-      // Shadow side
-      ctx.fillStyle = "#1f4a28";
-      ctx.beginPath();
-      ctx.moveTo(s.x, s.y - 56);
-      ctx.lineTo(s.x + 22, s.y - 18);
-      ctx.lineTo(s.x + 4, s.y - 18);
-      ctx.closePath();
-      ctx.fill();
+      // Prefer a bespoke sprite when one is loaded for this
+      // variant slot. Anchor bottom-center = ground point.
+      const sprite = getPropSprite("tree", e.id);
+      if (sprite) {
+        const w = sprite.naturalWidth;
+        const h = sprite.naturalHeight;
+        ctx.drawImage(sprite, s.x - w / 2, s.y - h);
+      } else {
+        // Procedural fallback — flat-shaded cone.
+        // Trunk
+        ctx.fillStyle = "#5a3a22";
+        ctx.fillRect(s.x - 4, s.y - 14, 8, 14);
+        // Foliage: triangle stack, flat shaded
+        ctx.fillStyle = "#2f6b3a";
+        ctx.beginPath();
+        ctx.moveTo(s.x, s.y - 56);
+        ctx.lineTo(s.x - 22, s.y - 18);
+        ctx.lineTo(s.x + 22, s.y - 18);
+        ctx.closePath();
+        ctx.fill();
+        // Shadow side
+        ctx.fillStyle = "#1f4a28";
+        ctx.beginPath();
+        ctx.moveTo(s.x, s.y - 56);
+        ctx.lineTo(s.x + 22, s.y - 18);
+        ctx.lineTo(s.x + 4, s.y - 18);
+        ctx.closePath();
+        ctx.fill();
+      }
     } else if (e.shape === "stump") {
       ctx.fillStyle = "#6b4528";
       ctx.beginPath();
