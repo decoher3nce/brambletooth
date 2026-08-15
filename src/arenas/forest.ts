@@ -89,7 +89,18 @@ export function buildForest(world: World, seed: number, objectiveCount: number):
     { clusterRadius: 75, minCount: 3, maxCount: 6  }, // birch
     { clusterRadius: 95, minCount: 2, maxCount: 4  }, // willow
   ];
-  const SCALE_TIERS = [0.85, 1.00, 1.15];
+  // Wide range so a stand of "old growth" (1.55×) sits noticeably
+  // taller than a "young grove" (0.65×). Individual members
+  // further jitter around whichever tier their clump picked, so
+  // even same-tier neighbors don't stamp.
+  const SCALE_TIERS = [0.65, 0.85, 1.00, 1.25, 1.55];
+  // Odds any individual member is instead a "baby" — a small
+  // sapling at 0.35-0.50 scale — regardless of the clump's tier.
+  // Sprinkled naturally so every grove has a few youngsters
+  // tucked at the feet of the adults.
+  const BABY_CHANCE = 0.20;
+  const BABY_SCALE_MIN = 0.35;
+  const BABY_SCALE_MAX = 0.50;
   const MIN_CLUMP_GAP = 180;   // between clump centers
   const clumpCount = 6 + Math.floor(rng() * 3); // 6-8 clumps
   const clumpCenters: { x: number; y: number }[] = [];
@@ -129,11 +140,23 @@ export function buildForest(world: World, seed: number, objectiveCount: number):
         const x = center.x + Math.cos(ang) * r;
         const y = center.y + Math.sin(ang) * r;
         if (tryPlace(x, y, 22)) {
-          // Per-tree jitter around the clump's tier so members
-          // read as a family, not stamps.
-          const jitter = 0.92 + rng() * 0.16;
-          const scale = baseScale * jitter;
-          const flipX = rng() < 0.5;
+          // Roll for baby-tree sprinkle FIRST — a sapling
+          // ignores the clump's tier and lands in the 0.35-0.50
+          // range regardless of whether it's an oak or a
+          // willow grove.
+          const isBaby = rng() < BABY_CHANCE;
+          let scale: number;
+          if (isBaby) {
+            scale = BABY_SCALE_MIN + rng() * (BABY_SCALE_MAX - BABY_SCALE_MIN);
+          } else {
+            // Adult member — jitter ±14% around the clump tier
+            // so a grove reads as a family, not stamps.
+            const jitter = 0.86 + rng() * 0.28;
+            scale = baseScale * jitter;
+          }
+          // No spriteFlipX — mirroring inverts the sprite's baked
+          // upper-left light direction, so the shading reads
+          // wrong.
           world.spawn<PropEntity>({
             kind: "prop",
             pos: { x, y },
@@ -143,7 +166,6 @@ export function buildForest(world: World, seed: number, objectiveCount: number):
             dead: false,
             spriteVariant: species,
             spriteScale: scale,
-            spriteFlipX: flipX,
           });
           break;
         }
