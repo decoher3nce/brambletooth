@@ -181,6 +181,11 @@ export function buildForest(world: World, seed: number, objectiveCount: number):
             dead: false,
             spriteVariant: species,
             spriteScale: scale,
+            // Narrow hard core (0.25) + wide brush ring — a tree
+            // is a thin trunk under an airy canopy. Character
+            // can graze the canopy for a small slow without
+            // being blocked; only the trunk itself is solid.
+            coreFrac: 0.25,
           });
           break;
         }
@@ -190,7 +195,9 @@ export function buildForest(world: World, seed: number, objectiveCount: number):
 
   // Stumps: ~8 (smaller, walkable around). Scattered — no
   // clumping; they naturally fall between tree clumps thanks to
-  // the shared tryPlace collision list.
+  // the shared tryPlace collision list. Stumps are near-solid
+  // like rocks (coreFrac 0.55) — a stump is a stump, not an
+  // airy canopy.
   {
     let attempts = 0;
     let count = 0;
@@ -199,7 +206,15 @@ export function buildForest(world: World, seed: number, objectiveCount: number):
       const x = b.minX + 30 + rng() * (b.maxX - b.minX - 60);
       const y = b.minY + 30 + rng() * (b.maxY - b.minY - 60);
       if (tryPlace(x, y, 16)) {
-        spawnPropAt(x, y, "stump", 14, true);
+        world.spawn<PropEntity>({
+          kind: "prop",
+          pos: { x, y },
+          radius: 14,
+          shape: "stump",
+          blocking: true,
+          dead: false,
+          coreFrac: 0.55,
+        });
         count++;
       }
     }
@@ -237,6 +252,11 @@ export function buildForest(world: World, seed: number, objectiveCount: number):
           dead: false,
           spriteVariant: variant,
           spriteScale: scale,
+          // Rocks are near-solid — hard core covers 60% of the
+          // radius, only a thin brush ring for the "you nudged
+          // the edge" sound. No pushing your feet halfway
+          // through a boulder.
+          coreFrac: 0.60,
         });
         count++;
       }

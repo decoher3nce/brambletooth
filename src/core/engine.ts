@@ -124,16 +124,26 @@ export type BrushKind =
 
 // Convert raw overlap (how much the character's circle penetrates
 // into the brush ring) into a 0..1 depth value. depth=0 at outer
-// edge, depth=1 at the core boundary.
+// edge, depth=1 at the core boundary. Optional coreFrac lets a
+// per-prop override widen (rocks, solid all the way out) or
+// narrow (trees, airy canopy) the hard core.
 function depthFromOverlap(
   charR: number, obstacleR: number, distance: number,
+  coreFrac: number = CORE_FRAC,
 ): number {
-  const coreR = obstacleR * CORE_FRAC;
+  const coreR = obstacleR * coreFrac;
   const outerR = obstacleR + charR; // distance at which brush starts
   const innerR = coreR + charR;     // distance at which core hits
   if (distance >= outerR) return 0;
   if (distance <= innerR) return 1;
   return (outerR - distance) / (outerR - innerR);
+}
+
+// Effective hard-core fraction for a prop — honors the per-prop
+// override, falls back to the engine's global CORE_FRAC. Animals
+// and the fence aren't props and use the global constant only.
+function propCoreFrac(p: PropEntity): number {
+  return p.coreFrac ?? CORE_FRAC;
 }
 
 export class Engine {
@@ -517,7 +527,7 @@ export class Engine {
         if (!isProp(p)) continue;
         if (!p.contactDamage || p.contactDamage <= 0) continue;
         if (p.ownerId === c.id) continue;
-        const coreR = p.radius * CORE_FRAC;
+        const coreR = p.radius * propCoreFrac(p);
         const dx = c.pos.x - p.pos.x;
         const dy = c.pos.y - p.pos.y;
         const reach = c.radius + coreR;
@@ -959,7 +969,8 @@ export class Engine {
       const dx = c.pos.x - e.pos.x;
       const dy = c.pos.y - e.pos.y;
       const d = Math.hypot(dx, dy);
-      const d_brush = depthFromOverlap(c.radius, e.radius, d);
+      const cf = isPropObstacle ? propCoreFrac(e as PropEntity) : CORE_FRAC;
+      const d_brush = depthFromOverlap(c.radius, e.radius, d, cf);
       if (d_brush <= 0) continue;
       if (d_brush > worstDepth) worstDepth = d_brush;
       const kind: BrushKind = isPropObstacle
@@ -1027,7 +1038,7 @@ export class Engine {
         // Owner-passable props (Gravemarch Rock Wall) — caster
         // doesn't collide with their own arc.
         if (isProp(e) && (e as PropEntity).ownerId === c.id) continue;
-        const coreR = e.radius * CORE_FRAC;
+        const coreR = e.radius * (isProp(e) ? propCoreFrac(e) : CORE_FRAC);
         const dx = p.x - e.pos.x;
         const dy = p.y - e.pos.y;
         const minDist = c.radius + coreR;
@@ -1260,7 +1271,7 @@ export class Engine {
       if (!isProp(p) || !p.blocking) continue;
       const dx = newPos.x - p.pos.x;
       const dy = newPos.y - p.pos.y;
-      const coreR = p.radius * CORE_FRAC;
+      const coreR = p.radius * propCoreFrac(p);
       const minDist = a.radius + coreR;
       const d2 = dx * dx + dy * dy;
       if (d2 < minDist * minDist) {
@@ -1391,7 +1402,7 @@ export class Engine {
       if (!isProp(p) || !p.blocking) continue;
       const dx = newPos.x - p.pos.x;
       const dy = newPos.y - p.pos.y;
-      const coreR = p.radius * CORE_FRAC;
+      const coreR = p.radius * propCoreFrac(p);
       const minDist = z.radius + coreR;
       const d2 = dx * dx + dy * dy;
       if (d2 < minDist * minDist) {

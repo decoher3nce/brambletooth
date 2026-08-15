@@ -251,6 +251,12 @@ export interface PropEntity extends BaseEntity {
   // hold that species even as ids advance around them. Defaults
   // to using entity.id when unset.
   spriteVariant?: number;
+  // Optional per-prop override for CORE_FRAC (the fraction of
+  // `radius` that's the unpassable hard core; the outer 1-frac is
+  // brush zone). Lets rocks be near-solid (0.60), trees be a
+  // narrow trunk with a wide airy canopy (0.25), while defaulting
+  // to the engine's global CORE_FRAC (0.30) when unset.
+  coreFrac?: number;
 }
 
 // Iron plate placed by Magnek. Persistent (no ttl), non-blocking, navigable
