@@ -13,7 +13,7 @@ import { CHARACTERS } from "../characters/characters";
 import { ABILITIES } from "../abilities/abilities";
 import { CHARACTER_ART, drawGumdropBody } from "./characterArt";
 import type { CharacterAnim } from "./characterArt";
-import { getPropSprite } from "./propArt";
+import { getPropSprite, getPropSpriteBaseScale } from "./propArt";
 
 // Isometric tile scale. Each world unit = 1px at the ground, then projected.
 const ISO_W = 1.0; // x-axis world->screen scaling factor base
@@ -762,7 +762,8 @@ export class Renderer {
       // clump read as varied without shipping more art.
       const sprite = getPropSprite("tree", e.id, e.spriteVariant);
       if (sprite) {
-        const scale = e.spriteScale ?? 1;
+        const baseScale = getPropSpriteBaseScale("tree", e.id, e.spriteVariant);
+        const scale = (e.spriteScale ?? 1) * baseScale;
         const w = sprite.naturalWidth * scale;
         const h = sprite.naturalHeight * scale;
         if (e.spriteFlipX) {
@@ -834,7 +835,8 @@ export class Renderer {
         // spriteScale.
         const sprite = getPropSprite("rock", e.id, e.spriteVariant);
         if (sprite) {
-          const scale = e.spriteScale ?? 1;
+          const baseScale = getPropSpriteBaseScale("rock", e.id, e.spriteVariant);
+          const scale = (e.spriteScale ?? 1) * baseScale;
           const w = sprite.naturalWidth * scale;
           const h = sprite.naturalHeight * scale;
           ctx.drawImage(sprite, s.x - w / 2, s.y - h, w, h);

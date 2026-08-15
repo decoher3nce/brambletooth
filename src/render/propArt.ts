@@ -37,6 +37,21 @@ export const PROP_SPRITE_VARIANTS: Partial<Record<PropShape, string[]>> = {
   ],
 };
 
+// Per-variant base display scale. Multiplied against any
+// per-instance spriteScale by the renderer so the two knobs
+// stack. Use this to right-size a source PNG that arrived
+// larger or smaller than the others — cheaper than regenerating
+// the art. Missing entries default to 1.0.
+export const PROP_SPRITE_BASE_SCALE: Partial<Record<PropShape, number[]>> = {
+  // tree_1 is the orange crystal-fire tree — noticeably taller
+  // than the other three source panels; nudge it down so it
+  // reads at a comparable height in a mixed forest.
+  tree: [0.78, 1.00, 1.00, 1.00],
+  // All rock sprites arrived boulder-scale; shrink uniformly so
+  // they read as rocks against character bodies.
+  rock: [0.60, 0.60, 0.60, 0.60],
+};
+
 // Shared image cache. Same pattern as the arena background loader
 // in renderer.ts — one HTMLImageElement per URL, ready check is
 // img.complete && img.naturalWidth > 0. Errors leave the img
@@ -72,4 +87,20 @@ export function getPropSprite(
   }
   if (img.complete && img.naturalWidth > 0) return img;
   return null;
+}
+
+// Base display scale for the picked variant slot. Same seed rule
+// as getPropSprite so a specific entity gets the same scale as
+// its sprite. Returns 1.0 when no per-variant scale is declared.
+export function getPropSpriteBaseScale(
+  shape: PropShape,
+  entityId: number,
+  variantOverride?: number,
+): number {
+  const scales = PROP_SPRITE_BASE_SCALE[shape];
+  const variants = PROP_SPRITE_VARIANTS[shape];
+  if (!scales || !variants || variants.length === 0) return 1;
+  const seed = variantOverride !== undefined ? variantOverride : entityId;
+  const idx = Math.abs(seed) % variants.length;
+  return scales[idx] ?? 1;
 }
