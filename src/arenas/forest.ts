@@ -160,10 +160,22 @@ export function buildForest(world: World, seed: number, objectiveCount: number):
           // No spriteFlipX — mirroring inverts the sprite's baked
           // upper-left light direction, so the shading reads
           // wrong.
+          // Collision radius scales with the sprite's visual
+          // scale so a baby tree (scale ~0.4) has a baby-sized
+          // trunk collision and an old-growth tree (scale ~1.5)
+          // has a proportionally wider one. Base 22 is tuned so
+          // that at scale 1.0 the hard core (radius * CORE_FRAC
+          // = 6.6 units) roughly matches the visual trunk width;
+          // outer brush ring lets the character graze the canopy
+          // with just a small slow. Bounded so a tiny sapling
+          // still has some collision (otherwise you'd tunnel
+          // through them) and a giant doesn't gate off a huge
+          // area.
+          const collisionR = Math.max(6, Math.min(36, 22 * scale));
           world.spawn<PropEntity>({
             kind: "prop",
             pos: { x, y },
-            radius: 18,
+            radius: collisionR,
             shape: "tree",
             blocking: true,
             dead: false,
@@ -207,10 +219,19 @@ export function buildForest(world: World, seed: number, objectiveCount: number):
       if (tryPlace(x, y, 18)) {
         const variant = Math.floor(rng() * 4);
         const scale = 0.70 + rng() * 0.60;
+        // Same principle as trees — collision matches the visible
+        // rock base at whichever scale this instance rolled. Base
+        // 18 makes a scale-1.0 rock's hard core ~5.4 units (small,
+        // consistent with the visual). PROP_SPRITE_BASE_SCALE
+        // already shrinks the rock sprite to 60%, so we factor
+        // that in too: effective visual scale = scale * 0.60, and
+        // collision follows.
+        const visualScale = scale * 0.60;
+        const collisionR = Math.max(6, Math.min(28, 18 * visualScale + 6));
         world.spawn<PropEntity>({
           kind: "prop",
           pos: { x, y },
-          radius: 16,
+          radius: collisionR,
           shape: "rock",
           blocking: true,
           dead: false,
