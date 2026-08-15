@@ -612,6 +612,12 @@ registerAbility({
       const radius = rockWallRadius(i, n);
       const cx = Math.max(b.minX + radius, Math.min(b.maxX - radius, px));
       const cy = Math.max(b.minY + radius, Math.min(b.maxY - radius, py));
+      // Sprite: rock_2 (the tall spire variant), blue-tinted at
+      // render time to match Gravemarch's palette. Small per-
+      // rock scale jitter so the wall reads as hewn stones,
+      // not stamped copies. Deterministic per-index so the
+      // same wall always looks the same.
+      const jitter = 0.90 + ((i * 37 + 11) % 25) / 100; // 0.90-1.14
       world.spawn<PropEntity>({
         kind: "prop",
         pos: { x: cx, y: cy },
@@ -622,6 +628,8 @@ registerAbility({
         ownerId: caster.id,
         contactDamage: ROCK_WALL_CONTACT_DAMAGE * (caster.damageMult ?? 1),
         dead: false,
+        spriteVariant: 1,
+        spriteScale: jitter,
       });
     }
   },

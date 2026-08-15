@@ -96,6 +96,13 @@ export class Renderer {
   // status enum — while loading the arena falls back to groundColor.
   private bgImages: Map<string, HTMLImageElement> = new Map();
 
+  // Cached tinted variants of prop sprites. Keyed by
+  // "shape:variantIdx:tintColor". Each entry is an offscreen
+  // canvas with the source sprite drawn + a multiply blend of
+  // the tint color, then masked back to the sprite's alpha.
+  // Built once on first request; drawn cheap every frame after.
+  private tintedSprites: Map<string, HTMLCanvasElement> = new Map();
+
   constructor(
     public ctx: CanvasRenderingContext2D,
     public canvas: HTMLCanvasElement,
@@ -533,6 +540,40 @@ export class Renderer {
     return null;
   }
 
+  // Return a cached blue-tinted copy of a prop sprite variant.
+  // Used for Gravemarch's Rock Wall rocks so they render as
+  // stone-with-blue-magic instead of the ordinary forest palette.
+  // Tinting: draw sprite, multiply-blend the tint color across
+  // the whole canvas, then mask back to the sprite's alpha so the
+  // multiply doesn't paint into the transparent margin.
+  private getTintedPropSprite(
+    shape: import("../core/entity").PropShape,
+    variantIdx: number,
+    tintColor: string,
+  ): HTMLCanvasElement | null {
+    const key = `${shape}:${variantIdx}:${tintColor}`;
+    const cached = this.tintedSprites.get(key);
+    if (cached) return cached;
+    // Deterministic pick with variantOverride so we always
+    // grab the intended slot.
+    const sprite = getPropSprite(shape, 0, variantIdx);
+    if (!sprite) return null;
+    const off = document.createElement("canvas");
+    off.width = sprite.naturalWidth;
+    off.height = sprite.naturalHeight;
+    const octx = off.getContext("2d");
+    if (!octx) return null;
+    octx.drawImage(sprite, 0, 0);
+    octx.globalCompositeOperation = "multiply";
+    octx.fillStyle = tintColor;
+    octx.fillRect(0, 0, off.width, off.height);
+    // Multiply erased the transparent border's alpha; re-mask.
+    octx.globalCompositeOperation = "destination-in";
+    octx.drawImage(sprite, 0, 0);
+    this.tintedSprites.set(key, off);
+    return off;
+  }
+
   private getRoughStonePattern(): CanvasPattern | null {
     if (this.roughStonePattern) return this.roughStonePattern;
     const SIZE = 512;
@@ -827,7 +868,22 @@ export class Renderer {
       //     Keep the original simple shape so existing maps look
       //     identical to v1
       if (e.ownerId !== undefined) {
-        this.drawJaggedWallRock(s.x, s.y, e.radius, e.id);
+        // Gravemarch's Rock Wall — draw the tall rock_2 spire
+        // with a blue-slate tint that matches his palette
+        // (grey stone, blue veins). Per-rock spriteScale is set
+        // in abilities.ts to give a small size jitter across
+        // the arc. Falls back to the procedural jagged draw
+        // while the sprite is still loading.
+        const tinted = this.getTintedPropSprite("rock", 1, "#6690c0");
+        if (tinted) {
+          const baseScale = getPropSpriteBaseScale("rock", 0, 1);
+          const scale = (e.spriteScale ?? 1) * baseScale;
+          const w = tinted.width * scale;
+          const h = tinted.height * scale;
+          ctx.drawImage(tinted, s.x - w / 2, s.y - h, w, h);
+        } else {
+          this.drawJaggedWallRock(s.x, s.y, e.radius, e.id);
+        }
       } else {
         // Static decorative rock — prefer bespoke sprite when a
         // variant slot is loaded. Same billboard rules as trees:
