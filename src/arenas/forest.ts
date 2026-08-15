@@ -84,10 +84,10 @@ export function buildForest(world: World, seed: number, objectiveCount: number):
     minCount: number;
     maxCount: number;
   }> = [
-    { clusterRadius: 60, minCount: 5, maxCount: 8  }, // oak
-    { clusterRadius: 45, minCount: 6, maxCount: 10 }, // pine
-    { clusterRadius: 75, minCount: 3, maxCount: 6  }, // birch
-    { clusterRadius: 95, minCount: 2, maxCount: 4  }, // willow
+    { clusterRadius: 100, minCount: 4, maxCount: 6 }, // oak
+    { clusterRadius: 80,  minCount: 5, maxCount: 8 }, // pine
+    { clusterRadius: 130, minCount: 3, maxCount: 5 }, // birch
+    { clusterRadius: 160, minCount: 2, maxCount: 3 }, // willow
   ];
   // Wide range so a stand of "old growth" (1.55×) sits noticeably
   // taller than a "young grove" (0.65×). Individual members
@@ -139,7 +139,10 @@ export function buildForest(world: World, seed: number, objectiveCount: number):
         const r = Math.sqrt(rng()) * profile.clusterRadius;
         const x = center.x + Math.cos(ang) * r;
         const y = center.y + Math.sin(ang) * r;
-        if (tryPlace(x, y, 22)) {
+        // Spacing radius 32 (was 22) so canopy sprites keep
+        // visible daylight between each other — clumps still
+        // read as clumps, but individual trees stay readable.
+        if (tryPlace(x, y, 32)) {
           // Roll for baby-tree sprinkle FIRST — a sapling
           // ignores the clump's tier and lands in the 0.35-0.50
           // range regardless of whether it's an oak or a
