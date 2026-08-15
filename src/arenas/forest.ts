@@ -59,42 +59,128 @@ export function buildForest(world: World, seed: number, objectiveCount: number):
     });
   };
 
-  // Trees: ~32
-  let attempts = 0;
-  let count = 0;
-  while (count < 32 && attempts < 400) {
-    attempts++;
-    const x = b.minX + 30 + rng() * (b.maxX - b.minX - 60);
-    const y = b.minY + 30 + rng() * (b.maxY - b.minY - 60);
-    if (tryPlace(x, y, 22)) {
-      spawnPropAt(x, y, "tree", 18, true);
-      count++;
+  // ---- Trees: species-committed clumps, not scatter ----
+  //
+  // Each clump commits to one species (variant slot 0..3) + a
+  // size tier so the forest reads as pockets of same-species trees
+  // rather than 32 random samples. Members hold their species and
+  // roughly their size, with small per-tree jitter (spriteScale
+  // 0.92-1.08 around the tier value + 50/50 horizontal flip) so a
+  // group of pines doesn't look stamped. Clump centers are spaced
+  // MIN_CLUMP_GAP apart so rocks / stumps / animals / paths /
+  // streams can weave between them.
+  //
+  // Species-specific clumping profile (higher clusterRadius = looser):
+  //   0 oak     — medium pockets, 5-8 trees
+  //   1 pine    — tight groves, 6-10 trees (pines really cluster)
+  //   2 birch   — loose stands, 3-6 trees (naturally spaced IRL)
+  //   3 willow  — very sparse, 2-4 trees (dramatic solo/pair)
+  //
+  // Depth sort is by pos.y in the renderer, so trees planted at
+  // higher y draw ON TOP of trees at lower y regardless of spawn
+  // order — no post-sort needed here.
+  const CLUMP_PROFILES: Array<{
+    clusterRadius: number;
+    minCount: number;
+    maxCount: number;
+  }> = [
+    { clusterRadius: 60, minCount: 5, maxCount: 8  }, // oak
+    { clusterRadius: 45, minCount: 6, maxCount: 10 }, // pine
+    { clusterRadius: 75, minCount: 3, maxCount: 6  }, // birch
+    { clusterRadius: 95, minCount: 2, maxCount: 4  }, // willow
+  ];
+  const SCALE_TIERS = [0.85, 1.00, 1.15];
+  const MIN_CLUMP_GAP = 180;   // between clump centers
+  const clumpCount = 6 + Math.floor(rng() * 3); // 6-8 clumps
+  const clumpCenters: { x: number; y: number }[] = [];
+  for (let c = 0; c < clumpCount; c++) {
+    // Find a clump center that respects the inter-clump gap and
+    // isn't stomping any already-placed prop (spawn zones live in
+    // `placed`).
+    let center: { x: number; y: number } | null = null;
+    for (let a = 0; a < 40; a++) {
+      const x = b.minX + 100 + rng() * (b.maxX - b.minX - 200);
+      const y = b.minY + 100 + rng() * (b.maxY - b.minY - 200);
+      let ok = true;
+      for (const cc of clumpCenters) {
+        if (Math.hypot(x - cc.x, y - cc.y) < MIN_CLUMP_GAP) { ok = false; break; }
+      }
+      if (!ok) continue;
+      for (const p of placed) {
+        if (Math.hypot(x - p.x, y - p.y) < p.r + 60) { ok = false; break; }
+      }
+      if (ok) { center = { x, y }; break; }
+    }
+    if (!center) continue;
+    clumpCenters.push(center);
+    const species = Math.floor(rng() * CLUMP_PROFILES.length);
+    const profile = CLUMP_PROFILES[species]!;
+    const baseScale = SCALE_TIERS[Math.floor(rng() * SCALE_TIERS.length)]!;
+    const memberCount = profile.minCount + Math.floor(
+      rng() * (profile.maxCount - profile.minCount + 1),
+    );
+    for (let m = 0; m < memberCount; m++) {
+      for (let a = 0; a < 20; a++) {
+        const ang = rng() * Math.PI * 2;
+        // Bias toward the edge of the cluster so the density
+        // reads as a group rather than a stacked point (sqrt
+        // gives uniform-in-disk sampling).
+        const r = Math.sqrt(rng()) * profile.clusterRadius;
+        const x = center.x + Math.cos(ang) * r;
+        const y = center.y + Math.sin(ang) * r;
+        if (tryPlace(x, y, 22)) {
+          // Per-tree jitter around the clump's tier so members
+          // read as a family, not stamps.
+          const jitter = 0.92 + rng() * 0.16;
+          const scale = baseScale * jitter;
+          const flipX = rng() < 0.5;
+          world.spawn<PropEntity>({
+            kind: "prop",
+            pos: { x, y },
+            radius: 18,
+            shape: "tree",
+            blocking: true,
+            dead: false,
+            spriteVariant: species,
+            spriteScale: scale,
+            spriteFlipX: flipX,
+          });
+          break;
+        }
+      }
     }
   }
 
-  // Stumps: ~8 (smaller, walkable around)
-  attempts = 0;
-  count = 0;
-  while (count < 8 && attempts < 200) {
-    attempts++;
-    const x = b.minX + 30 + rng() * (b.maxX - b.minX - 60);
-    const y = b.minY + 30 + rng() * (b.maxY - b.minY - 60);
-    if (tryPlace(x, y, 16)) {
-      spawnPropAt(x, y, "stump", 14, true);
-      count++;
+  // Stumps: ~8 (smaller, walkable around). Scattered — no
+  // clumping; they naturally fall between tree clumps thanks to
+  // the shared tryPlace collision list.
+  {
+    let attempts = 0;
+    let count = 0;
+    while (count < 8 && attempts < 200) {
+      attempts++;
+      const x = b.minX + 30 + rng() * (b.maxX - b.minX - 60);
+      const y = b.minY + 30 + rng() * (b.maxY - b.minY - 60);
+      if (tryPlace(x, y, 16)) {
+        spawnPropAt(x, y, "stump", 14, true);
+        count++;
+      }
     }
   }
 
-  // Rocks: ~10
-  attempts = 0;
-  count = 0;
-  while (count < 10 && attempts < 200) {
-    attempts++;
-    const x = b.minX + 30 + rng() * (b.maxX - b.minX - 60);
-    const y = b.minY + 30 + rng() * (b.maxY - b.minY - 60);
-    if (tryPlace(x, y, 18)) {
-      spawnPropAt(x, y, "rock", 16, true);
-      count++;
+  // Rocks: ~10. Same scattered approach — the tree clumps left
+  // gaps for these to slot into.
+  {
+    let attempts = 0;
+    let count = 0;
+    while (count < 10 && attempts < 200) {
+      attempts++;
+      const x = b.minX + 30 + rng() * (b.maxX - b.minX - 60);
+      const y = b.minY + 30 + rng() * (b.maxY - b.minY - 60);
+      if (tryPlace(x, y, 18)) {
+        spawnPropAt(x, y, "rock", 16, true);
+        count++;
+      }
     }
   }
 

@@ -41,17 +41,22 @@ const spriteCache: Map<string, HTMLImageElement> = new Map();
 // Returns the loaded HTMLImageElement, or null if no variant has
 // been declared for this shape OR the picked variant hasn't loaded
 // yet. Callers should paint the procedural fallback when null.
+// If variantOverride is provided, it picks the slot directly
+// (`|override| % N`) — used by arena builders that want a whole
+// clump to commit to one species regardless of entity ids.
 export function getPropSprite(
   shape: PropShape,
   entityId: number,
+  variantOverride?: number,
 ): HTMLImageElement | null {
   const variants = PROP_SPRITE_VARIANTS[shape];
   if (!variants || variants.length === 0) return null;
   const base = (import.meta as unknown as { env?: { BASE_URL?: string } })
     .env?.BASE_URL ?? "/";
-  // Deterministic slot pick so a specific prop always renders the
-  // same variant. Guarding against negative ids just in case.
-  const idx = Math.abs(entityId) % variants.length;
+  // Deterministic slot pick. Explicit override wins; otherwise id
+  // gives a stable per-entity pick.
+  const seed = variantOverride !== undefined ? variantOverride : entityId;
+  const idx = Math.abs(seed) % variants.length;
   const url = base + variants[idx]!.replace(/^\/+/, "");
   let img = spriteCache.get(url);
   if (!img) {

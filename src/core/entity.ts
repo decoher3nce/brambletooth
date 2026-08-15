@@ -232,6 +232,25 @@ export interface PropEntity extends BaseEntity {
   // in c.cooldowns["rock_wall_hit"] so brushing the wall doesn't
   // stack a damage tick every frame.
   contactDamage?: number;
+  // Optional per-instance sprite-scale multiplier, applied by the
+  // renderer to the bespoke sprite (if any). Purely cosmetic — the
+  // world `radius` above still governs collision. Used by arena
+  // builders to break up a same-species clump into slightly varied
+  // sizes (e.g. 0.85 / 1.00 / 1.15) so a group of pines doesn't
+  // look like a stamp. Defaults to 1 when unset.
+  spriteScale?: number;
+  // Optional per-instance horizontal mirror. Doubles the effective
+  // variant count for free — a same-species clump can read as
+  // varied without shipping more art. Only applied to the sprite
+  // draw path; the procedural fallback ignores it. Defaults to
+  // false when unset.
+  spriteFlipX?: boolean;
+  // Optional per-instance sprite variant override. When set, the
+  // renderer picks the sprite by (variant % N) instead of the
+  // default (entity.id % N), so a clump of same-species trees can
+  // hold that species even as ids advance around them. Defaults
+  // to using entity.id when unset.
+  spriteVariant?: number;
 }
 
 // Iron plate placed by Magnek. Persistent (no ttl), non-blocking, navigable

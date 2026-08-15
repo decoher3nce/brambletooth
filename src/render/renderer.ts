@@ -758,11 +758,23 @@ export class Renderer {
     if (e.shape === "tree") {
       // Prefer a bespoke sprite when one is loaded for this
       // variant slot. Anchor bottom-center = ground point.
-      const sprite = getPropSprite("tree", e.id);
+      // Per-instance spriteScale + spriteFlipX let a same-species
+      // clump read as varied without shipping more art.
+      const sprite = getPropSprite("tree", e.id, e.spriteVariant);
       if (sprite) {
-        const w = sprite.naturalWidth;
-        const h = sprite.naturalHeight;
-        ctx.drawImage(sprite, s.x - w / 2, s.y - h);
+        const scale = e.spriteScale ?? 1;
+        const w = sprite.naturalWidth * scale;
+        const h = sprite.naturalHeight * scale;
+        if (e.spriteFlipX) {
+          ctx.save();
+          // Flip in place around the ground-point vertical axis.
+          ctx.translate(s.x, 0);
+          ctx.scale(-1, 1);
+          ctx.drawImage(sprite, -w / 2, s.y - h, w, h);
+          ctx.restore();
+        } else {
+          ctx.drawImage(sprite, s.x - w / 2, s.y - h, w, h);
+        }
       } else {
         // Procedural fallback — flat-shaded cone.
         // Trunk
